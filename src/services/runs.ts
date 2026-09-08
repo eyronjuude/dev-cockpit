@@ -15,6 +15,15 @@ import {
 import { newIterationId, newRunId, runBranchName } from '@/core/ids';
 import { notFound } from '@/core/errors';
 import {
+  effectiveWorkMode,
+  resolveWorkMode,
+  WORK_MODE_LABELS,
+  WORK_MODE_WORDING,
+  workModeSchema,
+  type ResolvedWorkMode,
+  type WorkMode,
+} from '@/domain/modes';
+import {
   ACTIVE_STATUSES,
   assertTransition,
   BLOCKING_OUTCOMES,
@@ -44,6 +53,8 @@ export const createRunSchema = z.object({
   request: z.string().trim().min(1).max(20_000),
   title: z.string().trim().max(200).optional(),
   profile: executionProfileSchema.default('standard'),
+  /** Working mode: `plan`, `build`, or `auto` to decide from the request. */
+  mode: workModeSchema.default('build'),
   /** Transformer provider id, or 'none'. */
   transformer: z.string().trim().max(60).optional(),
   /** Reviewer provider id, or 'none'. */
@@ -53,8 +64,8 @@ export const createRunSchema = z.object({
 });
 
 /**
- * The input type, not the parsed output type: `profile` has a default, so
- * `z.infer` would wrongly require callers to supply it.
+ * The input type, not the parsed output type: `profile` and `mode` have
+ * defaults, so `z.infer` would wrongly require callers to supply them.
  */
 export type CreateRunInput = z.input<typeof createRunSchema>;
 
@@ -132,6 +143,13 @@ export interface RunView {
   status: RunStatus;
   statusReason: string | null;
   profile: string;
+  /** What the user chose: `plan`, `build` or `auto`. Never rewritten. */
+  mode: WorkMode;
+  /**
+   * The mode the run is executing in. Null on rows written before modes
+   * existed; `effectiveWorkMode` reads those as `build`.
+   */
+  resolvedMode: ResolvedWorkMode | null;
   baseBranch: string | null;
   baseCommit: string | null;
   branch: string | null;
@@ -256,6 +274,8 @@ export function getRun(id: string): RunView | null {
     status: row.status as RunStatus,
     statusReason: row.statusReason,
     profile: row.profile,
+    mode: row.mode as WorkMode,
+    resolvedMode: row.resolvedMode as ResolvedWorkMode | null,
     baseBranch: row.baseBranch,
     baseCommit: row.baseCommit,
     branch: row.branch,
@@ -312,6 +332,8 @@ export interface RunListItem {
   title: string;
   status: RunStatus;
   profile: string;
+  mode: WorkMode;
+  resolvedMode: ResolvedWorkMode | null;
   branch: string | null;
   createdAt: string;
   startedAt: string | null;
@@ -386,6 +408,8 @@ export function listRuns(options: ListRunsOptions = {}): RunListItem[] {
       title: row.title,
       status: row.status as RunStatus,
       profile: row.profile,
+      mode: row.mode as WorkMode,
+      resolvedMode: row.resolvedMode as ResolvedWorkMode | null,
       branch: row.branch,
       createdAt: row.createdAt,
       startedAt: row.startedAt,
@@ -422,6 +446,11 @@ export function createRun(input: CreateRunInput): RunView {
   const id = newRunId();
   const title = parsed.title?.trim() || deriveTitle(parsed.request);
 
+  // Resolved before the run exists, from the request as typed. `auto` is a
+  // choice between the other two modes, not a third behaviour, so nothing
+  // downstream ever has to handle it.
+  const resolution = resolveWorkMode(parsed.mode, parsed.request);
+
   db.insert(runs)
     .values({
       id,
@@ -430,6 +459,8 @@ export function createRun(input: CreateRunInput): RunView {
       request: parsed.request,
       status: 'DRAFT',
       profile: parsed.profile,
+      mode: parsed.mode,
+      resolvedMode: resolution.mode,
       baseBranch: parsed.baseRef?.trim() || project.defaultBranch,
       branch: runBranchName(id),
       agentProvider: 'claude-code',
@@ -442,11 +473,61 @@ export function createRun(input: CreateRunInput): RunView {
   appendEvent({
     runId: id,
     type: 'run.created',
-    message: `Run created: ${title}`,
-    payload: { title, request: parsed.request, profile: parsed.profile },
+    message: `Run created in ${WORK_MODE_LABELS[resolution.mode]} mode: ${title}`,
+    payload: {
+      title,
+      request: parsed.request,
+      profile: parsed.profile,
+      mode: parsed.mode,
+      resolvedMode: resolution.mode,
+    },
   });
 
+  // Only when something was actually decided. An explicit choice is already
+  // stated by the event above, and repeating it would be noise in the feed.
+  if (resolution.automatic) {
+    appendEvent({
+      runId: id,
+      type: 'run.mode_selected',
+      message: `Auto chose ${WORK_MODE_LABELS[resolution.mode]} mode: ${resolution.reason}`,
+      payload: { requested: parsed.mode, resolved: resolution.mode, reason: resolution.reason },
+    });
+  }
+
   return requireRun(id);
+}
+
+/**
+ * Switches the mode a run is executing in.
+ *
+ * The requested mode on the run is left alone: what the user originally asked
+ * for stays readable, and the switch itself is recorded as an event, which is
+ * the audit trail for everything else in a run too.
+ */
+export function switchRunMode(runId: string, to: ResolvedWorkMode, reason: string): void {
+  const db = getDb();
+  const row = db
+    .select({ mode: runs.mode, resolvedMode: runs.resolvedMode })
+    .from(runs)
+    .where(eq(runs.id, runId))
+    .get();
+  if (!row) throw notFound(`Run ${runId}`);
+
+  const from = effectiveWorkMode(row);
+  if (from === to) return;
+
+  db.update(runs)
+    .set({ resolvedMode: to, updatedAt: new Date().toISOString() })
+    .where(eq(runs.id, runId))
+    .run();
+
+  appendEvent({
+    runId,
+    type: 'run.mode_switched',
+    level: 'notice',
+    message: `Mode switched from ${WORK_MODE_LABELS[from]} to ${WORK_MODE_LABELS[to]}: ${reason}`,
+    payload: { from, to, reason },
+  });
 }
 
 /** First line of the request, trimmed to a sane length. */
@@ -803,6 +884,8 @@ export interface ReadinessAssessment {
   ready: boolean;
   /** Human-facing reasons the run is not ready. */
   reasons: string[];
+  /** Which mode the assessment was made for. The bar differs. */
+  mode: ResolvedWorkMode;
   validationsPassed: number;
   validationsFailed: number;
   validationsNotConfigured: number;
@@ -812,11 +895,82 @@ export interface ReadinessAssessment {
 /**
  * Decides whether a run may become READY, from stored state alone.
  *
- * Nothing the implementer said is consulted. A missing validation kind counts
- * as not configured, never as a failure, and only `blocking` commands can hold
- * a run back.
+ * Nothing the implementer said is consulted, in any mode. What changes with the
+ * mode is what counts as evidence: a build run is judged on validation results
+ * and a diff, a read-only run on whether its deliverable exists and nothing was
+ * touched while producing it.
  */
 export function assessReadiness(run: RunView, project: ProjectView): ReadinessAssessment {
+  const mode = effectiveWorkMode(run);
+  return mode === 'build' ? assessBuildReadiness(run, project) : assessReadOnlyReadiness(run, mode);
+}
+
+/** How many blocking findings the latest review attempt recorded. */
+function countBlockingFindings(run: RunView): number {
+  const attempt = run.findings.reduce((acc, f) => Math.max(acc, f.attempt), 0);
+  return run.findings.filter(
+    (f) => f.attempt === attempt && BLOCKING_SEVERITIES.includes(f.severity),
+  ).length;
+}
+
+/**
+ * Readiness for a read-only run: Ask or Plan.
+ *
+ * These produce a document, so the validation scorecard has nothing to say
+ * about them and demanding a green one would block every plan forever. Two
+ * things are checked instead: the deliverable exists, and the worktree is
+ * untouched — because "changes nothing" is the promise both modes make, and a
+ * broken promise is exactly what a person needs to see.
+ *
+ * A finished iteration is not enough on its own. An iteration that failed or
+ * was cancelled can still carry partial text, and partial text presented as a
+ * finished plan is the same class of mistake as a green badge on an unrun test.
+ */
+function assessReadOnlyReadiness(run: RunView, mode: ResolvedWorkMode): ReadinessAssessment {
+  const reasons: string[] = [];
+  const { deliverable, agentNoun } = WORK_MODE_WORDING[mode];
+  const latest = run.iterations.at(-1) ?? null;
+
+  if (latest === null) {
+    reasons.push(`The ${agentNoun} has not run yet`);
+  } else if (latest.status === 'running') {
+    reasons.push(`The ${agentNoun} is still working`);
+  } else if (latest.status !== 'completed') {
+    reasons.push(
+      `The ${agentNoun} ${
+        latest.status === 'cancelled' ? 'was cancelled' : 'failed'
+      }, so the ${deliverable} is unfinished`,
+    );
+  } else if (!latest.finalText?.trim()) {
+    reasons.push(`No ${deliverable} was produced`);
+  }
+
+  if (run.changedFiles.length > 0) {
+    reasons.push(
+      `${WORK_MODE_LABELS[mode]} mode changed ${run.changedFiles.length} file${
+        run.changedFiles.length === 1 ? '' : 's'
+      }, and it should have changed none`,
+    );
+  }
+
+  return {
+    ready: reasons.length === 0,
+    reasons,
+    mode,
+    validationsPassed: 0,
+    validationsFailed: 0,
+    validationsNotConfigured: VALIDATION_KINDS.length,
+    blockingFindings: countBlockingFindings(run),
+  };
+}
+
+/**
+ * Readiness for a build run.
+ *
+ * A missing validation kind counts as not configured, never as a failure, and
+ * only `blocking` commands can hold a run back.
+ */
+function assessBuildReadiness(run: RunView, project: ProjectView): ReadinessAssessment {
   const reasons: string[] = [];
   const attempt = run.validations.reduce((acc, v) => Math.max(acc, v.attempt), 0);
   const current = run.validations.filter((v) => v.attempt === attempt);
@@ -858,10 +1012,7 @@ export function assessReadiness(run: RunView, project: ProjectView): ReadinessAs
     }
   }
 
-  const latestFindingAttempt = run.findings.reduce((acc, f) => Math.max(acc, f.attempt), 0);
-  const blockingFindings = run.findings.filter(
-    (f) => f.attempt === latestFindingAttempt && BLOCKING_SEVERITIES.includes(f.severity),
-  ).length;
+  const blockingFindings = countBlockingFindings(run);
 
   if (project.reviewBlocksReady && blockingFindings > 0) {
     reasons.push(
@@ -876,6 +1027,7 @@ export function assessReadiness(run: RunView, project: ProjectView): ReadinessAs
   return {
     ready: reasons.length === 0,
     reasons,
+    mode: 'build',
     validationsPassed: passed,
     validationsFailed: failed.length,
     validationsNotConfigured: notConfigured,

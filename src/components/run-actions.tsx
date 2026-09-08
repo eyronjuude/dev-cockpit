@@ -3,6 +3,12 @@
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 
+import {
+  effectiveWorkMode,
+  isReadOnlyMode,
+  WORK_MODE_WORDING,
+  type ResolvedWorkMode,
+} from '@/domain/modes';
 import { isTerminal, type RunStatus } from '@/domain/types';
 import type { RunSnapshot } from './use-run-stream';
 
@@ -14,6 +20,10 @@ import type { RunSnapshot } from './use-run-stream';
  * call, and the readiness assessment is shown next to it rather than used to
  * hide the button — the user is the approver, so an override is theirs to make,
  * but never by accident.
+ *
+ * The working mode changes the set: a read-only run has nothing to
+ * re-validate, and gains the one action that makes Ask and Plan worth doing
+ * separately — handing what they produced back to the same session to build.
  */
 
 interface ActionsProps {
@@ -21,7 +31,26 @@ interface ActionsProps {
   onChanged: () => void;
 }
 
-type Dialog = 'none' | 'changes' | 'approve' | 'reject';
+/**
+ * The instruction sent when a read-only run is switched to Build.
+ *
+ * A plan is a complete brief on its own, so the note is an adjustment to it. An
+ * answer is not, so the note carries the actual instruction and the fallback
+ * has to be vague rather than pretend otherwise.
+ */
+function buildFeedbackFor(mode: ResolvedWorkMode, note: string): string {
+  const trimmed = note.trim();
+  if (mode === 'plan') {
+    return trimmed
+      ? `Implement the plan you wrote, with this adjustment:\n\n${trimmed}`
+      : 'Implement the plan you wrote, in full.';
+  }
+  return trimmed
+    ? `Implement this, following the answer you just gave:\n\n${trimmed}`
+    : 'Implement what your answer describes. If the answer did not describe a change, say what you would need to know instead of guessing.';
+}
+
+type Dialog = 'none' | 'changes' | 'approve' | 'reject' | 'implement';
 
 export function RunActions({ snapshot, onChanged }: ActionsProps) {
   const router = useRouter();
@@ -32,6 +61,7 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
   const [error, setError] = useState<string | null>(null);
 
   const [feedback, setFeedback] = useState('');
+  const [implementNote, setImplementNote] = useState('');
   const [note, setNote] = useState('');
   const [createCommit, setCreateCommit] = useState(false);
   const [commitMessage, setCommitMessage] = useState('');
@@ -66,10 +96,26 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
     }
   };
 
+  const mode = effectiveWorkMode(run);
+  const readOnly = isReadOnlyMode(mode);
+  const wording = WORK_MODE_WORDING[mode];
   const canRequestChanges = !active && !terminal && run.worktreePath !== null;
-  const canRevalidate = !active && !terminal && run.worktreePath !== null;
+  // A read-only run has no diff, so there is nothing for the checks to run
+  // against.
+  const canRevalidate = !active && !terminal && run.worktreePath !== null && !readOnly;
   const canApprove = !active && !terminal;
   const canStart = !active && run.status === 'DRAFT';
+  // Only once there is something finished to build on. An iteration that
+  // failed part-way can still hold text, and switching to Build on half a plan
+  // is a build run started the long way round.
+  const canSwitchToBuild =
+    readOnly &&
+    !active &&
+    !terminal &&
+    run.worktreePath !== null &&
+    run.iterations.some(
+      (i) => i.status === 'completed' && i.finalText !== null && i.finalText.trim().length > 0,
+    );
 
   return (
     <div className="space-y-2.5">
@@ -81,7 +127,7 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
             disabled={busy !== null}
             onClick={() => void post(`/api/runs/${run.id}/start`, {}, 'start')}
           >
-            Start implementation
+            {mode === 'ask' ? 'Ask' : mode === 'plan' ? 'Start planning' : 'Start implementation'}
           </button>
         ) : null}
 
@@ -92,7 +138,18 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
             disabled={busy !== null}
             onClick={() => void post(`/api/runs/${run.id}/cancel`, {}, 'cancel')}
           >
-            {busy === 'cancel' ? 'Cancelling…' : 'Cancel implementation'}
+            {busy === 'cancel' ? 'Cancelling…' : `Cancel ${wording.activity}`}
+          </button>
+        ) : null}
+
+        {canSwitchToBuild ? (
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={busy !== null}
+            onClick={() => setDialog(dialog === 'implement' ? 'none' : 'implement')}
+          >
+            {mode === 'plan' ? 'Implement this plan' : 'Switch to Build'}
           </button>
         ) : null}
 
@@ -103,7 +160,11 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
             disabled={busy !== null}
             onClick={() => setDialog(dialog === 'changes' ? 'none' : 'changes')}
           >
-            Request changes
+            {mode === 'ask'
+              ? 'Ask a follow-up'
+              : mode === 'plan'
+                ? 'Revise the plan'
+                : 'Request changes'}
           </button>
         ) : null}
 
@@ -159,23 +220,91 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
         </p>
       ) : null}
 
+      {dialog === 'implement' ? (
+        <div className="panel p-3">
+          <p className="mb-2.5 text-[12.5px] text-ink-muted">
+            Switches this run to <span className="font-medium">Build</span> mode and hands the{' '}
+            {wording.deliverable} back to the session that produced it. The project&rsquo;s checks
+            run afterwards, and the diff appears on this screen as it would for any build run.
+          </p>
+          <label className="label" htmlFor="implement-note">
+            {mode === 'plan'
+              ? 'Anything to change about the plan first? (optional)'
+              : 'What should it build? (optional, but useful)'}
+          </label>
+          <textarea
+            id="implement-note"
+            className="textarea"
+            rows={3}
+            value={implementNote}
+            placeholder={
+              mode === 'plan'
+                ? 'Skip step 4 for now — the migration can wait until the endpoint is in.'
+                : 'Do the second option you described, and leave the cache alone.'
+            }
+            onChange={(e) => setImplementNote(e.target.value)}
+          />
+          <p className="hint">
+            {run.agentSessionId
+              ? `Continues Claude Code session ${run.agentSessionId.slice(0, 8)}, so the reading behind the ${wording.deliverable} is not thrown away.`
+              : `No agent session is recorded for this run, so the implementer starts fresh with the ${wording.deliverable} text in its prompt.`}
+          </p>
+          <div className="mt-2.5 flex justify-end gap-1.5">
+            <button type="button" className="btn btn-ghost" onClick={() => setDialog('none')}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={busy !== null}
+              onClick={() =>
+                void post(
+                  `/api/runs/${run.id}/changes`,
+                  {
+                    mode: 'build',
+                    feedback: buildFeedbackFor(mode, implementNote),
+                  },
+                  'implement',
+                )
+              }
+            >
+              {busy === 'implement' ? 'Sending…' : 'Switch to Build and implement'}
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       {dialog === 'changes' ? (
         <div className="panel p-3">
           <label className="label" htmlFor="feedback">
-            What should change?
+            {mode === 'ask'
+              ? 'What else do you want to know?'
+              : mode === 'plan'
+                ? 'What should the plan do differently?'
+                : 'What should change?'}
           </label>
           <textarea
             id="feedback"
             className="textarea"
             rows={4}
             value={feedback}
-            placeholder="The endpoint returns 500 when the id is missing. It should return 400 with a message."
+            placeholder={
+              mode === 'ask'
+                ? 'And where does that session get invalidated on logout?'
+                : mode === 'plan'
+                  ? 'Step 2 assumes the cache is in-process. It is Redis — replan from there.'
+                  : 'The endpoint returns 500 when the id is missing. It should return 400 with a message.'
+            }
             onChange={(e) => setFeedback(e.target.value)}
           />
           <p className="hint">
             {run.agentSessionId
-              ? `Continues Claude Code session ${run.agentSessionId.slice(0, 8)}, so the implementation context is kept. Validation runs again afterwards.`
-              : 'No agent session is recorded for this run, so the implementer starts fresh.'}
+              ? `Continues Claude Code session ${run.agentSessionId.slice(0, 8)}, so the ${
+                  readOnly ? `reading behind the ${wording.deliverable}` : 'implementation context'
+                } is kept. ${
+                  readOnly ? 'Still changes no files.' : 'Validation runs again afterwards.'
+                }`
+              : `No agent session is recorded for this run, so the ${wording.agentNoun} starts fresh from this run's stored request.`}
           </p>
           <div className="mt-2.5 flex justify-end gap-1.5">
             <button type="button" className="btn btn-ghost" onClick={() => setDialog('none')}>
@@ -187,7 +316,7 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
               disabled={feedback.trim().length === 0 || busy !== null}
               onClick={() => void post(`/api/runs/${run.id}/changes`, { feedback }, 'changes')}
             >
-              {busy === 'changes' ? 'Sending…' : 'Send to implementer'}
+              {busy === 'changes' ? 'Sending…' : `Send to the ${wording.agentNoun}`}
             </button>
           </div>
         </div>
@@ -197,8 +326,11 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
         <div className="panel p-3">
           {readiness.ready ? (
             <p className="mb-2.5 text-[12.5px] text-pass">
-              All configured checks passed and {run.changedFiles.length} file
-              {run.changedFiles.length === 1 ? '' : 's'} changed.
+              {readOnly
+                ? `The ${wording.deliverable} is written and nothing was changed to produce it.`
+                : `All configured checks passed and ${run.changedFiles.length} file${
+                    run.changedFiles.length === 1 ? '' : 's'
+                  } changed.`}
             </p>
           ) : (
             <div className="mb-2.5 rounded border border-warn/40 bg-warn-soft px-2.5 py-2">
@@ -224,22 +356,25 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
             placeholder="Looks right, shipping behind the existing flag."
           />
 
-          <label className="mt-2.5 flex cursor-pointer items-start gap-2 text-[12.5px]">
-            <input
-              type="checkbox"
-              className="mt-0.5 accent-accent"
-              checked={createCommit}
-              onChange={(e) => setCreateCommit(e.target.checked)}
-            />
-            <span>
-              Create a local commit on <code className="mono">{run.branch}</code>
-              <span className="block text-[11.5px] text-ink-faint">
-                Commits to the run branch only. Nothing is merged and nothing is pushed.
+          {/* A read-only run has nothing to commit: its output is an artifact. */}
+          {readOnly ? null : (
+            <label className="mt-2.5 flex cursor-pointer items-start gap-2 text-[12.5px]">
+              <input
+                type="checkbox"
+                className="mt-0.5 accent-accent"
+                checked={createCommit}
+                onChange={(e) => setCreateCommit(e.target.checked)}
+              />
+              <span>
+                Create a local commit on <code className="mono">{run.branch}</code>
+                <span className="block text-[11.5px] text-ink-faint">
+                  Commits to the run branch only. Nothing is merged and nothing is pushed.
+                </span>
               </span>
-            </span>
-          </label>
+            </label>
+          )}
 
-          {createCommit ? (
+          {createCommit && !readOnly ? (
             <input
               className="input mt-2"
               value={commitMessage}
@@ -261,7 +396,7 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
                   `/api/runs/${run.id}/approve`,
                   {
                     note: note || undefined,
-                    createCommit,
+                    createCommit: createCommit && !readOnly,
                     commitMessage: commitMessage || undefined,
                   },
                   'approve',
@@ -339,8 +474,13 @@ export function ReadinessNotice({
   if (readiness.ready) {
     return (
       <p className="text-[12.5px] text-pass">
-        Ready — {readiness.validationsPassed} check
-        {readiness.validationsPassed === 1 ? '' : 's'} passed, nothing blocking.
+        {readiness.mode === 'build'
+          ? `Ready — ${readiness.validationsPassed} check${
+              readiness.validationsPassed === 1 ? '' : 's'
+            } passed, nothing blocking.`
+          : `Ready — the ${
+              WORK_MODE_WORDING[readiness.mode].deliverable
+            } is written and no files were changed.`}
       </p>
     );
   }

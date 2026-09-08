@@ -58,7 +58,7 @@ produces `review.skipped`. Neither can fail a run.
 ```
 src/
 ├── core/          ids, errors, data-directory paths, secret redaction
-├── domain/        run lifecycle, event catalogue, validation vocabulary
+├── domain/        run lifecycle, event catalogue, validation and mode vocabulary
 ├── db/            drizzle schema, client, generated SQL migrations
 ├── process/       command execution, process-tree kill, executable resolution
 ├── git/           git wrapper, diff collection, worktree lifecycle
@@ -66,7 +66,7 @@ src/
 ├── transformers/  TransformerProvider + implementations + registry
 ├── reviewers/     ReviewerAgent + implementations + registry
 ├── validation/    Validator + the engine that sequences them
-├── orchestrator/  the state machine, prompts, execution profiles
+├── orchestrator/  the state machine, prompts, working modes, execution profiles
 ├── services/      projects, runs, events, artifacts, event bus, bootstrap
 ├── components/    client components: run view, scorecard, diff, feed, forms
 └── app/           routes and API handlers
@@ -100,13 +100,62 @@ Statuses are recoverable by design: `NEEDS_CHANGES`, `READY`, `FAILED` and
 `CANCELLED` can all re-enter `IMPLEMENTING`, which is what "request changes" on
 a failed run does. `APPROVED` and `REJECTED` are terminal.
 
+## Working modes
+
+A run executes in one of three modes, chosen per run. The mode decides *what
+the run produces*; the execution profile decides *how much effort it spends*.
+They compose, and neither is a separate code path — both are tables the
+orchestrator reads.
+
+```
+                     Ask                Plan               Build
+  transform          yes                yes                yes
+  prepare worktree   yes                yes                yes
+  implement          permission `plan`  permission `plan`  project's permission
+  collect diff       yes, empty         yes, empty         yes
+  validate           skipped            skipped            project's commands
+  review             skipped            skipped            configured reviewer
+  decide             answer exists,     plan exists,       validation results,
+                     nothing touched    nothing touched    findings, the diff
+```
+
+Ask and Plan differ only in the prompt and the deliverable. That is not a
+reason to merge them: the prompt is the product. Ask is told to lead with the
+answer, cite `file:line`, and not to propose a plan; Plan is told to produce
+ordered steps and name its risks. One prompt for both would return every
+question as a five-section implementation plan.
+
+`WORK_MODE_BEHAVIOURS` in `orchestrator/modes.ts` holds the phase toggles and
+where each deliverable is stored. `domain/modes.ts` holds the vocabulary, the
+per-mode wording, and the Auto classifier — the last of which is pure, so the
+New Task form can run it in the browser and show what Auto would pick before a
+run exists. The wording lives in `domain` because readiness reasons, event
+messages and UI copy all need the same nouns, and three copies would drift.
+
+The read-only modes are enforced by the permission mode, not only by the
+prompt, and a mode can take capability away but never add it:
+`effectivePermissionMode` overrides `bypassPermissions` with `plan`, and never
+the reverse.
+
+`runs.mode` is what the user asked for and is never rewritten.
+`runs.resolved_mode` is what is executing, and moves when a read-only run is
+switched to Build — which resumes the same agent session rather than starting a
+new run. The switch is recorded as `run.mode_switched`, which is the audit
+trail, as it is for everything else here.
+
+A follow-up iteration is short, because the resumed session still holds the
+rules, the task and what it produced. With no session to resume that inverts,
+and the prompt carries all three instead — feedback alone would ask a cold
+agent to revise work it has never seen. See ADR 0010.
+
 ## Readiness
 
 `assessReadiness(run, project)` is a pure function over stored state. It reads
 the latest validation attempt, the latest review attempt, the changed-file list
-and the project's policies. It never consults the agent's summary.
+and the project's policies. It never consults the agent's summary, in either
+mode.
 
-It blocks on:
+For a build run it blocks on:
 
 - a blocking validation that failed or errored,
 - a validation still running,
@@ -114,6 +163,13 @@ It blocks on:
 - a UI-touching change with no E2E result, when the project requires it,
 - a high or critical review finding, only when the project opts in,
 - no files having changed.
+
+An Ask or Plan run is judged on two things instead, because none of the above
+can say anything about a document: the deliverable exists — from an iteration
+that *completed*, since a failed one can still hold partial text — and no file
+was changed. The second is the one worth having: both modes promise to change
+nothing, so a read-only run with a diff has broken its promise, and that is
+precisely what a person needs to see.
 
 Reviewer findings are advisory by default. A model's opinion is not a test
 result, and the two are stored in different tables and rendered differently so

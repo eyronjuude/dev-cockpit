@@ -1,3 +1,4 @@
+import { isReadOnlyMode, WORK_MODE_LABELS, type ResolvedWorkMode } from '@/domain/modes';
 import { VALIDATION_KIND_LABELS, VALIDATION_KINDS, type ValidationKind } from '@/domain/types';
 import type { ValidationResultView } from '@/services/runs';
 import type { ConfiguredValidation } from './use-run-stream';
@@ -15,16 +16,37 @@ import { formatDuration, OutcomeBadge } from './status';
  *
  * Collapsing any of those into "fail" would make a gap in setup look like
  * broken code, which is the mistake this component exists to avoid.
+ *
+ * A read-only run gets none of that. Six rows reading "Pending" forever would
+ * be a fourth kind of lie, so the mode is stated instead.
  */
 export function Scorecard({
   validations,
   configured,
   attempt,
+  mode,
 }: {
   validations: readonly ValidationResultView[];
   configured: readonly ConfiguredValidation[];
   attempt: number | null;
+  mode: ResolvedWorkMode;
 }) {
+  if (isReadOnlyMode(mode) && attempt === null) {
+    return (
+      <div className="panel">
+        <div className="panel-head">
+          <h2 className="panel-title">Validation</h2>
+          <span className="text-[11px] text-ink-faint">not applicable</span>
+        </div>
+        <p className="px-3.5 py-2.5 text-[12px] text-ink-muted">
+          {WORK_MODE_LABELS[mode]} mode changes no files, so none of this project&rsquo;s{' '}
+          {configured.length === 0 ? 'checks' : `${configured.length} configured check(s)`} were
+          run. Switch the run to Build mode to have them run against an implementation.
+        </p>
+      </div>
+    );
+  }
+
   const current =
     attempt === null ? [] : validations.filter((v) => v.attempt === attempt);
   const byKind = new Map<ValidationKind, ValidationResultView>();

@@ -1,6 +1,8 @@
 import { handle } from '@/app/api/_lib/handler';
 import { claudeBinary } from '@/agents/claude-code';
 import { dataDir, dbPath } from '@/core/paths';
+import { DEFAULT_WORK_MODE, WORK_MODE_LABELS } from '@/domain/modes';
+import { listWorkModes } from '@/orchestrator/modes';
 import { listAgents } from '@/orchestrator/orchestrator';
 import { listProfiles } from '@/orchestrator/profiles';
 import { reviewerStatuses } from '@/reviewers/registry';
@@ -48,6 +50,11 @@ export function GET() {
       transformers,
       reviewers,
       profiles: listProfiles(),
+      modes: listWorkModes().map((mode) => ({
+        ...mode,
+        label: WORK_MODE_LABELS[mode.id],
+        default: mode.id === DEFAULT_WORK_MODE,
+      })),
     };
   });
 }

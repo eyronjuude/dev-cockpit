@@ -1,5 +1,12 @@
 import { claudeBinary } from '@/agents/claude-code';
 import { dataDir, dbPath } from '@/core/paths';
+import {
+  DEFAULT_WORK_MODE,
+  WORK_MODE_DESCRIPTIONS,
+  WORK_MODE_LABELS,
+  WORK_MODES,
+} from '@/domain/modes';
+import { getWorkMode } from '@/orchestrator/modes';
 import { listAgents } from '@/orchestrator/orchestrator';
 import { listProfiles } from '@/orchestrator/profiles';
 import { reviewerStatuses } from '@/reviewers/registry';
@@ -97,9 +104,46 @@ export default async function SettingsPage() {
         <ProviderList providers={reviewers} />
       </section>
 
+      <section className="panel mb-4">
+        <div className="panel-head">
+          <h2 className="panel-title">Working modes</h2>
+          <span className="text-[11px] text-ink-faint">chosen per run</span>
+        </div>
+        <ul className="divide-y divide-line">
+          {WORK_MODES.map((id) => {
+            // Auto is a choice between the other two rather than a behaviour of
+            // its own, so it has no row of phase toggles to show.
+            const behaviour = id === 'auto' ? null : getWorkMode(id);
+            return (
+              <li key={id} className="px-3.5 py-2.5">
+                <div className="flex items-center gap-2">
+                  <span className="text-[12.5px] font-medium">{WORK_MODE_LABELS[id]}</span>
+                  {id === DEFAULT_WORK_MODE ? (
+                    <span className="badge badge-accent">default</span>
+                  ) : null}
+                </div>
+                <p className="mt-0.5 text-[12px] text-ink-muted">{WORK_MODE_DESCRIPTIONS[id]}</p>
+                <p className="mt-0.5 text-[11px] text-ink-faint">
+                  {behaviour
+                    ? `edits files ${behaviour.editsCode ? 'yes' : 'no'} · validation ${
+                        behaviour.runValidation ? 'on' : 'off'
+                      } · reviewer ${behaviour.runReviewer ? 'on' : 'off'}${
+                        behaviour.agentPermissionMode
+                          ? ` · permission mode forced to ${behaviour.agentPermissionMode}`
+                          : ' · permission mode from the project'
+                      }`
+                    : 'Decided from the request before the run starts, and recorded with its reason.'}
+                </p>
+              </li>
+            );
+          })}
+        </ul>
+      </section>
+
       <section className="panel">
         <div className="panel-head">
           <h2 className="panel-title">Execution profiles</h2>
+          <span className="text-[11px] text-ink-faint">how much effort, not what to produce</span>
         </div>
         <ul className="divide-y divide-line">
           {listProfiles().map((profile) => (

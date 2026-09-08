@@ -165,6 +165,43 @@ One entry in `PROFILES` in `src/orchestrator/profiles.ts`. A profile is a bundle
 of defaults, not a code path, so nothing else changes. Add the profile name to a
 validation command's `profiles` list to include that command.
 
+## Adding a working mode
+
+Five places, in this order. The type checker will find most of them for you:
+every table is a `Record` keyed by the mode union, so adding to the union
+breaks each one that has not been filled in.
+
+1. `RESOLVED_WORK_MODES` and `WORK_MODES` in `src/domain/modes.ts`, plus a
+   label, a description, and an entry in `WORK_MODE_WORDING`. Both lists,
+   because a mode that can be chosen but not executed is a bug nothing will
+   catch for you.
+2. An entry in `WORK_MODE_BEHAVIOURS` in `src/orchestrator/modes.ts`: whether it
+   edits code, which permission mode it forces, which phases run, and where its
+   deliverable is stored. `null` for the permission mode defers to the project.
+   A mode may take capability away and must never add it.
+3. A new `ArtifactKind` in `src/domain/types.ts` if the deliverable is not a
+   diff or a summary, so it is findable in the artifact browser under its own
+   name.
+4. Opening rules in `openingRules`, plus entries in `MODE_SWITCH_NOTE` and
+   `FOLLOW_UP_INSTRUCTION`, in `src/orchestrator/prompt.ts`. Where the mode
+   forbids something, enforce it with the permission mode as well — the prompt
+   states intent, the permission mode makes the refusal real.
+5. A branch in `assessReadiness` in `src/services/runs.ts`, if the mode's
+   deliverable is not a diff. Every mode needs an answer to "what counts as
+   evidence here", and inheriting the build answer means inheriting "No files
+   changed" as a permanent blocker. Require a *completed* iteration: partial
+   output from a failed one is not a deliverable.
+
+`getWorkMode` resolves an unknown value to `build`, so an old row or a removed
+mode degrades to the original behaviour rather than throwing.
+
+If the mode should be reachable from Auto, add its signals to `classifyRequest`
+and a case to `tests/modes.test.ts`. Mind the order of the checks there — it is
+what makes "plan how to fix the login bug" a plan and "explain why it breaks
+and fix it" a build. Auto's rule is written, pure and tested on purpose: it runs
+in the browser to preview the choice and on the server to make it, and the two
+must not be able to disagree.
+
 ## Adding an event type
 
 Add the name to `EVENT_TYPES` and its payload to `EventPayloads` in

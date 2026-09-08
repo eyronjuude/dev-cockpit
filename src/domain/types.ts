@@ -150,6 +150,10 @@ export const ARTIFACT_KINDS = [
   'markdown_report',
   'review_report',
   'transform_spec',
+  /** A plan run's deliverable: the planner's own plan, verbatim. */
+  'plan',
+  /** An ask run's deliverable: the agent's own answer, verbatim. */
+  'answer',
   'other',
 ] as const;
 
@@ -168,6 +172,8 @@ export const ARTIFACT_KIND_LABELS: Record<ArtifactKind, string> = {
   markdown_report: 'Report',
   review_report: 'Review report',
   transform_spec: 'Specification',
+  plan: 'Plan',
+  answer: 'Answer',
   other: 'File',
 };
 

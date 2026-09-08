@@ -115,6 +115,30 @@ validator arrives.
 Recurring request shapes ("add a migration for…", "fix the failing test in…")
 saved per project.
 
+**Working modes, the parts left out**
+Ask, Plan, Build and Auto ship (ADR 0010). Four smaller things were
+deliberately not built with them:
+
+- *Custom modes.* Cursor has them; `WORK_MODE_BEHAVIOURS` is exactly the seam
+  they would plug into — a stored row of phase toggles, a permission mode and a
+  prompt, instead of a compiled-in table entry. The work is not the model, it is
+  the editor UI and validating that a user-defined mode cannot grant itself more
+  capability than the project allows.
+- *A project-level default mode.* One more column and one more form field for a
+  choice already made on the screen where a run starts. Worth adding the moment
+  a project turns out to pick the same mode every time.
+- *A mode-aware transformer.* An Ask or Plan run's specification is still headed
+  "implementation specification", because `TransformRequestInput` was left
+  alone. Passing the mode through would let each get a brief of the right shape.
+- *A better Auto.* The current rule is keywords in a fixed order. A transformer
+  could classify instead, but it is optional, offline-absent and cannot run in
+  the form as the user types, so the written rule earns its place until Auto is
+  wrong often enough to measure.
+
+Cursor's **Manual** mode was considered and declined rather than deferred: it
+exists to edit what your cursor points at, and this application has no cursor.
+See ADR 0010.
+
 **Hooks**
 Fire a local command on `run.ready` or `run.approved`. Trivially useful, and
 trivially a security question, so it wants designing rather than adding.

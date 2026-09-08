@@ -3,6 +3,12 @@
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 
+import {
+  effectiveWorkMode,
+  isReadOnlyMode,
+  WORK_MODE_LABELS,
+  WORK_MODE_WORDING,
+} from '@/domain/modes';
 import type { ChangeType } from '@/domain/types';
 import { ArtifactPanel } from './artifact-panel';
 import { DiffView } from './diff-view';
@@ -52,6 +58,8 @@ export function RunView({ initial }: { initial: RunSnapshot }) {
   const latestFindingAttempt = run.findings.reduce((acc, f) => Math.max(acc, f.attempt), 0);
   const currentFindings = run.findings.filter((f) => f.attempt === latestFindingAttempt);
 
+  const workMode = effectiveWorkMode(run);
+
   return (
     <div className="flex h-full flex-col">
       {/* Header */}
@@ -73,6 +81,17 @@ export function RunView({ initial }: { initial: RunSnapshot }) {
           </div>
 
           <div className="flex shrink-0 items-center gap-2.5">
+            <span
+              className={`badge ${isReadOnlyMode(workMode) ? 'badge-accent' : 'badge-idle'}`}
+              title={
+                run.mode === 'auto'
+                  ? `Auto chose ${WORK_MODE_LABELS[workMode]} mode for this run`
+                  : `${WORK_MODE_LABELS[workMode]} mode`
+              }
+            >
+              {WORK_MODE_LABELS[workMode]}
+              {run.mode === 'auto' ? ' (auto)' : ''}
+            </span>
             <RunStatusBadge status={run.status} />
             {live.active && live.phase ? (
               <span className="text-[11.5px] text-running">{live.phase}…</span>
@@ -154,7 +173,11 @@ export function RunView({ initial }: { initial: RunSnapshot }) {
 
             {tab === 'Changes' ? (
               run.changedFiles.length === 0 ? (
-                <p className="empty-state">No file changes recorded.</p>
+                <p className="empty-state">
+                  {isReadOnlyMode(workMode)
+                    ? `No file changes recorded, which is what ${WORK_MODE_LABELS[workMode]} mode is for.`
+                    : 'No file changes recorded.'}
+                </p>
               ) : (
                 <table className="w-full text-[12.5px]">
                   <thead className="sticky top-0 bg-surface">
@@ -230,6 +253,7 @@ export function RunView({ initial }: { initial: RunSnapshot }) {
               validations={run.validations}
               configured={snapshot.configuredValidations}
               attempt={latestAttempt > 0 ? latestAttempt : null}
+              mode={workMode}
             />
           </div>
 
@@ -265,6 +289,8 @@ function OverviewTab({
   const { run, policies } = snapshot;
   const claim = latestIteration?.finalText ?? null;
   const interpreted = latestIteration?.summary ?? null;
+  const mode = effectiveWorkMode(run);
+  const readOnly = isReadOnlyMode(mode);
 
   return (
     <div className="space-y-3.5 p-3.5">
@@ -306,7 +332,24 @@ function OverviewTab({
         </div>
       ) : null}
 
-      {claim ? (
+      {claim && readOnly ? (
+        /**
+         * In a read-only mode this text is the deliverable rather than a claim
+         * about work done, so it is shown open and titled as what it is.
+         */
+        <div className="panel">
+          <div className="panel-head">
+            <h2 className="panel-title">{mode === 'ask' ? 'Answer' : 'Plan'}</h2>
+            <span className="text-[11px] text-ink-faint">
+              the {WORK_MODE_WORDING[mode].agentNoun}&rsquo;s own words — nothing was changed to
+              produce it
+            </span>
+          </div>
+          <Markdown className="px-3.5 py-2.5">{claim}</Markdown>
+        </div>
+      ) : null}
+
+      {claim && !readOnly ? (
         <details className="panel" open={interpreted === null}>
           <summary className="panel-head cursor-pointer list-none">
             <h2 className="panel-title">
@@ -373,9 +416,11 @@ function OverviewTab({
         </div>
         {findings.length === 0 ? (
           <p className="empty-state">
-            {run.reviewerProvider && run.reviewerProvider !== 'none'
-              ? 'No findings recorded.'
-              : 'No reviewer was configured for this run.'}
+            {readOnly
+              ? `${WORK_MODE_LABELS[mode]} mode produces no diff, so no review ran. You are the reviewer.`
+              : run.reviewerProvider && run.reviewerProvider !== 'none'
+                ? 'No findings recorded.'
+                : 'No reviewer was configured for this run.'}
           </p>
         ) : (
           <ul className="divide-y divide-line">
@@ -427,8 +472,11 @@ function TestsTab({
   if (results.length === 0) {
     return (
       <p className="empty-state">
-        No validation has run yet. Configure commands on the project to have them run
-        automatically.
+        {isReadOnlyMode(effectiveWorkMode(snapshot.run))
+          ? `${
+              WORK_MODE_LABELS[effectiveWorkMode(snapshot.run)]
+            } mode runs no checks, because nothing changed. Switch the run to Build mode to have them run against an implementation.`
+          : 'No validation has run yet. Configure commands on the project to have them run automatically.'}
       </p>
     );
   }
