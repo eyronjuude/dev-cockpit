@@ -18,6 +18,15 @@ Event `seq` is the cursor. Snapshot fetches are coalesced and prioritised:
 status, validation and review events refresh within 60ms, tool chatter waits
 900ms.
 
+Two details the live views depend on:
+
+- Catch-up replays in pages of 500 until the log is exhausted. A single query
+  is capped, and stopping at the cap would leave a hole in the middle of the
+  replay — live events would keep arriving, so the gap would be silent.
+- An active run also polls the snapshot every 5s. Phase transitions
+  (implementing → collecting → validating) do not all write an event, so the
+  progress bar would otherwise sit on a finished phase until the next one did.
+
 ## Why
 
 Folding events into client-side run state is where a live view drifts from the

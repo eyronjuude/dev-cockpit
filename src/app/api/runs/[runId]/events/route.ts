@@ -62,11 +62,19 @@ export async function GET(request: Request, { params }: Params) {
         }
       };
 
-      // Catch-up: everything the client has not seen yet.
-      const backlog = listEvents(runId, { afterSeq: cursor });
-      for (const event of backlog) {
-        cursor = Math.max(cursor, event.seq);
-        send('run-event', event, event.seq);
+      // Catch-up: everything the client has not seen yet, in pages. A busy run
+      // produces more events than one query returns, and stopping at the first
+      // page would leave a hole in the middle of the log — live events would
+      // still arrive, so the gap would be silent rather than obvious.
+      const PAGE = 500;
+      for (;;) {
+        const page = listEvents(runId, { afterSeq: cursor, limit: PAGE });
+        if (page.length === 0) break;
+        for (const event of page) {
+          cursor = Math.max(cursor, event.seq);
+          send('run-event', event, event.seq);
+        }
+        if (closed || page.length < PAGE) break;
       }
 
       send('sync', {

@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { isProgressEvent, type EventType, type RunEvent } from '@/domain/events';
+import type { RunProgress } from '@/domain/progress';
+import { RunProgressBar } from './run-progress';
 import { formatTime } from './status';
 
 /**
@@ -13,6 +15,11 @@ import { formatTime } from './status';
  * messages, validation results, status changes — and hides the debug-level
  * chatter behind a toggle. The goal is that a user can follow a run without
  * opening a log.
+ *
+ * Newest first, deliberately. This panel is the answer to "what is happening
+ * right now", and that answer should never be at the bottom of a list the user
+ * has to chase. The full-order stream, appended at the bottom the way a log
+ * behaves, lives in the Logs tab instead.
  */
 
 const ICON: Partial<Record<EventType, string>> = {
@@ -84,26 +91,45 @@ export function EventFeed({
   events,
   connected,
   active,
+  progress,
+  progressLabel,
+  progressDetail,
 }: {
   events: readonly RunEvent[];
   connected: boolean;
   active: boolean;
+  progress: RunProgress;
+  progressLabel: string;
+  progressDetail?: string | null;
 }) {
   const [showAll, setShowAll] = useState(false);
-  const [autoScroll, setAutoScroll] = useState(true);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
-  const visible = useMemo(
-    () => (showAll ? events : events.filter((e) => isProgressEvent(e.type))),
-    [events, showAll],
-  );
+  /** Newest first. `events` arrive in sequence order, so one reverse suffices. */
+  const visible = useMemo(() => {
+    const filtered = showAll ? events : events.filter((e) => isProgressEvent(e.type));
+    return filtered.slice().reverse();
+  }, [events, showAll]);
+
+  const newestSeq = visible[0]?.seq ?? 0;
+
+  // Scrolled to the top means "keep me on the newest". Scrolling away pauses
+  // that, and the count of what arrived since becomes the way back.
+  const [pinned, setPinned] = useState(true);
+  const [seenSeq, setSeenSeq] = useState(newestSeq);
 
   useEffect(() => {
-    if (!autoScroll) return;
+    if (!pinned) return;
+    setSeenSeq(newestSeq);
     const node = scrollRef.current;
-    if (!node) return;
-    node.scrollTop = node.scrollHeight;
-  }, [visible.length, autoScroll]);
+    if (node) node.scrollTop = 0;
+  }, [pinned, newestSeq]);
+
+  let unseen = 0;
+  for (const event of visible) {
+    if (event.seq <= seenSeq) break;
+    unseen += 1;
+  }
 
   return (
     <div className="panel flex min-h-0 flex-col">
@@ -128,19 +154,33 @@ export function EventFeed({
             />
             everything
           </label>
-          <label className="flex cursor-pointer items-center gap-1.5 text-[11px] text-ink-faint">
-            <input
-              type="checkbox"
-              checked={autoScroll}
-              onChange={(e) => setAutoScroll(e.target.checked)}
-              className="accent-accent"
-            />
-            follow
-          </label>
         </div>
       </div>
 
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-3.5 py-2">
+      <div className="shrink-0 border-b border-line px-3.5 py-2">
+        <RunProgressBar progress={progress} label={progressLabel} detail={progressDetail} />
+      </div>
+
+      {unseen > 0 ? (
+        <div className="shrink-0 border-b border-line px-3.5 py-1.5">
+          <button
+            type="button"
+            className="btn btn-sm w-full"
+            onClick={() => {
+              setPinned(true);
+              scrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
+          >
+            ↑ {unseen} newer {unseen === 1 ? 'entry' : 'entries'}
+          </button>
+        </div>
+      ) : null}
+
+      <div
+        ref={scrollRef}
+        onScroll={(e) => setPinned(e.currentTarget.scrollTop <= 8)}
+        className="min-h-0 flex-1 overflow-y-auto px-3.5 py-2"
+      >
         {visible.length === 0 ? (
           <p className="empty-state">
             {active ? 'Waiting for the first event…' : 'No progress recorded yet.'}

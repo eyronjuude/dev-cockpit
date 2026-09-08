@@ -305,9 +305,38 @@ body {
   }
 }
 
+/*
+ * The segment of the progress bar that is running. A sweep rather than a
+ * growing fill: the app cannot know how long a phase will take, and a bar that
+ * crept forward on a timer would be inventing a number.
+ */
+.progress-active {
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgb(255 255 255 / 0.45) 50%,
+    transparent 100%
+  );
+  background-size: 220% 100%;
+  animation: progress-sweep 1.5s linear infinite;
+}
+
+@keyframes progress-sweep {
+  from {
+    background-position: 220% 0;
+  }
+  to {
+    background-position: -220% 0;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .pulse-dot {
     animation: none;
+  }
+  .progress-active {
+    animation: none;
+    background-image: none;
   }
   .btn {
     transition: none;

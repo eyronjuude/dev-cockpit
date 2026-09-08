@@ -43,6 +43,30 @@ The agent reported success. The orchestrator disagreed, on evidence.
 | ![Blocked run](docs/screenshots/run-tests-failure.png) | ![Settings](docs/screenshots/settings.png) |
 | A run the orchestrator refused to mark ready, with the failing output that decided it. | Settings reports what can actually run on this machine, and why not when it cannot. |
 
+## Following a run
+
+Two views of the same event stream, pointing opposite ways on purpose.
+
+**Progress**, bottom right, answers *what is happening now*. Newest entry at the
+top, so the answer is never at the end of a list you have to chase, and a
+phase-by-phase bar above it — spec, worktree, implement, changes, validate,
+review, decision — with the running phase animated. Scroll down through it and
+you are reading backwards into the run's history; a counter offers the way back
+to the top.
+
+**Logs**, in the evidence tabs, is the log proper: every event in the order it
+happened, appended at the bottom, following the tail until you scroll up. Agent
+prose is printed in full under its summary line. Two filters narrow it —
+`verbose` includes the debug-level chatter (thinking, tool results, per-file
+diffs), and `code changes only` cuts it to the edits, writes and commits, which
+is the fastest way to see what the agent actually did to the tree.
+
+Both are written as the orchestrator writes them. Nothing needs a refresh, and
+the tab shows a pulse while a run is live. The `Saved files` view beside the
+stream holds the raw NDJSON transcript and any setup output — those are files an
+agent process leaves behind, so they only appear once the step producing them
+has finished.
+
 ## Requirements
 
 - **Node.js 22.12 or newer.** Built and tested on 22.17.
