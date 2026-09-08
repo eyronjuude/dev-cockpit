@@ -1,3 +1,4 @@
+import { permissionModeAllowsCommands } from '@/domain/types';
 import type { ProjectView } from '@/services/projects';
 import type { RunView, ValidationResultView } from '@/services/runs';
 import type { ExecutionProfile } from './profiles';
@@ -41,12 +42,13 @@ export function buildInitialPrompt(input: BuildPromptInput): string {
 
   /**
    * Whether the agent can run a command at all depends on the permission mode.
-   * `acceptEdits` permits file edits but denies every Bash and PowerShell call,
-   * so telling the agent to verify its own work would be a lie — and an
-   * expensive one, because it spends turns on calls that cannot succeed.
-   * Observed on a real run: five denied read-only git commands.
+   * The default, `bypassPermissions`, lets it run the project's own checks.
+   * A project pinned to `acceptEdits` permits file edits but denies every Bash
+   * and PowerShell call, so telling that agent to verify its own work would be
+   * a lie — and an expensive one, because it spends turns on calls that cannot
+   * succeed. Observed on a real run: five denied read-only git commands.
    */
-  const canRunCommands = project.agentPermissionMode === 'bypassPermissions';
+  const canRunCommands = permissionModeAllowsCommands(project.effectivePermissionMode);
 
   const cannotRunNote = [
     'You cannot run them yourself: this session denies shell commands, so every Bash or',
@@ -55,10 +57,14 @@ export function buildInitialPrompt(input: BuildPromptInput): string {
     'could not verify.',
   ].join(' ');
 
+  const canRunNote = [
+    'Shell commands are available to you in this session, and nothing will stop to ask for',
+    'approval. Run these yourself before you finish and fix what they report: a failure you',
+    'hand over is a round trip, and the same commands run again afterwards either way.',
+  ].join(' ');
+
   if (checks.length > 0) {
-    const note = canRunCommands
-      ? 'Running them yourself before you finish is encouraged.'
-      : cannotRunNote;
+    const note = canRunCommands ? canRunNote : cannotRunNote;
     sections.push(
       `The checks that will run against your work after you stop:\n${checks.join('\n')}\n\n${note}`,
     );

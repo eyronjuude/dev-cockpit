@@ -531,7 +531,7 @@ async function phaseImplement(
     worktreePath: run.worktreePath,
     additionalDirs: project.agentAddDirs,
     model: run.agentModel ?? project.agentModel,
-    permissionMode: project.agentPermissionMode,
+    permissionMode: project.effectivePermissionMode,
     effort: profile.agentEffort,
     timeoutMs: profile.agentTimeoutMs,
     signal,
@@ -581,7 +581,7 @@ async function phaseImplement(
       runId: run.id,
       type: 'agent.notice',
       level: 'notice',
-      message: `Permission mode "${project.agentPermissionMode}" refused ${denied} — the implementer could not run commands or verify its own work.`,
+      message: `Permission mode "${project.effectivePermissionMode}" refused ${denied} — the implementer could not run commands or verify its own work.`,
       payload: { iterationId: iteration.id, text: `Denied tools: ${denied}` },
     });
   }

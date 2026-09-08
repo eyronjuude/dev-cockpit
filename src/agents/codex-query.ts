@@ -21,7 +21,11 @@ import { killTree } from '@/process/spawn';
  *
  * Read-only is enforced by the CLI:
  *  - `--sandbox read-only` — Codex is an agent and *can* edit files, so this is
- *    the flag that makes the contract structural rather than a promise.
+ *    the flag that makes the contract structural rather than a promise. It is
+ *    deliberately *not* relaxed alongside the implementer's skipped permission
+ *    checks (ADR 0010): `codex exec` is non-interactive and has no approval to
+ *    stall on, so an unattended run gains nothing from dropping the sandbox and
+ *    loses the guarantee that a reviewer cannot edit the code it reviews.
  *  - `--ignore-user-config` and `--ignore-rules` — a target repository's
  *    AGENTS.md cannot inject instructions into a review.
  *  - `--ephemeral` — these queries stay out of the session history.

@@ -11,6 +11,7 @@ import { redactText } from '@/core/redact';
 import { ensureDir, runArtifactDir } from '@/core/paths';
 import { planSpawn, resolveExecutable } from '@/process/exec';
 import { killTree } from '@/process/spawn';
+import { claudePermissionArgs, resolvePermissionMode } from './permissions';
 import { NdjsonSplitter, parseStreamMessage, summariseToolInput } from './stream-parser';
 import type {
   AgentAvailability,
@@ -133,10 +134,13 @@ export class ClaudeCodeAgent implements ImplementationAgent {
       args.push('--session-id', newSessionId);
     }
 
-    args.push('--permission-mode', input.permissionMode ?? 'acceptEdits');
+    // Unattended by construction: the default posture skips permission checks
+    // outright (`--dangerously-skip-permissions`), because nobody is present to
+    // approve anything and a refused Bash call costs the run an iteration.
+    args.push(...claudePermissionArgs(resolvePermissionMode(input.permissionMode)));
 
-    // Anything that would otherwise block on a prompt is denied rather than
-    // hanging a headless run forever.
+    // Belt and braces for every mode: anything that would still block on a
+    // prompt is denied rather than hanging a headless run forever.
     args.push('--permission-prompts', 'none');
 
     if (input.model) args.push('--model', input.model);

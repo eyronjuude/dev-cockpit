@@ -161,7 +161,8 @@ Through the supported programmatic interface, not a terminal:
 claude --print
        --output-format stream-json --verbose
        --session-id <uuid> | --resume <session-id>
-       --permission-mode acceptEdits
+       --dangerously-skip-permissions        (default)
+         | --permission-mode acceptEdits|plan  (restrictive projects)
        --permission-prompts none
        --model <model> --effort <level>
 ```
@@ -178,8 +179,14 @@ than assumed:
   "request changes" continue rather than restart — verified: a follow-up
   iteration referring to "that lookup table you added" resolved correctly and
   took 2 turns where the initial pass took 26.
-- **`--permission-prompts none`** means anything that would block on a prompt is
-  denied instead of hanging a headless run forever.
+- **Permission flags come from one place**, `agents/permissions.ts`, which is
+  also where the project setting and the `DEV_COCKPIT_PERMISSION_MODE` override
+  are reconciled. A mode Claude Code would not recognise is never forwarded.
+- **`--dangerously-skip-permissions` is the default posture.** A run is
+  unattended, so a permission check has two possible outcomes — bypassed or
+  refused — and refusing costs an iteration. ADR 0010.
+- **`--permission-prompts none`** is still passed on every mode: anything that
+  would block on a prompt is denied instead of hanging a headless run forever.
 - Unknown message types are ignored, not treated as errors. The CLI adds them
   over time and a run must not fail because of one.
 

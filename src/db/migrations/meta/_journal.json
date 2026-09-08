@@ -15,6 +15,13 @@
       "when": 1788766328487,
       "tag": "0001_bitter_kinsey_walden",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1788800000000,
+      "tag": "0002_unattended_permission_default",
+      "breakpoints": true
     }
   ]
 }

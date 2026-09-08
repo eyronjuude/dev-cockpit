@@ -39,11 +39,12 @@ checking and lifecycle management — worth doing, but a subsystem rather than a
 feature.
 
 **Host-side permission allowlist**
-ADR 0009 keeps the agent unable to run commands, documented rather than
-changed. The middle ground is `--permission-prompts host` plus a per-project
-approve/deny policy: read-only git and the project's own test commands
-approved, everything else denied without hanging. Would let the implementer
-verify its own work and cut wasted iterations.
+ADR 0010 made runs skip permission checks entirely, so the implementer can now
+verify its own work. What is still missing is the middle setting:
+`--permission-prompts host` plus a per-project approve/deny policy — read-only
+git and the project's own test commands approved, everything else denied
+without hanging. That is the only way to be unattended *and* restricted; today
+the choice is all commands or none.
 
 **Answering the agent's follow-up questions**
 There is no inbound channel to a running iteration — stdin closes after the

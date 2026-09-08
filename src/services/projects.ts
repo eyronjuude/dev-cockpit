@@ -8,7 +8,13 @@ import { getDb } from '@/db/client';
 import { projects, runs, validationCommands } from '@/db/schema';
 import { newProjectId } from '@/core/ids';
 import { AppError, conflict, invalid, notFound } from '@/core/errors';
-import { VALIDATION_KINDS, type ValidationKind } from '@/domain/types';
+import {
+  agentPermissionModeSchema,
+  DEFAULT_AGENT_PERMISSION_MODE,
+  VALIDATION_KINDS,
+  type ValidationKind,
+} from '@/domain/types';
+import { resolvePermissionMode } from '@/agents/permissions';
 import {
   aheadBehind,
   currentBranch,
@@ -51,9 +57,7 @@ export const createProjectSchema = z.object({
   reviewBlocksReady: z.boolean().optional(),
   artifactRetentionDays: z.number().int().min(1).max(3_650).optional(),
   agentModel: z.string().trim().max(120).nullable().optional(),
-  agentPermissionMode: z
-    .enum(['acceptEdits', 'bypassPermissions', 'plan', 'dontAsk', 'auto', 'manual'])
-    .optional(),
+  agentPermissionMode: agentPermissionModeSchema.optional(),
   agentAddDirs: z.array(z.string()).optional(),
   validationCommands: z.array(validationCommandInputSchema).optional(),
 });
@@ -110,7 +114,14 @@ export interface ProjectView {
   reviewBlocksReady: boolean;
   artifactRetentionDays: number;
   agentModel: string | null;
+  /** What the project stores. May be overridden for a run. */
   agentPermissionMode: string;
+  /**
+   * What a run would actually use — the stored mode unless
+   * `DEV_COCKPIT_PERMISSION_MODE` overrides it. Read this, not the field above,
+   * anywhere the answer must match what the agent is really given.
+   */
+  effectivePermissionMode: string;
   agentAddDirs: string[];
   createdAt: string;
   updatedAt: string;
@@ -150,6 +161,7 @@ function toProjectView(row: ProjectRow, commands: ValidationCommandRow[]): Proje
     artifactRetentionDays: row.artifactRetentionDays,
     agentModel: row.agentModel,
     agentPermissionMode: row.agentPermissionMode,
+    effectivePermissionMode: resolvePermissionMode(row.agentPermissionMode),
     agentAddDirs: fromLines(row.agentAddDirs),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -320,7 +332,7 @@ export async function createProject(input: CreateProjectInput): Promise<ProjectV
       reviewBlocksReady: parsed.reviewBlocksReady ?? false,
       artifactRetentionDays: parsed.artifactRetentionDays ?? 30,
       agentModel: parsed.agentModel ?? null,
-      agentPermissionMode: parsed.agentPermissionMode ?? 'acceptEdits',
+      agentPermissionMode: parsed.agentPermissionMode ?? DEFAULT_AGENT_PERMISSION_MODE,
       agentAddDirs: toLines(parsed.agentAddDirs) ?? null,
     })
     .run();

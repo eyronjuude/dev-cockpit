@@ -59,6 +59,13 @@ export const projects = sqliteTable(
 
     /** Agent configuration. */
     agentModel: text('agent_model'),
+    /**
+     * The column default is historical and never used: `createProject` always
+     * writes a value, and the effective default lives in
+     * `DEFAULT_AGENT_PERMISSION_MODE` (`domain/types.ts`). Left alone because
+     * changing a SQLite column default means rebuilding the table for no
+     * behavioural gain. Migration 0002 moved existing rows.
+     */
     agentPermissionMode: text('agent_permission_mode').notNull().default('acceptEdits'),
     /** Extra directories the agent may touch, newline-separated. */
     agentAddDirs: text('agent_add_dirs'),
