@@ -177,7 +177,12 @@ export interface EventPayloads {
   'landing.merged': { branch: string; targetBranch: string; sourceBranch: string; commitSha: string };
   'landing.conflicted': { files: string[] };
   'landing.resolution_started': { path: string; files: string[] };
-  'landing.resolution_completed': { iterationId: string; unresolved: string[] };
+  'landing.resolution_completed': {
+    iterationId: string;
+    unresolved: string[];
+    staged?: string[];
+    markerFiles?: string[];
+  };
   'landing.validation_failed': { failed: number; targetBranch: string };
   'landing.applied': { targetBranch: string; commitSha: string };
   'landing.failed': { error: string };

@@ -118,17 +118,17 @@ export function EventFeed({
   // that, and the count of what arrived since becomes the way back.
   const [pinned, setPinned] = useState(true);
   const [seenSeq, setSeenSeq] = useState(newestSeq);
+  const effectiveSeenSeq = pinned ? newestSeq : seenSeq;
 
   useEffect(() => {
     if (!pinned) return;
-    setSeenSeq(newestSeq);
     const node = scrollRef.current;
     if (node) node.scrollTop = 0;
   }, [pinned, newestSeq]);
 
   let unseen = 0;
   for (const event of visible) {
-    if (event.seq <= seenSeq) break;
+    if (event.seq <= effectiveSeenSeq) break;
     unseen += 1;
   }
 
@@ -169,6 +169,7 @@ export function EventFeed({
             className="btn btn-sm w-full"
             onClick={() => {
               setPinned(true);
+              setSeenSeq(newestSeq);
               scrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
             }}
           >
@@ -179,7 +180,11 @@ export function EventFeed({
 
       <div
         ref={scrollRef}
-        onScroll={(e) => setPinned(e.currentTarget.scrollTop <= 8)}
+        onScroll={(e) => {
+          const nextPinned = e.currentTarget.scrollTop <= 8;
+          setPinned(nextPinned);
+          if (nextPinned) setSeenSeq(newestSeq);
+        }}
         className="min-h-0 flex-1 overflow-y-auto px-3.5 py-2"
       >
         {visible.length === 0 ? (

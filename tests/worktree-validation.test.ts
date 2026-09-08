@@ -474,6 +474,107 @@ describe('landing worktrees', () => {
     expect(git(['rev-parse', 'main'], repo).trim()).toBe(mainBefore);
     expect(fs.readFileSync(path.join(repo, 'file.txt'), 'utf8')).toBe('main branch edit\n');
   });
+
+  it('stages marker-free conflict files before completing a landing merge', async () => {
+    const repo = makeSecondRepo('landing-stage-resolved');
+    const runId = 'run_land_stage_resolved';
+    const sourceBranch = `cockpit/${runId}`;
+    const landingBranch = `cockpit/landing/${runId}`;
+    const runPath = path.join(dataDir, 'worktrees', 'prj', runId);
+    const landingPath = path.join(dataDir, 'landings', 'prj', runId);
+
+    await worktree.prepareWorktree({
+      repositoryPath: repo,
+      worktreePath: runPath,
+      branch: sourceBranch,
+      baseRef: 'main',
+      protectedBranches: ['main'],
+    });
+
+    fs.writeFileSync(path.join(runPath, 'file.txt'), 'run branch edit\n');
+    await diff.commitAll(runPath, 'feat: edit from run branch', {
+      name: 'Dev Cockpit',
+      email: 'dev-cockpit@localhost',
+    });
+
+    fs.writeFileSync(path.join(repo, 'file.txt'), 'main branch edit\n');
+    await diff.commitAll(repo, 'edit main', {
+      name: 'Dev Cockpit',
+      email: 'dev-cockpit@localhost',
+    });
+
+    await landing.ensureLandingWorktree({
+      repositoryPath: repo,
+      worktreePath: landingPath,
+      branch: landingBranch,
+      targetBranch: 'main',
+    });
+    await landing.mergeSourceIntoLanding(landingPath, sourceBranch);
+    fs.writeFileSync(path.join(landingPath, 'file.txt'), 'combined resolution\n');
+
+    const completed = await landing.completeMergeIfResolved(landingPath, {
+      name: 'Dev Cockpit',
+      email: 'dev-cockpit@localhost',
+    });
+
+    expect(completed.completed).toBe(true);
+    expect(completed.staged).toEqual(['file.txt']);
+    expect(completed.conflicts).toEqual([]);
+    expect(git(['diff', '--name-only', '--diff-filter=U'], landingPath)).toBe('');
+    expect(git(['rev-parse', landingBranch], repo).trim()).toBe(completed.commitSha);
+  });
+
+  it('does not stage conflict files while markers remain', async () => {
+    const repo = makeSecondRepo('landing-markers-remain');
+    const runId = 'run_land_markers_remain';
+    const sourceBranch = `cockpit/${runId}`;
+    const landingBranch = `cockpit/landing/${runId}`;
+    const runPath = path.join(dataDir, 'worktrees', 'prj', runId);
+    const landingPath = path.join(dataDir, 'landings', 'prj', runId);
+
+    await worktree.prepareWorktree({
+      repositoryPath: repo,
+      worktreePath: runPath,
+      branch: sourceBranch,
+      baseRef: 'main',
+      protectedBranches: ['main'],
+    });
+
+    fs.writeFileSync(path.join(runPath, 'file.txt'), 'run branch edit\n');
+    await diff.commitAll(runPath, 'feat: edit from run branch', {
+      name: 'Dev Cockpit',
+      email: 'dev-cockpit@localhost',
+    });
+
+    fs.writeFileSync(path.join(repo, 'file.txt'), 'main branch edit\n');
+    await diff.commitAll(repo, 'edit main', {
+      name: 'Dev Cockpit',
+      email: 'dev-cockpit@localhost',
+    });
+
+    await landing.ensureLandingWorktree({
+      repositoryPath: repo,
+      worktreePath: landingPath,
+      branch: landingBranch,
+      targetBranch: 'main',
+    });
+    await landing.mergeSourceIntoLanding(landingPath, sourceBranch);
+    fs.writeFileSync(
+      path.join(landingPath, 'file.txt'),
+      '<<<<<<< HEAD\nmain branch edit\n=======\nrun branch edit\n>>>>>>> feature\n',
+    );
+
+    const completed = await landing.completeMergeIfResolved(landingPath, {
+      name: 'Dev Cockpit',
+      email: 'dev-cockpit@localhost',
+    });
+
+    expect(completed.completed).toBe(false);
+    expect(completed.conflicts).toEqual(['file.txt']);
+    expect(completed.markerFiles).toEqual(['file.txt']);
+    expect(completed.staged).toEqual([]);
+    expect(await landing.unmergedFiles(landingPath)).toEqual(['file.txt']);
+  });
 });
 
 describe('process execution', () => {

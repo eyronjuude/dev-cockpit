@@ -103,6 +103,55 @@ export async function unmergedFiles(worktreePath: string): Promise<string[]> {
     .filter(Boolean);
 }
 
+const CONFLICT_MARKER = /^(<<<<<<<|=======|>>>>>>>)(?:\s|$)/m;
+
+export async function filesWithConflictMarkers(
+  worktreePath: string,
+  files: readonly string[],
+): Promise<string[]> {
+  const markerFiles: string[] = [];
+
+  for (const file of files) {
+    const absolutePath = path.resolve(worktreePath, file);
+    if (!isInside(worktreePath, absolutePath)) {
+      throw new AppError(`Conflict path escapes the landing worktree: ${file}`, {
+        code: 'unsafe_path',
+      });
+    }
+
+    let text: string;
+    try {
+      text = await fsp.readFile(absolutePath, 'utf8');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw error;
+    }
+
+    if (CONFLICT_MARKER.test(text)) {
+      markerFiles.push(file);
+    }
+  }
+
+  return markerFiles;
+}
+
+export async function stageResolvedConflictFiles(
+  worktreePath: string,
+): Promise<{ staged: string[]; conflicts: string[]; markerFiles: string[] }> {
+  const conflicts = await unmergedFiles(worktreePath);
+  if (conflicts.length === 0) return { staged: [], conflicts: [], markerFiles: [] };
+
+  const markerFiles = await filesWithConflictMarkers(worktreePath, conflicts);
+  if (markerFiles.length > 0) {
+    return { staged: [], conflicts: markerFiles, markerFiles };
+  }
+
+  await git(worktreePath, ['add', '-A', '--', ...conflicts]);
+
+  const remaining = await unmergedFiles(worktreePath);
+  return { staged: conflicts, conflicts: remaining, markerFiles: [] };
+}
+
 export async function mergeInProgress(worktreePath: string): Promise<boolean> {
   const res = await git(worktreePath, ['rev-parse', '-q', '--verify', 'MERGE_HEAD'], {
     allowFailure: true,
@@ -123,9 +172,23 @@ export async function sourceMergedIntoLanding(
 export async function completeMergeIfResolved(
   worktreePath: string,
   author: { name: string; email: string },
-): Promise<{ completed: boolean; conflicts: string[]; commitSha: string | null }> {
-  const conflicts = await unmergedFiles(worktreePath);
-  if (conflicts.length > 0) return { completed: false, conflicts, commitSha: null };
+): Promise<{
+  completed: boolean;
+  conflicts: string[];
+  markerFiles: string[];
+  staged: string[];
+  commitSha: string | null;
+}> {
+  const stagedResolution = await stageResolvedConflictFiles(worktreePath);
+  if (stagedResolution.conflicts.length > 0) {
+    return {
+      completed: false,
+      conflicts: stagedResolution.conflicts,
+      markerFiles: stagedResolution.markerFiles,
+      staged: stagedResolution.staged,
+      commitSha: null,
+    };
+  }
 
   if (await mergeInProgress(worktreePath)) {
     await git(worktreePath, ['add', '--all']);
@@ -150,7 +213,13 @@ export async function completeMergeIfResolved(
   }
 
   const head = await resolveCommit(worktreePath, 'HEAD');
-  return { completed: true, conflicts: [], commitSha: head };
+  return {
+    completed: true,
+    conflicts: [],
+    markerFiles: [],
+    staged: stagedResolution.staged,
+    commitSha: head,
+  };
 }
 
 export async function assertTargetCheckoutReady(

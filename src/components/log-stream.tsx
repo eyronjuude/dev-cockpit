@@ -105,12 +105,12 @@ export function LogStream({
 
   const newestSeq = visible.at(-1)?.seq ?? 0;
   const [seenSeq, setSeenSeq] = useState(newestSeq);
+  const effectiveSeenSeq = following ? newestSeq : seenSeq;
 
   // Stick to the tail while the user is at the bottom. Writing scrollTop fires
   // a scroll event, which re-confirms `following` rather than fighting it.
   useEffect(() => {
     if (!following) return;
-    setSeenSeq(newestSeq);
     const node = scrollRef.current;
     if (node) node.scrollTop = node.scrollHeight;
   }, [following, newestSeq]);
@@ -118,7 +118,7 @@ export function LogStream({
   let behind = 0;
   for (let i = visible.length - 1; i >= 0; i -= 1) {
     const event = visible[i];
-    if (!event || event.seq <= seenSeq) break;
+    if (!event || event.seq <= effectiveSeenSeq) break;
     behind += 1;
   }
 
@@ -166,6 +166,7 @@ export function LogStream({
               onChange={(e) => {
                 setFollowing(e.target.checked);
                 if (e.target.checked) {
+                  setSeenSeq(newestSeq);
                   const node = scrollRef.current;
                   if (node) node.scrollTop = node.scrollHeight;
                 }
@@ -181,7 +182,9 @@ export function LogStream({
         ref={scrollRef}
         onScroll={(e) => {
           const el = e.currentTarget;
-          setFollowing(el.scrollHeight - el.scrollTop - el.clientHeight < 24);
+          const nextFollowing = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+          setFollowing(nextFollowing);
+          if (nextFollowing) setSeenSeq(newestSeq);
         }}
         className="min-h-0 flex-1 overflow-y-auto px-3 py-2"
       >

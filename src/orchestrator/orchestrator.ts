@@ -18,6 +18,7 @@ import {
   mergeInProgress,
   mergeSourceIntoLanding,
   sourceMergedIntoLanding,
+  stageResolvedConflictFiles,
   unmergedFiles,
 } from '@/git/landing';
 import { linkIntoWorktree, prepareWorktree, removeWorktree } from '@/git/worktree';
@@ -1582,18 +1583,38 @@ async function phaseResolveLandingConflicts(
     },
   });
 
-  const unresolved = await unmergedFiles(landingPath);
+  const resolution = await stageResolvedConflictFiles(landingPath);
+  const unresolved = resolution.conflicts;
   appendEvent({
     runId: run.id,
     type: 'landing.resolution_completed',
     level: unresolved.length > 0 ? 'notice' : 'info',
-    message:
-      unresolved.length > 0
-        ? `Merge resolver left ${unresolved.length} conflicted file(s)`
-        : 'Merge resolver cleared all conflicted files',
-    payload: { iterationId: iteration.id, unresolved },
+    message: landingResolutionMessage(resolution),
+    payload: {
+      iterationId: iteration.id,
+      unresolved,
+      staged: resolution.staged,
+      markerFiles: resolution.markerFiles,
+    },
   });
   return true;
+}
+
+function landingResolutionMessage(resolution: {
+  staged: readonly string[];
+  conflicts: readonly string[];
+  markerFiles: readonly string[];
+}): string {
+  if (resolution.markerFiles.length > 0) {
+    return `Merge resolver left conflict markers in ${resolution.markerFiles.length} file(s)`;
+  }
+  if (resolution.conflicts.length > 0) {
+    return `Merge resolver left ${resolution.conflicts.length} conflicted file(s)`;
+  }
+  if (resolution.staged.length > 0) {
+    return `Merge resolver cleared all conflicted files; Dev Cockpit staged ${resolution.staged.length} resolved file(s)`;
+  }
+  return 'Merge resolver cleared all conflicted files';
 }
 
 function buildMergeResolutionPrompt(
