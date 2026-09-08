@@ -41,6 +41,14 @@ const ICON: Partial<Record<EventType, string>> = {
   'review.finding': '⚑',
   'review.completed': '⌕',
   'review.skipped': '·',
+  'landing.started': '⑂',
+  'landing.merged': '⑂',
+  'landing.conflicted': '⚑',
+  'landing.resolution_started': '▶',
+  'landing.resolution_completed': '✓',
+  'landing.validation_failed': '✕',
+  'landing.applied': '✓',
+  'landing.failed': '✕',
   'run.ready': '✓',
   'run.needs_changes': '⚑',
   'run.approved': '✓',
@@ -57,7 +65,12 @@ function toneFor(event: RunEvent): string {
     case 'run.ready':
     case 'agent.completed':
     case 'run.approved':
+    case 'landing.merged':
+    case 'landing.applied':
       return 'text-pass';
+    case 'landing.conflicted':
+    case 'landing.validation_failed':
+      return 'text-warn';
     case 'agent.message':
       return 'text-ink';
     case 'validation.result':

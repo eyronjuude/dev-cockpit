@@ -16,6 +16,7 @@ let repoDir: string;
 let worktree: typeof import('@/git/worktree');
 let diff: typeof import('@/git/diff');
 let gitMod: typeof import('@/git/git');
+let landing: typeof import('@/git/landing');
 let spawnMod: typeof import('@/process/spawn');
 let engine: typeof import('@/validation/engine');
 let projectsService: typeof import('@/services/projects');
@@ -53,6 +54,7 @@ beforeAll(async () => {
   worktree = await import('@/git/worktree');
   diff = await import('@/git/diff');
   gitMod = await import('@/git/git');
+  landing = await import('@/git/landing');
   spawnMod = await import('@/process/spawn');
   engine = await import('@/validation/engine');
   projectsService = await import('@/services/projects');
@@ -334,6 +336,143 @@ describe('diff collection', () => {
     expect(git(['rev-parse', `cockpit/${runId}`]).trim()).toBe(sha);
     // main is exactly where it was: approval never merges.
     expect(git(['rev-parse', 'main']).trim()).toBe(mainBefore);
+  });
+});
+
+describe('landing worktrees', () => {
+  it('approves a run whose worktree changes were already committed', async () => {
+    const repo = makeSecondRepo('approve-committed');
+    const project = await projectsService.createProject({
+      name: 'approve-committed',
+      repositoryPath: repo,
+    });
+    const run = runsService.createRun({ projectId: project.id, request: 'commit first' });
+    const runPath = path.join(dataDir, 'worktrees', project.id, run.id);
+
+    const prepared = await worktree.prepareWorktree({
+      repositoryPath: repo,
+      worktreePath: runPath,
+      branch: `cockpit/${run.id}`,
+      baseRef: 'main',
+      protectedBranches: ['main'],
+    });
+    runsService.updateRunFields(run.id, {
+      worktreePath: prepared.worktreePath,
+      branch: prepared.branch,
+      baseCommit: prepared.baseCommit,
+      baseBranch: 'main',
+    });
+
+    fs.writeFileSync(path.join(runPath, 'feature.txt'), 'already committed\n');
+    const sha = await diff.commitAll(runPath, 'feat: already committed', {
+      name: 'Dev Cockpit',
+      email: 'dev-cockpit@localhost',
+    });
+    const collected = await diff.collectRunDiff(runPath, prepared.baseCommit);
+    runsService.replaceChangedFiles(run.id, collected.files);
+    runsService.setStatus(run.id, 'PREPARING', { started: true });
+    runsService.setStatus(run.id, 'IMPLEMENTING');
+    runsService.setStatus(run.id, 'VALIDATING');
+    runsService.setStatus(run.id, 'READY', { finished: true });
+
+    const { approveRun } = await import('@/orchestrator/orchestrator');
+    const approved = await approveRun(run.id);
+
+    expect(approved.status).toBe('APPROVED');
+    expect(approved.commitSha).toBe(sha);
+  });
+
+  it('merges a run branch in isolation before fast-forwarding the target branch', async () => {
+    const repo = makeSecondRepo('landing-clean');
+    const runId = 'run_land_clean';
+    const sourceBranch = `cockpit/${runId}`;
+    const landingBranch = `cockpit/landing/${runId}`;
+    const runPath = path.join(dataDir, 'worktrees', 'prj', runId);
+    const landingPath = path.join(dataDir, 'landings', 'prj', runId);
+
+    await worktree.prepareWorktree({
+      repositoryPath: repo,
+      worktreePath: runPath,
+      branch: sourceBranch,
+      baseRef: 'main',
+      protectedBranches: ['main'],
+    });
+
+    fs.writeFileSync(path.join(runPath, 'feature.txt'), 'landed feature\n');
+    await diff.commitAll(runPath, 'feat: add landed feature', {
+      name: 'Dev Cockpit',
+      email: 'dev-cockpit@localhost',
+    });
+
+    const mainBefore = git(['rev-parse', 'main'], repo).trim();
+    const prepared = await landing.ensureLandingWorktree({
+      repositoryPath: repo,
+      worktreePath: landingPath,
+      branch: landingBranch,
+      targetBranch: 'main',
+    });
+
+    expect(prepared.targetCommit).toBe(mainBefore);
+
+    const merged = await landing.mergeSourceIntoLanding(landingPath, sourceBranch);
+    expect(merged.conflicts).toEqual([]);
+
+    const completed = await landing.completeMergeIfResolved(landingPath, {
+      name: 'Dev Cockpit',
+      email: 'dev-cockpit@localhost',
+    });
+
+    expect(completed.completed).toBe(true);
+    expect(completed.commitSha).toMatch(/^[0-9a-f]{40}$/);
+    expect(git(['rev-parse', 'main'], repo).trim()).toBe(mainBefore);
+
+    const applied = await landing.applyLandingToTarget(repo, 'main', landingBranch);
+    expect(applied).toBe(completed.commitSha);
+    expect(fs.readFileSync(path.join(repo, 'feature.txt'), 'utf8')).toContain('landed feature');
+  });
+
+  it('keeps the target branch unchanged when the landing merge conflicts', async () => {
+    const repo = makeSecondRepo('landing-conflict');
+    const runId = 'run_land_conflict';
+    const sourceBranch = `cockpit/${runId}`;
+    const landingBranch = `cockpit/landing/${runId}`;
+    const runPath = path.join(dataDir, 'worktrees', 'prj', runId);
+    const landingPath = path.join(dataDir, 'landings', 'prj', runId);
+
+    await worktree.prepareWorktree({
+      repositoryPath: repo,
+      worktreePath: runPath,
+      branch: sourceBranch,
+      baseRef: 'main',
+      protectedBranches: ['main'],
+    });
+
+    fs.writeFileSync(path.join(runPath, 'file.txt'), 'run branch edit\n');
+    await diff.commitAll(runPath, 'feat: edit from run branch', {
+      name: 'Dev Cockpit',
+      email: 'dev-cockpit@localhost',
+    });
+
+    fs.writeFileSync(path.join(repo, 'file.txt'), 'main branch edit\n');
+    await diff.commitAll(repo, 'edit main', {
+      name: 'Dev Cockpit',
+      email: 'dev-cockpit@localhost',
+    });
+    const mainBefore = git(['rev-parse', 'main'], repo).trim();
+
+    await landing.ensureLandingWorktree({
+      repositoryPath: repo,
+      worktreePath: landingPath,
+      branch: landingBranch,
+      targetBranch: 'main',
+    });
+
+    const merged = await landing.mergeSourceIntoLanding(landingPath, sourceBranch);
+    expect(merged.merged).toBe(false);
+    expect(merged.conflicts).toEqual(['file.txt']);
+    expect(await landing.unmergedFiles(landingPath)).toEqual(['file.txt']);
+    expect(git(['rev-parse', 'main'], repo).trim()).toBe(mainBefore);
+    expect(fs.readFileSync(path.join(repo, 'file.txt'), 'utf8')).toBe('main branch edit\n');
   });
 });
 

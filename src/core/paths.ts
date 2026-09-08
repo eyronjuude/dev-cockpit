@@ -13,10 +13,14 @@ export function dataDir(): string {
 
 export const dbPath = () => path.join(dataDir(), 'cockpit.db');
 export const worktreesDir = () => path.join(dataDir(), 'worktrees');
+export const landingsDir = () => path.join(dataDir(), 'landings');
 export const artifactsDir = () => path.join(dataDir(), 'artifacts');
 
 export const runWorktreeDir = (projectId: string, runId: string) =>
   path.join(worktreesDir(), projectId, runId);
+
+export const runLandingDir = (projectId: string, runId: string) =>
+  path.join(landingsDir(), projectId, runId);
 
 export const runArtifactDir = (runId: string) => path.join(artifactsDir(), runId);
 
@@ -28,6 +32,7 @@ export function ensureDir(dir: string): string {
 export function ensureDataDirs(): void {
   ensureDir(dataDir());
   ensureDir(worktreesDir());
+  ensureDir(landingsDir());
   ensureDir(artifactsDir());
 }
 

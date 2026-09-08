@@ -22,6 +22,8 @@ describe('run lifecycle', () => {
       'REVIEWING',
       'READY',
       'APPROVED',
+      'LANDING',
+      'LANDED',
     ];
     for (let i = 0; i < path.length - 1; i += 1) {
       const from = path[i] as RunStatus;
@@ -45,18 +47,28 @@ describe('run lifecycle', () => {
     expect(canTransition('CANCELLED', 'IMPLEMENTING')).toBe(true);
   });
 
-  it('treats APPROVED and REJECTED as terminal', () => {
+  it('treats LANDED and REJECTED as terminal', () => {
     for (const status of RUN_STATUSES) {
-      if (status === 'APPROVED') continue;
-      expect(canTransition('APPROVED', status), `APPROVED -> ${status}`).toBe(false);
+      if (status === 'LANDED') continue;
+      expect(canTransition('LANDED', status), `LANDED -> ${status}`).toBe(false);
     }
     for (const status of RUN_STATUSES) {
       if (status === 'REJECTED') continue;
       expect(canTransition('REJECTED', status), `REJECTED -> ${status}`).toBe(false);
     }
-    expect(isTerminal('APPROVED')).toBe(true);
+    expect(isTerminal('APPROVED')).toBe(false);
+    expect(isTerminal('LANDED')).toBe(true);
     expect(isTerminal('REJECTED')).toBe(true);
     expect(isTerminal('READY')).toBe(false);
+  });
+
+  it('models landing and conflict recovery after approval', () => {
+    expect(canTransition('APPROVED', 'LANDING')).toBe(true);
+    expect(canTransition('LANDING', 'MERGE_CONFLICT')).toBe(true);
+    expect(canTransition('MERGE_CONFLICT', 'LANDING')).toBe(true);
+    expect(canTransition('LANDING', 'LANDING_FAILED')).toBe(true);
+    expect(canTransition('LANDING_FAILED', 'LANDING')).toBe(true);
+    expect(canTransition('LANDING', 'LANDED')).toBe(true);
   });
 
   it('refuses to jump straight from DRAFT to READY', () => {
@@ -81,8 +93,15 @@ describe('run lifecycle', () => {
   });
 
   it('marks exactly the working statuses as active', () => {
-    expect(ACTIVE_STATUSES).toEqual(['PREPARING', 'IMPLEMENTING', 'VALIDATING', 'REVIEWING']);
+    expect(ACTIVE_STATUSES).toEqual([
+      'PREPARING',
+      'IMPLEMENTING',
+      'VALIDATING',
+      'REVIEWING',
+      'LANDING',
+    ]);
     expect(isActive('IMPLEMENTING')).toBe(true);
+    expect(isActive('LANDING')).toBe(true);
     expect(isActive('READY')).toBe(false);
     expect(isActive('DRAFT')).toBe(false);
   });

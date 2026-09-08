@@ -128,7 +128,7 @@ Each run gets its own worktree and its own branch. Nothing else is touched.
 ```
 your repository (untouched, stays on its own branch)
 │
-├── main ──────────────────── base commit recorded on the run
+├── main ──────────────────── base commit recorded on the run; landing target
 │
 └── cockpit/run_xxx ───────── created by the run, checked out at:
                               <data>/worktrees/<projectId>/<runId>/
@@ -140,16 +140,21 @@ Specifically:
   branch, and the default branch is always protected whatever you configure.
 - Your working tree is never modified, clean or dirty. Uncommitted work in the
   main checkout survives untouched — there is a test that asserts exactly that.
-- Approving a run optionally creates a commit **on the run branch only**.
-  Nothing is merged. Nothing is pushed. Ever.
+- Approving a run creates a commit **on the run branch only** by default.
+  Nothing is merged or pushed by approval itself.
+- Landing an approved run creates or reuses a separate landing worktree from the
+  target branch, merges the run branch there, runs validation, then
+  fast-forwards the target checkout only when the merge and validation are
+  clean. Merge conflicts leave the landing worktree intact for manual or
+  AI-assisted resolution.
 - Rejecting can remove the worktree. The branch is deleted with `git branch -d`,
   never `-D`, so work is never silently discarded.
 - Linked paths become junctions on Windows (no elevation needed) or symlinks
   elsewhere. Files are *copied* rather than linked, so the agent editing
   `.env.local` cannot reach your original.
 
-Landing the work is a deliberate manual step: `git merge cockpit/run_xxx`, or
-open the worktree in your editor and take it from there.
+Pushing remains a deliberate manual step. Dev Cockpit updates only the local
+target branch.
 
 ## Validation configuration
 
@@ -189,6 +194,7 @@ Everything lives under one directory, `./data` by default. Override with
 data/
 ├── cockpit.db                    SQLite: projects, runs, events, results
 ├── worktrees/<projectId>/<runId>/    the isolated checkout
+├── landings/<projectId>/<runId>/     the isolated merge checkout, when landing
 └── artifacts/<runId>/
     ├── specification.md          transformer output
     ├── changes.diff              git diff, verbatim
@@ -250,7 +256,9 @@ Two honest caveats:
   stopping. Such runs are marked `FAILED` with "interrupted by a restart" rather
   than left showing a spinner forever. The worktree and agent session id are
   both preserved, so the run can be continued.
-- **No automatic merge or push.** Intentional. See run isolation above.
+- **No automatic push.** Intentional. Landing can update the local target
+  branch after an isolated merge and validation pass, but publishing remains
+  yours to do deliberately.
 - **Screenshot and Playwright-trace capture is not automated.** The artifact
   kinds, storage, database records and UI rendering all exist and screenshots
   display correctly, but nothing in V1 drives a browser to produce them. A

@@ -19,6 +19,10 @@ const RUN_STATUS_TONE: Record<RunStatus, BadgeTone> = {
   NEEDS_CHANGES: 'warn',
   READY: 'accent',
   APPROVED: 'pass',
+  LANDING: 'running',
+  MERGE_CONFLICT: 'warn',
+  LANDING_FAILED: 'fail',
+  LANDED: 'pass',
   REJECTED: 'idle',
   FAILED: 'fail',
   CANCELLED: 'idle',
@@ -33,12 +37,22 @@ const RUN_STATUS_LABEL: Record<RunStatus, string> = {
   NEEDS_CHANGES: 'Needs changes',
   READY: 'Ready for review',
   APPROVED: 'Approved',
+  LANDING: 'Landing',
+  MERGE_CONFLICT: 'Merge conflict',
+  LANDING_FAILED: 'Landing failed',
+  LANDED: 'Landed',
   REJECTED: 'Rejected',
   FAILED: 'Failed',
   CANCELLED: 'Cancelled',
 };
 
-const ACTIVE: readonly RunStatus[] = ['PREPARING', 'IMPLEMENTING', 'VALIDATING', 'REVIEWING'];
+const ACTIVE: readonly RunStatus[] = [
+  'PREPARING',
+  'IMPLEMENTING',
+  'VALIDATING',
+  'REVIEWING',
+  'LANDING',
+];
 
 export function RunStatusBadge({ status }: { status: RunStatus }) {
   const tone = RUN_STATUS_TONE[status];

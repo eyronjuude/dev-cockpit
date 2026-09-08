@@ -28,9 +28,9 @@ than the window, and mark the rows so the UI shows "expired" rather than
 "missing".
 
 **Worktree reclamation** — *gap*
-Worktrees accumulate until a run is rejected with cleanup. A `git worktree
-prune` pass plus a "remove worktree" action on approved runs would stop the data
-directory growing without bound.
+Run and landing worktrees accumulate until a run is rejected with cleanup or
+removed by hand. A `git worktree prune` pass plus a "remove worktree" action on
+approved or landed runs would stop the data directory growing without bound.
 
 **Preview URLs**
 `developmentCommand` is recorded and never started; `previewUrl` on artifacts is

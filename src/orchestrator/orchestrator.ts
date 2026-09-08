@@ -5,11 +5,21 @@ import path from 'node:path';
 import { ClaudeCodeAgent } from '@/agents/claude-code';
 import { summariseToolInput } from '@/agents/stream-parser';
 import type { AgentOutcome, AgentStreamEvent, ImplementationAgent } from '@/agents/types';
+import { landingBranchName } from '@/core/ids';
 import { AppError, errorMessage } from '@/core/errors';
-import { runWorktreeDir } from '@/core/paths';
-import { BLOCKING_SEVERITIES, type Disposition } from '@/domain/types';
+import { runLandingDir, runWorktreeDir } from '@/core/paths';
+import { BLOCKING_SEVERITIES, type Disposition, type RunStatus } from '@/domain/types';
 import { collectRunDiff, commitAll } from '@/git/diff';
-import { commitInfo } from '@/git/git';
+import { commitInfo, isDirty, refExists, resolveCommit } from '@/git/git';
+import {
+  applyLandingToTarget,
+  completeMergeIfResolved,
+  ensureLandingWorktree,
+  mergeInProgress,
+  mergeSourceIntoLanding,
+  sourceMergedIntoLanding,
+  unmergedFiles,
+} from '@/git/landing';
 import { linkIntoWorktree, prepareWorktree, removeWorktree } from '@/git/worktree';
 import { runCommand } from '@/process/spawn';
 import { getReviewer } from '@/reviewers/registry';
@@ -174,10 +184,64 @@ export function revalidate(runId: string): void {
   });
 }
 
+const LANDABLE_STATUSES: readonly RunStatus[] = ['APPROVED', 'MERGE_CONFLICT', 'LANDING_FAILED'];
+
+function isLandable(run: RunView): boolean {
+  return LANDABLE_STATUSES.includes(run.status) || (
+    run.status === 'CANCELLED' && run.disposition === 'approved'
+  );
+}
+
+/** Starts the approved-run landing flow in an isolated landing worktree. */
+export function landRun(runId: string): void {
+  if (activeRuns().has(runId)) {
+    throw new AppError('This run is already in progress.', { code: 'already_running' });
+  }
+  const run = requireRun(runId);
+  if (!isLandable(run)) {
+    throw new AppError(`Run ${run.id} is ${run.status}; approve it before landing.`);
+  }
+
+  const controller = new AbortController();
+  activeRuns().set(runId, {
+    controller,
+    startedAt: new Date().toISOString(),
+    phase: 'landing',
+  });
+
+  void executeLanding(runId, controller.signal, { kind: 'land' }).finally(() => {
+    activeRuns().delete(runId);
+  });
+}
+
+/** Lets the implementation agent try to resolve an existing landing conflict. */
+export function resolveLandingConflicts(runId: string): void {
+  if (activeRuns().has(runId)) {
+    throw new AppError('This run is already in progress.', { code: 'already_running' });
+  }
+  const run = requireRun(runId);
+  if (run.status !== 'MERGE_CONFLICT') {
+    throw new AppError(`Run ${run.id} is ${run.status}; there is no recorded merge conflict.`);
+  }
+
+  const controller = new AbortController();
+  activeRuns().set(runId, {
+    controller,
+    startedAt: new Date().toISOString(),
+    phase: 'resolving merge conflicts',
+  });
+
+  void executeLanding(runId, controller.signal, { kind: 'resolve_conflicts' }).finally(() => {
+    activeRuns().delete(runId);
+  });
+}
+
 type ExecuteMode =
   | { kind: 'initial' }
   | { kind: 'change_request'; feedback: string }
   | { kind: 'revalidate' };
+
+type LandingMode = { kind: 'land' } | { kind: 'resolve_conflicts' };
 
 async function execute(runId: string, signal: AbortSignal, mode: ExecuteMode): Promise<void> {
   let run = requireRun(runId);
@@ -229,6 +293,164 @@ async function execute(runId: string, signal: AbortSignal, mode: ExecuteMode): P
       setStatus(runId, 'FAILED', { reason: 'error', finished: true, error: message });
     } catch {
       // Already terminal; the event above is the record.
+    }
+  }
+}
+
+async function executeLanding(
+  runId: string,
+  signal: AbortSignal,
+  mode: LandingMode,
+): Promise<void> {
+  let run = requireRun(runId);
+  const project = requireProject(run.projectId);
+  const profile = getProfile(run.profile);
+
+  try {
+    if (!isLandable(run)) {
+      throw new AppError(`Run ${run.id} is ${run.status}; approve it before landing.`);
+    }
+
+    setStatus(run.id, 'LANDING', {
+      reason:
+        mode.kind === 'resolve_conflicts' ? 'resolving merge conflicts' : 'landing approved run',
+      started: run.startedAt === null,
+    });
+    setPhase(run.id, mode.kind === 'resolve_conflicts' ? 'resolving merge conflicts' : 'landing');
+
+    run = await ensureRunBranchCommitted(run, project);
+    const targetBranch = await resolveLandingTargetBranch(run, project);
+    const landingBranch = landingBranchName(run.id);
+    const landingPath = runLandingDir(project.id, run.id);
+
+    const landing = await ensureLandingWorktree({
+      repositoryPath: project.repositoryPath,
+      worktreePath: landingPath,
+      branch: landingBranch,
+      targetBranch,
+    });
+
+    appendEvent({
+      runId: run.id,
+      type: 'landing.started',
+      message: `${landing.reused ? 'Reusing' : 'Prepared'} landing worktree ${landing.branch} for ${targetBranch}`,
+      payload: {
+        path: landing.worktreePath,
+        branch: landing.branch,
+        targetBranch,
+        sourceBranch: run.branch ?? '',
+      },
+    });
+
+    if (mode.kind === 'resolve_conflicts') {
+      const resolved = await phaseResolveLandingConflicts(
+        run,
+        project,
+        profile,
+        landing.worktreePath,
+        signal,
+      );
+      if (!resolved) {
+        await finishCancelled(run.id);
+        return;
+      }
+    } else if (
+      run.branch &&
+      !(await mergeInProgress(landing.worktreePath)) &&
+      !(await sourceMergedIntoLanding(landing.worktreePath, run.branch))
+    ) {
+      const merge = await mergeSourceIntoLanding(landing.worktreePath, run.branch);
+      if (merge.conflicts.length > 0) {
+        await finishLandingConflict(run.id, merge.conflicts);
+        return;
+      }
+    }
+
+    if (signal.aborted) {
+      await finishCancelled(run.id);
+      return;
+    }
+
+    const completed = await completeMergeIfResolved(landing.worktreePath, {
+      name: 'Dev Cockpit',
+      email: 'dev-cockpit@localhost',
+    });
+    if (!completed.completed) {
+      await finishLandingConflict(run.id, completed.conflicts);
+      return;
+    }
+
+    const landingCommitSha =
+      completed.commitSha ?? (await resolveCommit(landing.worktreePath, 'HEAD'));
+    appendEvent({
+      runId: run.id,
+      type: 'landing.merged',
+      message: `Landing merge ready on ${landing.branch} at ${landingCommitSha.slice(0, 7)}`,
+      payload: {
+        branch: landing.branch,
+        targetBranch,
+        sourceBranch: run.branch ?? '',
+        commitSha: landingCommitSha,
+      },
+    });
+
+    await collectLandingEvidence(run, landing.worktreePath, landing.targetCommit);
+
+    const validation = await runValidation({
+      runId: run.id,
+      worktreePath: landing.worktreePath,
+      project,
+      profile: profile.id,
+      signal,
+    });
+
+    if (signal.aborted || validation.cancelled) {
+      await finishCancelled(run.id);
+      return;
+    }
+
+    if (validation.blocking) {
+      appendEvent({
+        runId: run.id,
+        type: 'landing.validation_failed',
+        level: 'notice',
+        message: `Landing validation failed: ${validation.failed} blocking failure(s)`,
+        payload: { failed: validation.failed, targetBranch },
+      });
+      setStatus(run.id, 'LANDING_FAILED', { reason: 'landing validation failed', finished: true });
+      return;
+    }
+
+    const appliedSha = await applyLandingToTarget(
+      project.repositoryPath,
+      targetBranch,
+      landing.branch,
+    );
+    appendEvent({
+      runId: run.id,
+      type: 'landing.applied',
+      message: `Updated ${targetBranch} to ${appliedSha.slice(0, 7)}`,
+      payload: { targetBranch, commitSha: appliedSha },
+    });
+    setStatus(run.id, 'LANDED', { reason: `landed on ${targetBranch}`, finished: true });
+  } catch (err) {
+    if (signal.aborted) {
+      await finishCancelled(runId);
+      return;
+    }
+    const message = errorMessage(err);
+    appendEvent({
+      runId,
+      type: 'landing.failed',
+      level: 'error',
+      message,
+      payload: { error: message },
+    });
+    updateRunFields(runId, { error: message });
+    try {
+      setStatus(runId, 'LANDING_FAILED', { reason: message, finished: true, error: message });
+    } catch {
+      setStatus(runId, 'FAILED', { reason: 'landing error', finished: true, error: message });
     }
   }
 }
@@ -1094,6 +1316,311 @@ function buildReviewReport(
 }
 
 /* ------------------------------------------------------------------ *
+ * Landing support
+ * ------------------------------------------------------------------ */
+
+async function ensureRunBranchCommitted(
+  run: RunView,
+  project: ProjectView,
+  commitMessage?: string,
+): Promise<RunView> {
+  if (!run.worktreePath || !run.branch) {
+    throw new AppError('This run has no worktree to land.');
+  }
+  if (project.protectedBranches.includes(run.branch)) {
+    throw new AppError(`Refusing to commit onto the protected branch ${run.branch}.`, {
+      code: 'protected',
+    });
+  }
+
+  let commitSha = await resolveCommit(project.repositoryPath, run.branch);
+  if (await isDirty(run.worktreePath)) {
+    const message =
+      commitMessage?.trim() || `${run.title}\n\nApproved by Dev Cockpit run ${run.id}.`;
+    commitSha = await commitAll(run.worktreePath, message, {
+      name: 'Dev Cockpit',
+      email: 'dev-cockpit@localhost',
+    });
+    appendEvent({
+      runId: run.id,
+      type: 'run.commit_created',
+      message: `Created commit ${commitSha.slice(0, 7)} on ${run.branch}`,
+      payload: { sha: commitSha, message },
+    });
+  }
+
+  if (run.baseCommit && commitSha === run.baseCommit) {
+    throw new AppError('The run branch has no committed changes to land.', {
+      code: 'empty_run_branch',
+    });
+  }
+
+  updateRunFields(run.id, { commitSha });
+  return requireRun(run.id);
+}
+
+async function resolveLandingTargetBranch(run: RunView, project: ProjectView): Promise<string> {
+  const candidate = run.baseBranch?.trim() || project.defaultBranch;
+  if (candidate && (await refExists(project.repositoryPath, `refs/heads/${candidate}`))) {
+    return candidate;
+  }
+  return project.defaultBranch;
+}
+
+async function finishLandingConflict(runId: string, files: readonly string[]): Promise<void> {
+  const display = files.length === 1 ? files[0] : `${files.length} files`;
+  appendEvent({
+    runId,
+    type: 'landing.conflicted',
+    level: 'notice',
+    message: `Landing merge has conflicts in ${display}`,
+    payload: { files: [...files] },
+  });
+  setStatus(runId, 'MERGE_CONFLICT', { reason: 'merge conflicts', finished: true });
+}
+
+async function collectLandingEvidence(
+  run: RunView,
+  landingPath: string,
+  targetCommit: string,
+): Promise<void> {
+  const diff = await collectRunDiff(landingPath, targetCommit);
+  replaceChangedFiles(run.id, diff.files);
+
+  await writeTextArtifact({
+    runId: run.id,
+    kind: 'git_diff',
+    label: 'Landing diff',
+    fileName: path.join('landing', 'changes.diff'),
+    content: diff.patch || '(no changes)',
+    mimeType: 'text/plain',
+    redactContent: false,
+    meta: {
+      files: diff.files.length,
+      additions: diff.additions,
+      deletions: diff.deletions,
+      truncated: diff.truncated,
+      targetCommit,
+    },
+  });
+
+  await writeTextArtifact({
+    runId: run.id,
+    kind: 'changed_files',
+    label: 'Landing changed files',
+    fileName: path.join('landing', 'changed-files.json'),
+    content: JSON.stringify(
+      { targetCommit, files: diff.files, additions: diff.additions, deletions: diff.deletions },
+      null,
+      2,
+    ),
+    mimeType: 'application/json',
+    redactContent: false,
+  });
+}
+
+async function phaseResolveLandingConflicts(
+  run: RunView,
+  project: ProjectView,
+  profile: ExecutionProfile,
+  landingPath: string,
+  signal: AbortSignal,
+): Promise<boolean> {
+  const conflicts = await unmergedFiles(landingPath);
+  if (conflicts.length === 0) return true;
+
+  setPhase(run.id, 'resolving merge conflicts');
+  appendEvent({
+    runId: run.id,
+    type: 'landing.resolution_started',
+    message: `Asking ${getAgent(run.agentProvider).label} to resolve ${conflicts.length} conflicted file(s)`,
+    payload: { path: landingPath, files: conflicts },
+  });
+
+  const agent = getAgent(run.agentProvider);
+  const availability = await agent.checkAvailability();
+  if (!availability.available) {
+    throw new AppError(`${agent.label} is not available: ${availability.detail}`, {
+      code: 'agent_unavailable',
+    });
+  }
+
+  const prompt = buildMergeResolutionPrompt(run, project, conflicts);
+  const iteration = createIteration({
+    runId: run.id,
+    kind: 'merge_resolution',
+    prompt,
+    sessionId: null,
+    resumed: false,
+  });
+
+  appendEvent({
+    runId: run.id,
+    type: 'agent.started',
+    message: `Starting ${agent.label} for merge resolution (iteration ${iteration.ordinal})`,
+    payload: {
+      iterationId: iteration.id,
+      provider: agent.id,
+      sessionId: null,
+      resumed: false,
+      model: run.agentModel ?? project.agentModel,
+    },
+  });
+
+  const outcome: AgentOutcome = await agent.startRun({
+    runId: run.id,
+    iterationId: iteration.id,
+    prompt,
+    worktreePath: landingPath,
+    additionalDirs: project.agentAddDirs,
+    model: run.agentModel ?? project.agentModel,
+    permissionMode: project.agentPermissionMode,
+    effort: profile.agentEffort,
+    timeoutMs: profile.agentTimeoutMs,
+    signal,
+    onEvent: (event) => handleAgentEvent(run.id, iteration.id, event),
+  });
+
+  if (outcome.rawLogPath) {
+    await register({
+      runId: run.id,
+      kind: 'implementation_log',
+      label: `Merge resolution stream (iteration ${iteration.ordinal})`,
+      filePath: outcome.rawLogPath,
+      mimeType: 'application/x-ndjson',
+      meta: { iterationId: iteration.id, sessionId: outcome.sessionId },
+    });
+  }
+
+  finishIteration(iteration.id, {
+    status: outcome.cancelled ? 'cancelled' : outcome.ok ? 'completed' : 'failed',
+    sessionId: outcome.sessionId,
+    exitCode: outcome.exitCode,
+    numTurns: outcome.numTurns,
+    costUsd: outcome.costUsd,
+    finalText: outcome.finalText,
+    error: outcome.errorMessage,
+  });
+
+  if (outcome.sessionId) {
+    updateRunFields(run.id, { agentSessionId: outcome.sessionId });
+  }
+  if (outcome.costUsd !== null) {
+    updateRunFields(run.id, { costUsd: (run.costUsd ?? 0) + outcome.costUsd });
+  }
+
+  if (outcome.deniedTools.length > 0) {
+    const denied = outcome.deniedTools.join(', ');
+    appendEvent({
+      runId: run.id,
+      type: 'agent.notice',
+      level: 'notice',
+      message: `Permission mode "${project.agentPermissionMode}" refused ${denied} during merge resolution.`,
+      payload: { iterationId: iteration.id, text: `Denied tools: ${denied}` },
+    });
+  }
+
+  if (outcome.finalText?.trim()) {
+    await writeTextArtifact({
+      runId: run.id,
+      kind: 'markdown_report',
+      label: `Merge resolution summary (iteration ${iteration.ordinal})`,
+      fileName: path.join('summaries', `iteration-${iteration.ordinal}-merge.md`),
+      content: outcome.finalText,
+      mimeType: 'text/markdown',
+      meta: { iterationId: iteration.id },
+    });
+    await phaseSummarise(run, iteration.id, iteration.ordinal, outcome.finalText, signal);
+  }
+
+  if (outcome.cancelled) {
+    appendEvent({
+      runId: run.id,
+      type: 'agent.cancelled',
+      level: 'notice',
+      message: 'Merge resolution cancelled',
+      payload: { iterationId: iteration.id },
+    });
+    return false;
+  }
+  if (!outcome.ok) {
+    appendEvent({
+      runId: run.id,
+      type: 'agent.failed',
+      level: 'error',
+      message: outcome.errorMessage ?? 'The merge resolver failed',
+      payload: {
+        iterationId: iteration.id,
+        error: outcome.errorMessage ?? 'unknown',
+        exitCode: outcome.exitCode,
+      },
+    });
+    throw new AppError(outcome.errorMessage ?? 'The merge resolver failed.', {
+      code: 'merge_resolver_failed',
+    });
+  }
+
+  appendEvent({
+    runId: run.id,
+    type: 'agent.completed',
+    message: `Merge resolution finished${
+      outcome.durationMs === null ? '' : ` in ${formatDuration(outcome.durationMs)}`
+    }${outcome.numTurns === null ? '' : `, ${outcome.numTurns} turn(s)`}`,
+    payload: {
+      iterationId: iteration.id,
+      sessionId: outcome.sessionId,
+      numTurns: outcome.numTurns,
+      durationMs: outcome.durationMs,
+      costUsd: outcome.costUsd,
+      finalText: outcome.finalText,
+    },
+  });
+
+  const unresolved = await unmergedFiles(landingPath);
+  appendEvent({
+    runId: run.id,
+    type: 'landing.resolution_completed',
+    level: unresolved.length > 0 ? 'notice' : 'info',
+    message:
+      unresolved.length > 0
+        ? `Merge resolver left ${unresolved.length} conflicted file(s)`
+        : 'Merge resolver cleared all conflicted files',
+    payload: { iterationId: iteration.id, unresolved },
+  });
+  return true;
+}
+
+function buildMergeResolutionPrompt(
+  run: RunView,
+  project: ProjectView,
+  conflicts: readonly string[],
+): string {
+  const summary = latestIteration(run.id)?.summary ?? latestIteration(run.id)?.finalText ?? null;
+  return `You are resolving Git merge conflicts for Dev Cockpit.
+
+Project: ${project.name}
+Run: ${run.id}
+Request:
+${run.request}
+
+${run.spec ? `Implementation specification:\n${run.spec}\n\n` : ''}${
+    summary ? `Approved implementation summary:\n${summary}\n\n` : ''
+  }The landing worktree already contains conflict markers from merging ${run.branch} into ${
+    run.baseBranch ?? project.defaultBranch
+  }.
+
+Resolve the conflicts in these files:
+${conflicts.map((file) => `- ${file}`).join('\n')}
+
+Rules:
+- Work only inside this landing worktree.
+- Preserve the approved run's intent while keeping compatible changes from the target branch.
+- Remove all conflict markers.
+- Do not commit, merge, push, rebase, reset, or delete the worktree.
+- Finish with a short summary of what you resolved.`;
+}
+
+/* ------------------------------------------------------------------ *
  * Phase: decide
  * ------------------------------------------------------------------ */
 
@@ -1146,9 +1673,9 @@ export interface ApproveOptions {
 /**
  * Marks a run approved.
  *
- * V1 approval means exactly this: the run is recorded as approved and, if asked,
- * a commit is created on the run's own branch. Nothing is merged into the
- * default branch and nothing is pushed — that stays a deliberate manual step.
+ * Approval records the decision and creates a commit on the run branch by
+ * default. Landing remains a separate action that validates an isolated merge
+ * before the target checkout is updated.
  */
 export async function approveRun(runId: string, options: ApproveOptions = {}): Promise<RunView> {
   const run = requireRun(runId);
@@ -1160,34 +1687,12 @@ export async function approveRun(runId: string, options: ApproveOptions = {}): P
 
   let commitSha: string | null = run.commitSha;
 
-  if (options.createCommit) {
-    if (!run.worktreePath || !run.branch) {
-      throw new AppError('This run has no worktree to commit.');
-    }
-    if (project.protectedBranches.includes(run.branch)) {
-      throw new AppError(`Refusing to commit onto the protected branch ${run.branch}.`, {
-        code: 'protected',
-      });
-    }
-    if (run.changedFiles.length === 0) {
-      throw new AppError('There is nothing to commit.');
-    }
-
+  if (options.createCommit ?? true) {
     const message =
       options.commitMessage?.trim() ||
       `${run.title}\n\nImplemented by Dev Cockpit run ${run.id}.`;
-
-    commitSha = await commitAll(run.worktreePath, message, {
-      name: 'Dev Cockpit',
-      email: 'dev-cockpit@localhost',
-    });
-
-    appendEvent({
-      runId,
-      type: 'run.commit_created',
-      message: `Created commit ${commitSha.slice(0, 7)} on ${run.branch}`,
-      payload: { sha: commitSha, message },
-    });
+    const committed = await ensureRunBranchCommitted(run, project, message);
+    commitSha = committed.commitSha;
   }
 
   updateRunFields(runId, {

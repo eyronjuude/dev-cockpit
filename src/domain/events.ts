@@ -50,6 +50,15 @@ export const EVENT_TYPES = [
   'review.completed',
   'review.skipped',
 
+  'landing.started',
+  'landing.merged',
+  'landing.conflicted',
+  'landing.resolution_started',
+  'landing.resolution_completed',
+  'landing.validation_failed',
+  'landing.applied',
+  'landing.failed',
+
   'run.ready',
   'run.needs_changes',
   'run.approved',
@@ -156,6 +165,20 @@ export interface EventPayloads {
   'review.completed': { provider: string; findingCount: number; blocking: boolean };
   'review.skipped': { provider: string; reason: string };
 
+  'landing.started': {
+    path: string;
+    branch: string;
+    targetBranch: string;
+    sourceBranch: string;
+  };
+  'landing.merged': { branch: string; targetBranch: string; sourceBranch: string; commitSha: string };
+  'landing.conflicted': { files: string[] };
+  'landing.resolution_started': { path: string; files: string[] };
+  'landing.resolution_completed': { iterationId: string; unresolved: string[] };
+  'landing.validation_failed': { failed: number; targetBranch: string };
+  'landing.applied': { targetBranch: string; commitSha: string };
+  'landing.failed': { error: string };
+
   'run.ready': { validationsPassed: number; blockingFindings: number };
   'run.needs_changes': { reasons: string[] };
   'run.approved': { note: string | null; commitSha: string | null };
@@ -210,6 +233,14 @@ export const PROGRESS_EVENT_TYPES: readonly EventType[] = [
   'review.finding',
   'review.completed',
   'review.skipped',
+  'landing.started',
+  'landing.merged',
+  'landing.conflicted',
+  'landing.resolution_started',
+  'landing.resolution_completed',
+  'landing.validation_failed',
+  'landing.applied',
+  'landing.failed',
   'run.ready',
   'run.needs_changes',
   'run.approved',

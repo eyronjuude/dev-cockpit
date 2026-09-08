@@ -85,6 +85,15 @@ DRAFT ──► PREPARING ──► IMPLEMENTING ──► VALIDATING ──► 
                     NEEDS_CHANGES ◄──────────────────────────► READY
                           │                                      │
                           └──────────► APPROVED / REJECTED ◄──────┘
+                                            │
+                                            ▼
+                                         LANDING
+                                      ┌─────┴─────┐
+                                      ▼           ▼
+                               MERGE_CONFLICT  LANDED
+                                      │
+                                      ▼
+                                LANDING_FAILED
 ```
 
 The complete permitted transition table lives in `src/domain/types.ts` and is
@@ -98,7 +107,9 @@ passing through implementation and validation.
 
 Statuses are recoverable by design: `NEEDS_CHANGES`, `READY`, `FAILED` and
 `CANCELLED` can all re-enter `IMPLEMENTING`, which is what "request changes" on
-a failed run does. `APPROVED` and `REJECTED` are terminal.
+a failed run does. `APPROVED` can proceed to `LANDING`. Clean landings reach
+`LANDED`; conflicted or failed landings can retry after manual or AI-assisted
+repair. `LANDED` and `REJECTED` are terminal.
 
 ## Readiness
 

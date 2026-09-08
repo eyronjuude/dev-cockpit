@@ -21,7 +21,7 @@ export function POST(request: Request, { params }: Params) {
     const body = schema.parse(await readJson(request));
     const run = await approveRun(runId, {
       note: body.note ?? null,
-      createCommit: body.createCommit ?? false,
+      createCommit: body.createCommit ?? true,
       commitMessage: body.commitMessage,
     });
     return { run: { id: run.id, status: run.status, commitSha: run.commitSha } };

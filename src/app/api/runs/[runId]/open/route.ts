@@ -4,6 +4,7 @@ import { z } from 'zod';
 
 import { assertLocalRequest, handle, readJson } from '@/app/api/_lib/handler';
 import { AppError } from '@/core/errors';
+import { runLandingDir } from '@/core/paths';
 import { planSpawn } from '@/process/exec';
 import { requireProject } from '@/services/projects';
 import { requireRun } from '@/services/runs';
@@ -13,7 +14,7 @@ export const dynamic = 'force-dynamic';
 type Params = { params: Promise<{ runId: string }> };
 
 const schema = z.object({
-  target: z.enum(['worktree', 'repository']).default('worktree'),
+  target: z.enum(['worktree', 'repository', 'landing']).default('worktree'),
 });
 
 /**
@@ -37,7 +38,12 @@ export function POST(request: Request, { params }: Params) {
     const run = requireRun(runId);
     const project = requireProject(run.projectId);
 
-    const dir = target === 'repository' ? project.repositoryPath : run.worktreePath;
+    const dir =
+      target === 'repository'
+        ? project.repositoryPath
+        : target === 'landing'
+          ? runLandingDir(project.id, run.id)
+          : run.worktreePath;
     if (!dir) throw new AppError('This run has no worktree yet.');
     if (!fs.existsSync(dir)) {
       throw new AppError(`That directory no longer exists: ${dir}`, { code: 'missing_path' });

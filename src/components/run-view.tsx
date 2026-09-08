@@ -42,7 +42,7 @@ export function RunView({ initial }: { initial: RunSnapshot }) {
 
   const elapsed = useElapsed(run.startedAt, run.finishedAt, live.active);
 
-  const diffArtifact = artifacts.find((a) => a.kind === 'git_diff');
+  const diffArtifact = artifacts.filter((a) => a.kind === 'git_diff').at(-1);
   const logArtifacts = artifacts.filter(
     (a) =>
       a.kind === 'implementation_log' || a.kind === 'stdout_log' || a.kind === 'stderr_log',
@@ -594,7 +594,7 @@ function useElapsed(
 
   if (!startedAt) return '—';
   const start = new Date(startedAt).getTime();
-  const end = finishedAt ? new Date(finishedAt).getTime() : now;
+  const end = active ? now : finishedAt ? new Date(finishedAt).getTime() : now;
   if (Number.isNaN(start) || Number.isNaN(end)) return '—';
   return formatDuration(Math.max(0, end - start));
 }

@@ -119,6 +119,7 @@ export function useRunStream(runId: string, initial: RunSnapshot) {
           event.type.startsWith('run.') ||
           event.type.startsWith('validation.') ||
           event.type.startsWith('review.') ||
+          event.type.startsWith('landing.') ||
           event.type === 'agent.completed' ||
           event.type === 'agent.failed' ||
           event.type === 'artifact.created' ||

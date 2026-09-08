@@ -499,9 +499,11 @@ export function setStatus(
   db.update(runs)
     .set({
       status: to,
+      statusReason: options.reason ?? null,
       updatedAt: nowIso,
       ...(options.error !== undefined ? { error: options.error } : {}),
       ...(options.started ? { startedAt: nowIso } : {}),
+      ...(ACTIVE_STATUSES.includes(to) ? { finishedAt: null } : {}),
       ...(options.finished ? { finishedAt: nowIso } : {}),
     })
     .where(eq(runs.id, runId))

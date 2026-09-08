@@ -26,3 +26,8 @@ export const newFindingId = () => shortId('fnd');
 export function runBranchName(runId: string): string {
   return `cockpit/${runId.replace(/[^A-Za-z0-9_-]/g, '-')}`;
 }
+
+/** Branch used to prepare the final merge before touching the target branch. */
+export function landingBranchName(runId: string): string {
+  return `cockpit/landing/${runId.replace(/[^A-Za-z0-9_-]/g, '-')}`;
+}

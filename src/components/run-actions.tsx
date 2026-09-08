@@ -3,7 +3,7 @@
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 
-import { isTerminal, type RunStatus } from '@/domain/types';
+import type { RunStatus } from '@/domain/types';
 import type { RunSnapshot } from './use-run-stream';
 
 /**
@@ -21,7 +21,38 @@ interface ActionsProps {
   onChanged: () => void;
 }
 
-type Dialog = 'none' | 'changes' | 'approve' | 'reject';
+type Dialog = 'none' | 'changes' | 'approve' | 'reject' | 'land';
+
+const APPROVABLE_STATUSES: readonly RunStatus[] = [
+  'NEEDS_CHANGES',
+  'READY',
+  'FAILED',
+  'CANCELLED',
+];
+const LANDABLE_STATUSES: readonly RunStatus[] = [
+  'APPROVED',
+  'MERGE_CONFLICT',
+  'LANDING_FAILED',
+];
+const REWORKABLE_STATUSES: readonly RunStatus[] = [
+  'NEEDS_CHANGES',
+  'READY',
+  'FAILED',
+  'CANCELLED',
+];
+const REVALIDATABLE_STATUSES: readonly RunStatus[] = [
+  'NEEDS_CHANGES',
+  'READY',
+  'FAILED',
+  'CANCELLED',
+  'APPROVED',
+  'LANDING_FAILED',
+];
+const LANDING_WORKTREE_STATUSES: readonly RunStatus[] = [
+  'MERGE_CONFLICT',
+  'LANDING_FAILED',
+  'LANDED',
+];
 
 export function RunActions({ snapshot, onChanged }: ActionsProps) {
   const router = useRouter();
@@ -33,12 +64,12 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
 
   const [feedback, setFeedback] = useState('');
   const [note, setNote] = useState('');
-  const [createCommit, setCreateCommit] = useState(false);
+  const [createCommit, setCreateCommit] = useState(true);
   const [commitMessage, setCommitMessage] = useState('');
   const [cleanUp, setCleanUp] = useState(false);
 
   const active = live.active;
-  const terminal = isTerminal(run.status);
+  const targetBranch = run.baseBranch ?? 'the target branch';
 
   const post = async (path: string, body?: unknown, label?: string) => {
     setBusy(label ?? path);
@@ -66,9 +97,17 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
     }
   };
 
-  const canRequestChanges = !active && !terminal && run.worktreePath !== null;
-  const canRevalidate = !active && !terminal && run.worktreePath !== null;
-  const canApprove = !active && !terminal;
+  const canRequestChanges =
+    !active && REWORKABLE_STATUSES.includes(run.status) && run.worktreePath !== null;
+  const canRevalidate =
+    !active && REVALIDATABLE_STATUSES.includes(run.status) && run.worktreePath !== null;
+  const canApprove = !active && APPROVABLE_STATUSES.includes(run.status);
+  const canLand =
+    !active &&
+    (LANDABLE_STATUSES.includes(run.status) ||
+      (run.status === 'CANCELLED' && run.disposition === 'approved'));
+  const canResolveMerge = !active && run.status === 'MERGE_CONFLICT';
+  const canOpenLanding = !active && LANDING_WORKTREE_STATUSES.includes(run.status);
   const canStart = !active && run.status === 'DRAFT';
 
   return (
@@ -129,7 +168,40 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
           </button>
         ) : null}
 
+        {canOpenLanding ? (
+          <button
+            type="button"
+            className="btn"
+            disabled={busy !== null}
+            onClick={() => void post(`/api/runs/${run.id}/open`, { target: 'landing' }, 'open')}
+          >
+            Open landing worktree
+          </button>
+        ) : null}
+
+        {canResolveMerge ? (
+          <button
+            type="button"
+            className="btn"
+            disabled={busy !== null}
+            onClick={() => void post(`/api/runs/${run.id}/resolve-merge`, {}, 'resolve-merge')}
+          >
+            {busy === 'resolve-merge' ? 'Starting…' : 'Resolve conflicts with AI'}
+          </button>
+        ) : null}
+
         <div className="flex-1" />
+
+        {canLand ? (
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={busy !== null}
+            onClick={() => setDialog(dialog === 'land' ? 'none' : 'land')}
+          >
+            Land on {targetBranch}
+          </button>
+        ) : null}
 
         {canApprove ? (
           <>
@@ -234,7 +306,7 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
             <span>
               Create a local commit on <code className="mono">{run.branch}</code>
               <span className="block text-[11.5px] text-ink-faint">
-                Commits to the run branch only. Nothing is merged and nothing is pushed.
+                Required for landing. Approval still does not merge or push by itself.
               </span>
             </span>
           </label>
@@ -269,6 +341,43 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
               }
             >
               {busy === 'approve' ? 'Approving…' : readiness.ready ? 'Approve' : 'Approve anyway'}
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {dialog === 'land' ? (
+        <div className="panel p-3">
+          <p className="text-[12.5px] text-ink-muted">
+            Dev Cockpit will create or reuse an isolated landing worktree from{' '}
+            <code className="mono">{targetBranch}</code>, merge{' '}
+            <code className="mono">{run.branch}</code>, run validation there, then fast-forward{' '}
+            <code className="mono">{targetBranch}</code> only if the result is clean.
+          </p>
+          {run.status === 'MERGE_CONFLICT' ? (
+            <p className="mt-2 text-[12px] text-warn">
+              Conflicts are recorded for this landing. If you already resolved them in the landing
+              worktree, retrying will finish the merge and validate it.
+            </p>
+          ) : null}
+          {run.status === 'LANDING_FAILED' ? (
+            <p className="mt-2 text-[12px] text-warn">
+              The previous landing attempt failed. Retry after fixing the recorded problem in the
+              landing worktree or target checkout.
+            </p>
+          ) : null}
+
+          <div className="mt-2.5 flex justify-end gap-1.5">
+            <button type="button" className="btn btn-ghost" onClick={() => setDialog('none')}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={busy !== null}
+              onClick={() => void post(`/api/runs/${run.id}/land`, {}, 'land')}
+            >
+              {busy === 'land' ? 'Starting…' : `Land on ${targetBranch}`}
             </button>
           </div>
         </div>
@@ -335,7 +444,7 @@ export function ReadinessNotice({
   readiness: RunSnapshot['readiness'];
   status: RunStatus;
 }) {
-  if (status === 'APPROVED' || status === 'REJECTED') return null;
+  if (status === 'APPROVED' || status === 'LANDED' || status === 'REJECTED') return null;
   if (readiness.ready) {
     return (
       <p className="text-[12.5px] text-pass">

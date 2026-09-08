@@ -13,6 +13,10 @@ export const RUN_STATUSES = [
   'NEEDS_CHANGES',
   'READY',
   'APPROVED',
+  'LANDING',
+  'MERGE_CONFLICT',
+  'LANDING_FAILED',
+  'LANDED',
   'REJECTED',
   'FAILED',
   'CANCELLED',
@@ -27,10 +31,11 @@ export const ACTIVE_STATUSES: readonly RunStatus[] = [
   'IMPLEMENTING',
   'VALIDATING',
   'REVIEWING',
+  'LANDING',
 ];
 
 /** Statuses no transition can leave. */
-export const TERMINAL_STATUSES: readonly RunStatus[] = ['APPROVED', 'REJECTED'];
+export const TERMINAL_STATUSES: readonly RunStatus[] = ['LANDED', 'REJECTED'];
 
 /**
  * The orchestrator is the source of truth for run state; this table is the
@@ -53,9 +58,13 @@ const TRANSITIONS: Record<RunStatus, readonly RunStatus[]> = {
     'CANCELLED',
   ],
   READY: ['IMPLEMENTING', 'VALIDATING', 'REVIEWING', 'APPROVED', 'REJECTED', 'CANCELLED'],
-  FAILED: ['IMPLEMENTING', 'VALIDATING', 'REJECTED', 'CANCELLED'],
-  CANCELLED: ['IMPLEMENTING', 'VALIDATING', 'REJECTED'],
-  APPROVED: [],
+  FAILED: ['IMPLEMENTING', 'VALIDATING', 'LANDING', 'REJECTED', 'CANCELLED'],
+  CANCELLED: ['IMPLEMENTING', 'VALIDATING', 'LANDING', 'REJECTED'],
+  APPROVED: ['LANDING', 'REJECTED'],
+  LANDING: ['LANDED', 'MERGE_CONFLICT', 'LANDING_FAILED', 'FAILED', 'CANCELLED'],
+  MERGE_CONFLICT: ['LANDING', 'REJECTED', 'CANCELLED'],
+  LANDING_FAILED: ['LANDING', 'REJECTED', 'CANCELLED'],
+  LANDED: [],
   REJECTED: [],
 };
 
@@ -193,7 +202,7 @@ export const BLOCKING_SEVERITIES: readonly FindingSeverity[] = ['high', 'critica
  * Iterations
  * ------------------------------------------------------------------ */
 
-export const ITERATION_KINDS = ['initial', 'change_request'] as const;
+export const ITERATION_KINDS = ['initial', 'change_request', 'merge_resolution'] as const;
 export type IterationKind = (typeof ITERATION_KINDS)[number];
 
 export const ITERATION_STATUSES = ['running', 'completed', 'failed', 'cancelled'] as const;
