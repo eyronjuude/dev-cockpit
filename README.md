@@ -103,7 +103,7 @@ A worked example, for a typical Node project:
 | Paths to link | `node_modules` |
 | Setup command | *(blank — linking `node_modules` is enough)* |
 | Open command | `code {path}` |
-| Permission mode | `acceptEdits` — file edits only, **no shell commands** |
+| Permission mode | `bypassPermissions` (default) — **skips every permission check**, so the agent can run those four commands itself |
 
 Nothing is mandatory except the repository path and a name.
 
@@ -152,6 +152,10 @@ Specifically:
 - Linked paths become junctions on Windows (no elevation needed) or symlinks
   elsewhere. Files are *copied* rather than linked, so the agent editing
   `.env.local` cannot reach your original.
+- The agent works with permission checks skipped, because nobody is there to
+  answer one. It is spawned with the worktree as its working directory and told
+  to stay in it, but it runs as your user with your credentials — the isolation
+  is a git worktree, not a sandbox. See *Current limitations*.
 
 Pushing remains a deliberate manual step. Dev Cockpit updates only the local
 target branch.
@@ -271,19 +275,27 @@ Two honest caveats:
   interfaces, but no OpenAI key, no Anthropic key and no installed Codex CLI
   were available during development. Their *unavailable* paths are tested; their
   success paths are not. Treat them as untested until you have run one.
-- **`acceptEdits` means the agent cannot run *any* shell command.** This is the
-  default, and it is more restrictive than the name suggests: file edits are
-  permitted, but every Bash and PowerShell call is refused, because Dev Cockpit
-  passes `--permission-prompts none` so a headless run can never hang waiting
-  for approval. The consequence is that the implementer works blind — it cannot
-  run your tests, inspect git state, or check a build. Deterministic validation
-  still catches problems afterwards, which is the whole architecture, but an
-  implementer that cannot self-check is likelier to hand over broken work and
-  burn an iteration. Observed on a real run: five refused read-only git
-  commands. When it happens the run records a notice saying which tools were
-  refused, so a blind run explains itself. Set the project's permission mode to
-  `bypassPermissions` to lift this — the worktree is disposable and on its own
-  branch, so that is a defensible trade, but it is yours to make deliberately.
+- **Runs skip permission checks by default.** A run is unattended: there is no
+  terminal to answer an approval in, so a permission check can only be bypassed
+  or refused — asking is not an option. The default is therefore
+  `bypassPermissions`, which launches the CLI with
+  `--dangerously-skip-permissions`. The agent can run your tests, inspect git
+  and check a build inside its own disposable worktree, on its own branch,
+  without your changes committed or pushed anywhere. It also means the agent
+  runs arbitrary commands on your machine with your credentials: the isolation
+  is a git worktree, not a container. A project you do not trust that far should
+  be set to `acceptEdits`, which permits file edits and refuses every Bash and
+  PowerShell call — the implementer then works blind, is told so in its prompt,
+  and any refusal is recorded as a run notice naming the tools. Deterministic
+  validation decides readiness either way; see
+  [ADR 0010](docs/adr/0010-unattended-permission-default.md).
+  `DEV_COCKPIT_PERMISSION_MODE` overrides every project on the machine.
+- **`--dangerously-skip-permissions` has historically been refused as root.**
+  Claude Code rejects the flag under `sudo` or as `root` on some versions. That
+  was not re-tested here — this is a Windows machine — so if you run the server
+  as root on Linux and every run dies at spawn, set
+  `DEV_COCKPIT_PERMISSION_MODE=acceptEdits` and check the agent stderr in the
+  Logs tab.
 - **Codex CLI has no `--system-prompt` equivalent.** The Claude providers
   replace the system prompt outright; the Codex ones prepend the instruction to
   the prompt body instead. The output schema does the constraining either way,
@@ -309,7 +321,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), and
 ```bash
 npm run typecheck      # tsc --noEmit
 npm run lint           # eslint
-npm run test           # vitest — 111 tests
+npm run test           # vitest
 npm run build          # next build
 npm run db:generate    # regenerate SQL migrations after a schema change
 ```

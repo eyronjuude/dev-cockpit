@@ -3,7 +3,12 @@
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 
-import { VALIDATION_KIND_LABELS, VALIDATION_KINDS, type ValidationKind } from '@/domain/types';
+import {
+  DEFAULT_AGENT_PERMISSION_MODE,
+  VALIDATION_KIND_LABELS,
+  VALIDATION_KINDS,
+  type ValidationKind,
+} from '@/domain/types';
 import type { ProjectView } from '@/services/projects';
 import type { RepositoryProbe } from '@/services/projects';
 
@@ -67,9 +72,15 @@ export function ProjectForm({ existing }: { existing?: ProjectView }) {
   );
   const [allowAgentCommit, setAllowAgentCommit] = useState(existing?.allowAgentCommit ?? false);
   const [agentModel, setAgentModel] = useState(existing?.agentModel ?? '');
-  const [agentPermissionMode, setAgentPermissionMode] = useState(
-    existing?.agentPermissionMode ?? 'acceptEdits',
+  const [agentPermissionMode, setAgentPermissionMode] = useState<string>(
+    existing?.agentPermissionMode ?? DEFAULT_AGENT_PERMISSION_MODE,
   );
+
+  // Set on the server, so it can disagree with whatever the select shows.
+  const overriddenTo =
+    existing && existing.effectivePermissionMode !== existing.agentPermissionMode
+      ? existing.effectivePermissionMode
+      : null;
 
   const [commands, setCommands] = useState<Record<ValidationKind, CommandState>>(() => {
     const initial = {} as Record<ValidationKind, CommandState>;
@@ -468,19 +479,30 @@ export function ProjectForm({ existing }: { existing?: ProjectView }) {
               value={agentPermissionMode}
               onChange={(e) => setAgentPermissionMode(e.target.value)}
             >
+              <option value="bypassPermissions">
+                bypassPermissions — skips every check (default)
+              </option>
               <option value="acceptEdits">acceptEdits — file edits only, no commands</option>
-              <option value="bypassPermissions">bypassPermissions — commands allowed too</option>
               <option value="plan">plan — read-only planning</option>
             </select>
             <p className="hint">
-              <code className="mono">acceptEdits</code> lets the agent edit files but{' '}
-              <strong>refuses every shell command</strong>, so it cannot run your tests or inspect
-              git — it works blind and validation catches problems afterwards.{' '}
-              <code className="mono">bypassPermissions</code> lets it verify its own work; the
-              worktree is disposable and on its own branch, so that is a reasonable trade for a
-              repository you trust. Either way, anything that would prompt is denied rather than
-              left hanging.
+              <code className="mono">bypassPermissions</code> is the default and runs the CLI with{' '}
+              <code className="mono">--dangerously-skip-permissions</code>: the agent can run your
+              tests, inspect git and check a build, so it verifies its own work instead of guessing.
+              Nobody is watching a run, so the alternative to skipping a check is refusing the call
+              — never asking.{' '}
+              <code className="mono">acceptEdits</code> takes that stricter road: file edits are
+              allowed, <strong>every shell command is refused</strong>, and the agent works blind
+              while validation catches problems afterwards. The worktree is disposable and on its
+              own branch either way.
             </p>
+            {overriddenTo ? (
+              <p className="hint text-warn">
+                Overridden to <code className="mono">{overriddenTo}</code> by{' '}
+                <code className="mono">DEV_COCKPIT_PERMISSION_MODE</code> on this machine. Runs use
+                that, whatever is saved here.
+              </p>
+            ) : null}
           </div>
         </div>
       </section>

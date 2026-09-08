@@ -1,6 +1,11 @@
 # 0009 — The agent works blind by default, and is told so
 
-**Status:** accepted
+**Status:** superseded by [ADR 0010](0010-unattended-permission-default.md)
+
+The honesty half of this decision stands and is still in the code: the prompt
+branches on the permission mode, refusals are recorded as run notices, and the
+trade is documented. What 0010 reverses is the default — the "Rejected"
+paragraph below is the thing that changed.
 
 ## Context
 

@@ -17,8 +17,11 @@ Spawn the CLI:
 ```
 claude --print --output-format stream-json --verbose
        --session-id <uuid> | --resume <id>
-       --permission-mode acceptEdits --permission-prompts none
+       --dangerously-skip-permissions --permission-prompts none
 ```
+
+(The permission flag was `--permission-mode acceptEdits` when this was written.
+See ADR 0009 and ADR 0010 for how it got here.)
 
 The prompt is written to stdin, not passed as an argument. `ImplementationAgent`
 wraps this so another provider can be added without touching the orchestrator.

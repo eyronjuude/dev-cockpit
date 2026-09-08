@@ -3,7 +3,11 @@
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 
-import { VALIDATION_KIND_LABELS, type ExecutionProfileName } from '@/domain/types';
+import {
+  permissionModeAllowsCommands,
+  VALIDATION_KIND_LABELS,
+  type ExecutionProfileName,
+} from '@/domain/types';
 import type { ExecutionProfile } from '@/orchestrator/profiles';
 import type { ProjectView, RepositoryState } from '@/services/projects';
 
@@ -233,7 +237,10 @@ export function NewTaskForm({
           </Row>
           <Row label="Implementer">
             Claude Code, in that worktree, with permission mode{' '}
-            <code className="mono">{project.agentPermissionMode}</code>.
+            <code className="mono">{project.effectivePermissionMode}</code>
+            {permissionModeAllowsCommands(project.effectivePermissionMode)
+              ? ' — it can run your checks itself.'
+              : ' — shell commands are refused, so it works blind.'}
           </Row>
           <Row label="Validation">
             {configured.length === 0 ? (

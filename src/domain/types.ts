@@ -136,6 +136,43 @@ export const COMMAND_SOURCES = ['project', 'dynamic'] as const;
 export type CommandSource = (typeof COMMAND_SOURCES)[number];
 
 /* ------------------------------------------------------------------ *
+ * Agent permissions
+ * ------------------------------------------------------------------ */
+
+/**
+ * Permission modes a project may store.
+ *
+ * Only `acceptEdits`, `bypassPermissions` and `plan` map onto a Claude Code
+ * `--permission-mode` value today. The rest are kept because older projects may
+ * hold them; `claudePermissionArgs` falls back rather than passing a flag value
+ * the CLI would reject.
+ */
+export const AGENT_PERMISSION_MODES = [
+  'acceptEdits',
+  'bypassPermissions',
+  'plan',
+  'dontAsk',
+  'auto',
+  'manual',
+] as const;
+
+export type AgentPermissionMode = (typeof AGENT_PERMISSION_MODES)[number];
+export const agentPermissionModeSchema = z.enum(AGENT_PERMISSION_MODES);
+
+/**
+ * Runs are unattended: no human is watching the session, so nothing may stop to
+ * ask. `bypassPermissions` is therefore the default — the agent can run the
+ * project's own checks instead of working blind. The worktree is disposable and
+ * on its own branch, which is what makes that trade payable. See ADR 0010.
+ */
+export const DEFAULT_AGENT_PERMISSION_MODE: AgentPermissionMode = 'bypassPermissions';
+
+/** Whether a mode lets the agent run Bash or PowerShell at all. */
+export function permissionModeAllowsCommands(mode: string): boolean {
+  return mode === 'bypassPermissions';
+}
+
+/* ------------------------------------------------------------------ *
  * Execution profiles
  * ------------------------------------------------------------------ */
 
