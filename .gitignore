@@ -1,0 +1,14 @@
+node_modules/
+.next/
+out/
+dist/
+next-env.d.ts
+*.tsbuildinfo
+
+# Local application state: SQLite database, artifacts, run worktrees.
+data/
+.env
+.env.local
+
+# Playwright MCP scratch output
+.playwright-mcp/
