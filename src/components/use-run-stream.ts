@@ -85,6 +85,20 @@ export function useRunStream(runId: string, initial: RunSnapshot) {
     [refreshSnapshot],
   );
 
+  // A phase change is not an event — the orchestrator moves from implementing
+  // to collecting to validating without writing one — so an active run is
+  // polled slowly as well. Without this the progress bar can sit on a finished
+  // phase through a long silent stretch.
+  const active = state.snapshot?.live.active ?? false;
+
+  useEffect(() => {
+    if (!active) return;
+    const timer = setInterval(() => {
+      void refreshSnapshot();
+    }, 5_000);
+    return () => clearInterval(timer);
+  }, [active, refreshSnapshot]);
+
   useEffect(() => {
     let source: EventSource | null = null;
     let closedByUs = false;

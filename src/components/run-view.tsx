@@ -3,10 +3,13 @@
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 
+import type { RunEvent } from '@/domain/events';
+import { computeRunProgress } from '@/domain/progress';
 import type { ChangeType } from '@/domain/types';
 import { ArtifactPanel } from './artifact-panel';
 import { DiffView } from './diff-view';
 import { EventFeed } from './event-feed';
+import { LogStream } from './log-stream';
 import { Markdown } from './markdown';
 import { ReadinessNotice, RunActions } from './run-actions';
 import { Scorecard } from './scorecard';
@@ -16,6 +19,7 @@ import {
   RunStatusBadge,
   SeverityBadge,
   formatTime,
+  runStatusLabel,
 } from './status';
 import { useRunStream, type RunSnapshot } from './use-run-stream';
 
@@ -51,6 +55,39 @@ export function RunView({ initial }: { initial: RunSnapshot }) {
   const latestIteration = run.iterations.at(-1) ?? null;
   const latestFindingAttempt = run.findings.reduce((acc, f) => Math.max(acc, f.attempt), 0);
   const currentFindings = run.findings.filter((f) => f.attempt === latestFindingAttempt);
+
+  // Phase-level progress, recomputed from the snapshot the stream keeps fresh,
+  // so the bar advances while the run does rather than on a page reload.
+  const progress = useMemo(
+    () =>
+      computeRunProgress({
+        status: run.status,
+        phase: live.phase,
+        active: live.active,
+        evidence: {
+          hasSpec: run.spec !== null,
+          hasWorktree: run.worktreePath !== null,
+          iterations: run.iterations.length,
+          changedFiles: run.changedFiles.length,
+          validations: run.validations.length,
+          reviewFindings: run.findings.length,
+        },
+      }),
+    [
+      run.status,
+      run.spec,
+      run.worktreePath,
+      run.iterations.length,
+      run.changedFiles.length,
+      run.validations.length,
+      run.findings.length,
+      live.active,
+      live.phase,
+    ],
+  );
+
+  // The newest line, so the current activity is readable without scrolling.
+  const newestMessage = events.at(-1)?.message ?? null;
 
   return (
     <div className="flex h-full flex-col">
@@ -139,6 +176,11 @@ export function RunView({ initial }: { initial: RunSnapshot }) {
                 {name === 'Artifacts' && artifacts.length > 0 ? (
                   <span className="ml-1.5 text-[10.5px] text-ink-faint">{artifacts.length}</span>
                 ) : null}
+                {name === 'Logs' && live.active ? (
+                  <span className="ml-1.5 inline-flex items-center text-running" title="streaming">
+                    <span className="pulse-dot" aria-hidden />
+                  </span>
+                ) : null}
               </button>
             ))}
           </div>
@@ -210,7 +252,14 @@ export function RunView({ initial }: { initial: RunSnapshot }) {
               </div>
             ) : null}
 
-            {tab === 'Logs' ? <LogsTab artifacts={logArtifacts} /> : null}
+            {tab === 'Logs' ? (
+              <LogsTab
+                events={events}
+                artifacts={logArtifacts}
+                connected={connected}
+                active={live.active}
+              />
+            ) : null}
           </div>
         </section>
 
@@ -234,7 +283,14 @@ export function RunView({ initial }: { initial: RunSnapshot }) {
           </div>
 
           <div className="min-h-0 flex-1 p-3.5">
-            <EventFeed events={events} connected={connected} active={live.active} />
+            <EventFeed
+              events={events}
+              connected={connected}
+              active={live.active}
+              progress={progress}
+              progressLabel={progress.activeLabel ?? runStatusLabel(run.status)}
+              progressDetail={live.active ? newestMessage : null}
+            />
           </div>
         </aside>
       </div>
@@ -488,11 +544,62 @@ function TestsTab({
   );
 }
 
-function LogsTab({ artifacts }: { artifacts: RunSnapshot['artifacts'] }) {
-  if (artifacts.length === 0) {
-    return <p className="empty-state">No logs captured yet.</p>;
-  }
-  return <ArtifactPanel artifacts={artifacts} />;
+/**
+ * Logs, in two forms.
+ *
+ * The stream is the live one and the default: it is written from the event log
+ * as the run happens, so it is populated while an agent is still working. The
+ * saved files are what the agent process left behind — the raw NDJSON
+ * transcript and any setup output — and only exist once the step that produces
+ * them has finished, which is why they cannot be the live view.
+ */
+function LogsTab({
+  events,
+  artifacts,
+  connected,
+  active,
+}: {
+  events: readonly RunEvent[];
+  artifacts: RunSnapshot['artifacts'];
+  connected: boolean;
+  active: boolean;
+}) {
+  const [mode, setMode] = useState<'stream' | 'files'>('stream');
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex shrink-0 items-center gap-1 border-b border-line px-3 py-1.5">
+        <button
+          type="button"
+          className={`btn btn-sm ${mode === 'stream' ? 'btn-primary' : 'btn-ghost'}`}
+          onClick={() => setMode('stream')}
+        >
+          Live stream
+        </button>
+        <button
+          type="button"
+          className={`btn btn-sm ${mode === 'files' ? 'btn-primary' : 'btn-ghost'}`}
+          onClick={() => setMode('files')}
+        >
+          Saved files
+          {artifacts.length > 0 ? (
+            <span className="text-[10.5px] opacity-70">{artifacts.length}</span>
+          ) : null}
+        </button>
+      </div>
+
+      {mode === 'stream' ? (
+        <LogStream events={events} connected={connected} active={active} />
+      ) : artifacts.length === 0 ? (
+        <p className="empty-state">
+          No log files have been written yet. They are saved when the step that produces them
+          finishes; the live stream shows what is happening in the meantime.
+        </p>
+      ) : (
+        <ArtifactPanel artifacts={artifacts} />
+      )}
+    </div>
+  );
 }
 
 /**
