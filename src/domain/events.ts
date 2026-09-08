@@ -44,6 +44,7 @@ export const EVENT_TYPES = [
   'validation.completed',
 
   'artifact.created',
+  'visualisation.skipped',
 
   'review.started',
   'review.finding',
@@ -154,6 +155,8 @@ export interface EventPayloads {
   };
 
   'artifact.created': { artifactId: string; kind: ArtifactKind; label: string; bytes: number };
+  /** The implementation map could not be drawn. The run itself is unaffected. */
+  'visualisation.skipped': { reason: string };
 
   'review.started': { provider: string };
   'review.finding': {
@@ -229,6 +232,7 @@ export const PROGRESS_EVENT_TYPES: readonly EventType[] = [
   'validation.started',
   'validation.result',
   'validation.completed',
+  'visualisation.skipped',
   'review.started',
   'review.finding',
   'review.completed',

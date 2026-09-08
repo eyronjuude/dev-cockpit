@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { RunEvent } from '@/domain/events';
 import { computeRunProgress } from '@/domain/progress';
 import type { ChangeType } from '@/domain/types';
+import { CHANGE_TYPE_TONE, type BadgeTone } from '@/domain/vocabulary';
 import { ArtifactPanel } from './artifact-panel';
 import { DiffView } from './diff-view';
 import { EventFeed } from './event-feed';
@@ -23,16 +24,23 @@ import {
 } from './status';
 import { useRunStream, type RunSnapshot } from './use-run-stream';
 
-const TABS = ['Overview', 'Changes', 'Diff', 'Tests', 'Artifacts', 'Logs'] as const;
+const TABS = ['Overview', 'Map', 'Changes', 'Diff', 'Tests', 'Artifacts', 'Logs'] as const;
 type Tab = (typeof TABS)[number];
 
-const CHANGE_TONE: Record<ChangeType, string> = {
-  added: 'text-pass',
-  untracked: 'text-pass',
-  modified: 'text-warn',
-  deleted: 'text-fail',
-  renamed: 'text-accent',
+/**
+ * Written out in full rather than interpolated: Tailwind scans source text for
+ * class names, so a composed `text-${tone}` would never be generated.
+ */
+const TONE_TEXT: Record<BadgeTone, string> = {
+  pass: 'text-pass',
+  fail: 'text-fail',
+  warn: 'text-warn',
+  running: 'text-running',
+  idle: 'text-ink-faint',
+  accent: 'text-accent',
 };
+
+const changeTone = (type: ChangeType): string => TONE_TEXT[CHANGE_TYPE_TONE[type]];
 
 export function RunView({ initial }: { initial: RunSnapshot }) {
   const { events, snapshot, connected, refresh } = useRunStream(initial.run.id, initial);
@@ -47,6 +55,7 @@ export function RunView({ initial }: { initial: RunSnapshot }) {
   const elapsed = useElapsed(run.startedAt, run.finishedAt, live.active);
 
   const diffArtifact = artifacts.filter((a) => a.kind === 'git_diff').at(-1);
+  const mapArtifacts = artifacts.filter((a) => a.kind === 'implementation_map');
   const logArtifacts = artifacts.filter(
     (a) =>
       a.kind === 'implementation_log' || a.kind === 'stdout_log' || a.kind === 'stderr_log',
@@ -194,6 +203,8 @@ export function RunView({ initial }: { initial: RunSnapshot }) {
               />
             ) : null}
 
+            {tab === 'Map' ? <MapTab artifacts={mapArtifacts} /> : null}
+
             {tab === 'Changes' ? (
               run.changedFiles.length === 0 ? (
                 <p className="empty-state">No file changes recorded.</p>
@@ -218,7 +229,7 @@ export function RunView({ initial }: { initial: RunSnapshot }) {
                             </span>
                           ) : null}
                         </td>
-                        <td className={`px-2 py-1.5 ${CHANGE_TONE[file.changeType]}`}>
+                        <td className={`px-2 py-1.5 ${changeTone(file.changeType)}`}>
                           {file.changeType}
                         </td>
                         <td className="px-2 py-1.5 text-right tabular-nums text-pass">
@@ -598,6 +609,64 @@ function LogsTab({
       ) : (
         <ArtifactPanel artifacts={artifacts} />
       )}
+    </div>
+  );
+}
+
+/**
+ * The implementation map, at the size it was drawn for.
+ *
+ * The latest pass is shown; earlier ones stay in the Artifacts tab rather than
+ * being replaced, because the map taken before a change request is the record
+ * of what that request was answering.
+ */
+function MapTab({ artifacts }: { artifacts: RunSnapshot['artifacts'] }) {
+  const latest = artifacts.at(-1) ?? null;
+
+  if (!latest) {
+    return (
+      <p className="empty-state">
+        No implementation map yet. One is drawn at the end of every pass, whatever the outcome.
+      </p>
+    );
+  }
+
+  if (!latest.exists) {
+    return <p className="empty-state">The file recorded for this map is no longer on disk.</p>;
+  }
+
+  const description =
+    typeof latest.meta.description === 'string' ? latest.meta.description : latest.label;
+
+  return (
+    <div className="space-y-2.5 p-3.5">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-[11px] text-ink-faint">
+          Computed from stored run state — file changes and check outcomes, not the
+          implementer&rsquo;s summary.
+        </p>
+        <a
+          className="btn btn-sm shrink-0"
+          href={`/api/artifacts/${latest.id}/raw?download=1`}
+          download
+        >
+          Download SVG
+        </a>
+      </div>
+
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={`/api/artifacts/${latest.id}/raw`}
+        alt={description}
+        className="w-full rounded border border-line"
+      />
+
+      {artifacts.length > 1 ? (
+        <p className="text-[11px] text-ink-faint">
+          Pass {artifacts.length}. The earlier {artifacts.length === 2 ? 'map is' : 'maps are'} in
+          the Artifacts tab.
+        </p>
+      ) : null}
     </div>
   );
 }
