@@ -66,6 +66,7 @@ src/
 ├── transformers/  TransformerProvider + implementations + registry
 ├── reviewers/     ReviewerAgent + implementations + registry
 ├── validation/    Validator + the engine that sequences them
+├── visualisation/ the implementation map: stored run state → one SVG
 ├── orchestrator/  the state machine, prompts, execution profiles
 ├── services/      projects, runs, events, artifacts, event bus, bootstrap
 ├── components/    client components: run view, scorecard, diff, feed, forms

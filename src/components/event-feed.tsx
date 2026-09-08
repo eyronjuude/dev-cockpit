@@ -37,6 +37,7 @@ const ICON: Partial<Record<EventType, string>> = {
   'validation.result': '◇',
   'validation.completed': '◆',
   'artifact.created': '📎',
+  'visualisation.skipped': '·',
   'review.started': '⌕',
   'review.finding': '⚑',
   'review.completed': '⌕',

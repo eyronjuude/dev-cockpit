@@ -193,6 +193,7 @@ data/
     ├── specification.md          transformer output
     ├── changes.diff              git diff, verbatim
     ├── changed-files.json
+    ├── visualisation/implementation-map-N.svg
     ├── agent/<iterationId>.stream.jsonl   raw Claude Code stream
     ├── summaries/iteration-N.md
     ├── validation/attempt-N-<kind>.log
@@ -205,6 +206,40 @@ enough to open with any SQLite client, which is the point — this is your data.
 
 Artifacts are first-class records with their own browser in the UI. You should
 never need to read an agent transcript to find out what happened.
+
+## The implementation map
+
+Every run produces one, on the **Map** tab of the run screen: a single SVG
+showing what the run did.
+
+```
+Pipeline      Request → Specification → Worktree → Implementation
+              → Changes → Validation → Review → Verdict, each with the
+              state it actually reached
+Checks        one cell per validation kind, with its outcome and duration
+Change map    every changed file, grouped by directory, bar width = churn,
+              split green/red by additions and deletions
+Findings      review severities, tallied
+```
+
+Three things are deliberate about it:
+
+- **It is computed, not narrated.** Every value is read back out of stored run
+  state — iterations, recorded file changes, exit codes, findings, the event
+  log. No model is asked anything, so the map cannot disagree with the diff, and
+  it costs nothing to produce. Same rule as the scorecard: the implementer's
+  summary is not consulted.
+- **Every run gets one, including the ones that went wrong.** A run that failed
+  in preparation still produces a map; it shows the pipeline stopping at
+  `Worktree`, which is exactly the question a failed run raises. `skipped`, `no
+  change` and `not run` are three different words on it, and none of them is
+  `failed`.
+- **It is written down as well as drawn.** The whole map is also a paragraph of
+  plain text in the SVG's `<desc>`, reused as the image's alt text — so it reads
+  to a screen reader, and `grep` finds it on disk.
+
+A change request draws a second map rather than overwriting the first, so the
+picture taken before the request survives next to the one taken after it.
 
 ## Who does what
 
@@ -258,6 +293,12 @@ Two honest caveats:
   stdout captured; its HTML report is not yet registered as an artifact.
 - **`developmentCommand` is recorded but never started.** There is no preview
   server, so `previewUrl` on an artifact is always null in V1.
+- **The implementation map is a snapshot, not a live view.** It is drawn when a
+  pass finishes, so a run you approve afterwards still shows the verdict the
+  orchestrator reached — `Ready for review`, not `Approved`. The timestamp in
+  its footer says when it was taken. It also caps the change map at 40 file
+  rows and counts the rest, so a very large run is summarised rather than
+  drawn in full.
 - **Only the `claude-cli` providers have actually executed.** `codex-cli`,
   `openai-api` and `anthropic-api` are implemented against current published
   interfaces, but no OpenAI key, no Anthropic key and no installed Codex CLI
@@ -301,7 +342,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), and
 ```bash
 npm run typecheck      # tsc --noEmit
 npm run lint           # eslint
-npm run test           # vitest — 111 tests
+npm run test           # vitest
 npm run build          # next build
 npm run db:generate    # regenerate SQL migrations after a schema change
 ```

@@ -15,6 +15,7 @@ import { runCommand } from '@/process/spawn';
 import { getReviewer } from '@/reviewers/registry';
 import { register, writeTextArtifact } from '@/services/artifacts';
 import { appendEvent } from '@/services/events';
+import { tryRecordImplementationMap } from '@/services/implementation-map';
 import { requireProject, type ProjectView } from '@/services/projects';
 import {
   assessReadiness,
@@ -230,6 +231,11 @@ async function execute(runId: string, signal: AbortSignal, mode: ExecuteMode): P
     } catch {
       // Already terminal; the event above is the record.
     }
+  } finally {
+    // Every run gets a map, including the ones that failed or were cancelled:
+    // "where did this stop?" is exactly the question a failed run raises. Drawn
+    // last so it reflects the final status rather than a status in flight.
+    await tryRecordImplementationMap(runId);
   }
 }
 

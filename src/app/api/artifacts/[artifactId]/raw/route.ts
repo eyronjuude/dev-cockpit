@@ -35,16 +35,25 @@ export async function GET(request: Request, { params }: Params) {
   const nodeStream = fs.createReadStream(artifact.filePath);
   const body = Readable.toWeb(nodeStream) as WebReadableStream<Uint8Array>;
 
-  return new Response(body as unknown as ReadableStream, {
-    headers: {
-      'Content-Type': artifact.mimeType,
-      'Content-Length': String(stat.size),
-      'Content-Disposition': `${inline && !download ? 'inline' : 'attachment'}; filename="${encodeURIComponent(
-        artifact.fileName,
-      )}"`,
-      // Artifacts are immutable once written.
-      'Cache-Control': 'private, max-age=31536000, immutable',
-      'X-Content-Type-Options': 'nosniff',
-    },
-  });
+  const headers: Record<string, string> = {
+    'Content-Type': artifact.mimeType,
+    'Content-Length': String(stat.size),
+    'Content-Disposition': `${inline && !download ? 'inline' : 'attachment'}; filename="${encodeURIComponent(
+      artifact.fileName,
+    )}"`,
+    // Artifacts are immutable once written.
+    'Cache-Control': 'private, max-age=31536000, immutable',
+    'X-Content-Type-Options': 'nosniff',
+  };
+
+  // An SVG served inline becomes a *document* when navigated to directly, and a
+  // document can run script in this application's own origin. The only SVGs the
+  // app produces are its own implementation maps, with every value escaped, so
+  // this is defence in depth rather than a known hole. Scoped to SVG because
+  // sandboxing a PDF would break the browser's own viewer.
+  if (artifact.mimeType === 'image/svg+xml') {
+    headers['Content-Security-Policy'] = 'sandbox';
+  }
+
+  return new Response(body as unknown as ReadableStream, { headers });
 }
