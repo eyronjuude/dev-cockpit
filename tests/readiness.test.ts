@@ -118,6 +118,83 @@ describe('persistence', () => {
     expect(run.spec).toBeNull();
   });
 
+  it('creates a build run by default, so nothing changes for a request that says nothing', async () => {
+    const project = await makeProject('persist-mode-default');
+    const run = runs.createRun({ projectId: project.id, request: 'Add a health endpoint.' });
+
+    expect(run.mode).toBe('build');
+    expect(run.resolvedMode).toBe('build');
+  });
+
+  it('records the requested mode and the mode it resolved to', async () => {
+    const project = await makeProject('persist-mode-plan');
+    const run = runs.createRun({
+      projectId: project.id,
+      request: 'Add a health endpoint.',
+      mode: 'plan',
+    });
+
+    // The request names a change, but an explicit choice is not second-guessed.
+    expect(run.mode).toBe('plan');
+    expect(run.resolvedMode).toBe('plan');
+  });
+
+  it('resolves auto at creation and records the reason as an event', async () => {
+    const events = await import('@/services/events');
+    const project = await makeProject('persist-mode-auto');
+    const run = runs.createRun({
+      projectId: project.id,
+      request: 'Write me an implementation plan for adding OAuth.',
+      mode: 'auto',
+    });
+
+    expect(run.mode).toBe('auto');
+    expect(run.resolvedMode).toBe('plan');
+
+    const selected = events.listEvents(run.id).find((e) => e.type === 'run.mode_selected');
+    expect(selected?.message).toContain('Auto chose Plan mode');
+    expect(selected?.payload).toMatchObject({ requested: 'auto', resolved: 'plan' });
+  });
+
+  it('does not announce a mode nobody chose', async () => {
+    const events = await import('@/services/events');
+    const project = await makeProject('persist-mode-explicit');
+    const run = runs.createRun({
+      projectId: project.id,
+      request: 'Fix the empty password crash.',
+      mode: 'build',
+    });
+
+    const types = events.listEvents(run.id).map((e) => e.type);
+    expect(types).not.toContain('run.mode_selected');
+    expect(events.listEvents(run.id)[0]?.message).toContain('Build mode');
+  });
+
+  it('switches the executing mode without rewriting what was asked for', async () => {
+    const events = await import('@/services/events');
+    const project = await makeProject('persist-mode-switch');
+    const run = runs.createRun({
+      projectId: project.id,
+      request: 'Plan how to add OAuth.',
+      mode: 'plan',
+    });
+
+    runs.switchRunMode(run.id, 'build', 'requested with the change');
+
+    const after = runs.requireRun(run.id);
+    expect(after.mode).toBe('plan');
+    expect(after.resolvedMode).toBe('build');
+
+    const switched = events.listEvents(run.id).find((e) => e.type === 'run.mode_switched');
+    expect(switched?.payload).toMatchObject({ from: 'plan', to: 'build' });
+
+    // Switching to the mode already in effect is a no-op, not a second event.
+    runs.switchRunMode(run.id, 'build', 'again');
+    expect(
+      events.listEvents(run.id).filter((e) => e.type === 'run.mode_switched'),
+    ).toHaveLength(1);
+  });
+
   it('records provider choices per run so a settings change cannot rewrite history', async () => {
     const project = await makeProject('persist-providers');
     const run = runs.createRun({
@@ -488,6 +565,182 @@ describe('assessReadiness', () => {
     ]);
 
     expect(runs.assessReadiness(runs.requireRun(run.id), withCommand).ready).toBe(true);
+  });
+});
+
+describe('assessReadiness in the read-only modes', () => {
+  /** A finished iteration, with the deliverable as its closing message. */
+  function seedPlan(
+    runId: string,
+    plan: string | null,
+    status: import('@/domain/types').IterationStatus = 'completed',
+  ) {
+    const iteration = runs.createIteration({
+      runId,
+      kind: 'initial',
+      prompt: 'plan it',
+      sessionId: null,
+      resumed: false,
+    });
+    runs.finishIteration(iteration.id, { status, finalText: plan });
+    return iteration;
+  }
+
+  async function planRun(name: string, mode: 'plan' | 'ask' = 'plan') {
+    const project = await makeProject(name);
+    projectsService.upsertValidationCommand(project.id, { kind: 'unit', command: 'npm test' });
+    const withCommand = projectsService.requireProject(project.id);
+    const run = runs.createRun({
+      projectId: project.id,
+      request: mode === 'ask' ? 'How does OAuth work here?' : 'Plan how to add OAuth.',
+      mode,
+    });
+    return { project: withCommand, run };
+  }
+
+  it('is ready on a written plan, with no validation at all', async () => {
+    const { project, run } = await planRun('ready-plan-written');
+    expect(project.requireValidation).toBe(true);
+    seedPlan(run.id, '## Steps\n1. Add the route.');
+
+    const assessment = runs.assessReadiness(runs.requireRun(run.id), project);
+    expect(assessment.mode).toBe('plan');
+    expect(assessment.reasons).toEqual([]);
+    expect(assessment.ready).toBe(true);
+  });
+
+  it('does not demand a diff, which is the whole point of the mode', async () => {
+    const { project, run } = await planRun('ready-plan-nodiff');
+    seedPlan(run.id, 'A plan.');
+
+    const assessment = runs.assessReadiness(runs.requireRun(run.id), project);
+    expect(assessment.reasons).not.toContain('No files changed');
+    expect(assessment.ready).toBe(true);
+  });
+
+  it('blocks when the planner has not run', async () => {
+    const { project, run } = await planRun('ready-plan-norun');
+
+    const assessment = runs.assessReadiness(runs.requireRun(run.id), project);
+    expect(assessment.ready).toBe(false);
+    expect(assessment.reasons).toContain('The planner has not run yet');
+  });
+
+  it('blocks when the planner produced nothing', async () => {
+    const { project, run } = await planRun('ready-plan-empty');
+    seedPlan(run.id, '   ');
+
+    const assessment = runs.assessReadiness(runs.requireRun(run.id), project);
+    expect(assessment.ready).toBe(false);
+    expect(assessment.reasons).toContain('No plan was produced');
+  });
+
+  it('blocks while the planner is still working', async () => {
+    const { project, run } = await planRun('ready-plan-running');
+    runs.createIteration({
+      runId: run.id,
+      kind: 'initial',
+      prompt: 'plan it',
+      sessionId: null,
+      resumed: false,
+    });
+
+    const assessment = runs.assessReadiness(runs.requireRun(run.id), project);
+    expect(assessment.ready).toBe(false);
+    expect(assessment.reasons).toContain('The planner is still working');
+  });
+
+  it('blocks when a plan run changed a file, because that is the broken promise', async () => {
+    const { project, run } = await planRun('ready-plan-touched');
+    seedPlan(run.id, 'A plan.');
+    runs.replaceChangedFiles(run.id, [
+      {
+        path: 'src/app.ts',
+        previousPath: null,
+        changeType: 'modified',
+        additions: 4,
+        deletions: 1,
+        binary: false,
+      },
+    ]);
+
+    const assessment = runs.assessReadiness(runs.requireRun(run.id), project);
+    expect(assessment.ready).toBe(false);
+    expect(assessment.reasons.some((r) => r.includes('changed 1 file'))).toBe(true);
+  });
+
+  it('does not accept partial output from an iteration that failed', async () => {
+    // The agent emitted something and then died. Partial text presented as a
+    // finished plan is the same class of mistake as a green badge on an
+    // unrun test.
+    const { project, run } = await planRun('ready-plan-failed');
+    seedPlan(run.id, '## Steps\n1. Add the rou', 'failed');
+
+    const assessment = runs.assessReadiness(runs.requireRun(run.id), project);
+    expect(assessment.ready).toBe(false);
+    expect(assessment.reasons.some((r) => r.includes('failed'))).toBe(true);
+    expect(assessment.reasons.some((r) => r.includes('unfinished'))).toBe(true);
+  });
+
+  it('does not accept partial output from an iteration that was cancelled', async () => {
+    const { project, run } = await planRun('ready-plan-cancelled');
+    seedPlan(run.id, '## Steps\n1. Add the rou', 'cancelled');
+
+    const assessment = runs.assessReadiness(runs.requireRun(run.id), project);
+    expect(assessment.ready).toBe(false);
+    expect(assessment.reasons.some((r) => r.includes('was cancelled'))).toBe(true);
+  });
+
+  it('is ready on a written answer in ask mode', async () => {
+    const { project, run } = await planRun('ready-ask-answered', 'ask');
+    expect(runs.requireRun(run.id).resolvedMode).toBe('ask');
+    seedPlan(run.id, 'Sessions expire in `src/auth/session.ts:42`.');
+
+    const assessment = runs.assessReadiness(runs.requireRun(run.id), project);
+    expect(assessment.mode).toBe('ask');
+    expect(assessment.reasons).toEqual([]);
+    expect(assessment.ready).toBe(true);
+  });
+
+  it('names the answer, not a plan, when an ask run produced nothing', async () => {
+    const { project, run } = await planRun('ready-ask-empty', 'ask');
+    seedPlan(run.id, '');
+
+    const assessment = runs.assessReadiness(runs.requireRun(run.id), project);
+    expect(assessment.ready).toBe(false);
+    expect(assessment.reasons).toContain('No answer was produced');
+  });
+
+  it('blocks when an ask run changed a file', async () => {
+    const { project, run } = await planRun('ready-ask-touched', 'ask');
+    seedPlan(run.id, 'An answer.');
+    runs.replaceChangedFiles(run.id, [
+      {
+        path: 'src/app.ts',
+        previousPath: null,
+        changeType: 'modified',
+        additions: 1,
+        deletions: 0,
+        binary: false,
+      },
+    ]);
+
+    const assessment = runs.assessReadiness(runs.requireRun(run.id), project);
+    expect(assessment.ready).toBe(false);
+    expect(assessment.reasons.some((r) => r.includes('Ask mode changed 1 file'))).toBe(true);
+  });
+
+  it('judges a switched run by the mode it is now in', async () => {
+    const { project, run } = await planRun('ready-plan-switched');
+    seedPlan(run.id, 'A plan.');
+    expect(runs.assessReadiness(runs.requireRun(run.id), project).ready).toBe(true);
+
+    // Once it is a build run, the plan is no longer sufficient evidence.
+    runs.switchRunMode(run.id, 'build', 'requested with the change');
+    const after = runs.assessReadiness(runs.requireRun(run.id), project);
+    expect(after.mode).toBe('build');
+    expect(after.ready).toBe(false);
+    expect(after.reasons).toContain('No files changed');
   });
 });
 

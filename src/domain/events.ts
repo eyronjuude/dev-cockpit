@@ -1,3 +1,4 @@
+import type { ResolvedWorkMode, WorkMode } from './modes';
 import type {
   ArtifactKind,
   ChangeType,
@@ -16,6 +17,8 @@ import type {
 export const EVENT_TYPES = [
   'run.created',
   'run.status_changed',
+  'run.mode_selected',
+  'run.mode_switched',
 
   'transform.started',
   'transform.completed',
@@ -42,6 +45,7 @@ export const EVENT_TYPES = [
   'validation.started',
   'validation.result',
   'validation.completed',
+  'validation.skipped',
 
   'artifact.created',
 
@@ -79,8 +83,21 @@ export type EventLevel = (typeof EVENT_LEVELS)[number];
  * ------------------------------------------------------------------ */
 
 export interface EventPayloads {
-  'run.created': { title: string; request: string; profile: string };
+  'run.created': {
+    title: string;
+    request: string;
+    profile: string;
+    mode: WorkMode;
+    resolvedMode: ResolvedWorkMode;
+  };
   'run.status_changed': { from: RunStatus; to: RunStatus; reason?: string };
+  /** Recorded when Auto chose the mode, so the choice and its reason survive. */
+  'run.mode_selected': {
+    requested: WorkMode;
+    resolved: ResolvedWorkMode;
+    reason: string;
+  };
+  'run.mode_switched': { from: ResolvedWorkMode; to: ResolvedWorkMode; reason: string };
 
   'transform.started': { provider: string };
   'transform.completed': { provider: string; specLength: number; durationMs: number };
@@ -152,6 +169,8 @@ export interface EventPayloads {
     notConfigured: number;
     blocking: boolean;
   };
+  /** The whole validation phase did not run. A read-only mode is the reason. */
+  'validation.skipped': { reason: string };
 
   'artifact.created': { artifactId: string; kind: ArtifactKind; label: string; bytes: number };
 
@@ -214,6 +233,8 @@ export interface NewRunEvent<T extends EventType = EventType> {
 export const PROGRESS_EVENT_TYPES: readonly EventType[] = [
   'run.created',
   'run.status_changed',
+  'run.mode_selected',
+  'run.mode_switched',
   'transform.completed',
   'transform.skipped',
   'transform.failed',
@@ -229,6 +250,7 @@ export const PROGRESS_EVENT_TYPES: readonly EventType[] = [
   'validation.started',
   'validation.result',
   'validation.completed',
+  'validation.skipped',
   'review.started',
   'review.finding',
   'review.completed',

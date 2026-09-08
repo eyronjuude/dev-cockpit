@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { assertLocalRequest, handle, readJson } from '@/app/api/_lib/handler';
+import { DEFAULT_WORK_MODE, workModeSchema } from '@/domain/modes';
 import { executionProfileSchema, runStatusSchema } from '@/domain/types';
 import { startRun } from '@/orchestrator/orchestrator';
 import { createRun, listRuns } from '@/services/runs';
@@ -30,6 +31,7 @@ const createSchema = z.object({
   request: z.string().trim().min(1).max(20_000),
   title: z.string().trim().max(200).optional(),
   profile: executionProfileSchema.optional(),
+  mode: workModeSchema.optional(),
   transformer: z.string().max(60).optional(),
   reviewer: z.string().max(60).optional(),
   baseRef: z.string().max(200).optional(),
@@ -54,6 +56,7 @@ export function POST(request: Request) {
       request: input.request,
       title: input.title,
       profile: input.profile ?? 'standard',
+      mode: input.mode ?? DEFAULT_WORK_MODE,
       transformer: input.transformer,
       reviewer: input.reviewer,
       baseRef: input.baseRef,
@@ -63,6 +66,14 @@ export function POST(request: Request) {
       startRun(run.id);
     }
 
-    return { run: { id: run.id, status: run.status, title: run.title } };
+    return {
+      run: {
+        id: run.id,
+        status: run.status,
+        title: run.title,
+        mode: run.mode,
+        resolvedMode: run.resolvedMode,
+      },
+    };
   });
 }

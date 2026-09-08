@@ -130,6 +130,20 @@ export const runs = sqliteTable(
     statusReason: text('status_reason'),
     profile: text('profile').notNull().default('standard'),
 
+    /**
+     * Working mode as the user chose it: `plan`, `build` or `auto`. Kept
+     * unchanged for the life of the run, so what was asked for stays readable
+     * after a mode switch.
+     */
+    mode: text('mode').notNull().default('build'),
+    /**
+     * The mode the run is executing in — `plan` or `build`, never `auto`.
+     * Written when the run is created and again if the mode is switched
+     * mid-run. Null only on rows written before modes existed, which are read
+     * as `build`.
+     */
+    resolvedMode: text('resolved_mode'),
+
     /* Git */
     baseBranch: text('base_branch'),
     baseCommit: text('base_commit'),

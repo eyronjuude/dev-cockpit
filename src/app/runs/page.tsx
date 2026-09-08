@@ -1,6 +1,7 @@
 import Link from 'next/link';
 
 import { formatRelative, RunStatusBadge } from '@/components/status';
+import { effectiveWorkMode, WORK_MODE_LABELS } from '@/domain/modes';
 import { listProjects } from '@/services/projects';
 import { listRuns } from '@/services/runs';
 
@@ -71,7 +72,9 @@ export default function RunsPage() {
                         {run.title}
                       </span>
                       <code className="mono text-ink-faint">
-                        {run.branch ?? run.id} · {run.profile}
+                        {run.branch ?? run.id} ·{' '}
+                        {WORK_MODE_LABELS[effectiveWorkMode(run)].toLowerCase()}
+                        {run.mode === 'auto' ? ' (auto)' : ''} · {run.profile}
                       </code>
                     </Link>
                   </td>

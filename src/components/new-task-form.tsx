@@ -4,6 +4,16 @@ import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 
 import {
+  DEFAULT_WORK_MODE,
+  isReadOnlyMode,
+  resolveWorkMode,
+  WORK_MODE_DESCRIPTIONS,
+  WORK_MODE_LABELS,
+  WORK_MODE_WORDING,
+  WORK_MODES,
+  type WorkMode,
+} from '@/domain/modes';
+import {
   permissionModeAllowsCommands,
   VALIDATION_KIND_LABELS,
   type ExecutionProfileName,
@@ -19,12 +29,26 @@ export interface ProviderOption {
   detail: string;
 }
 
+/** The one-line consequence of each mode, under its description. */
+const MODE_FOOTNOTES: Record<WorkMode, string> = {
+  ask: 'read-only · no checks',
+  plan: 'read-only · no checks',
+  build: 'edits files · checks run',
+  auto: 'decided from the request',
+};
+
 /**
  * New task.
  *
  * The request field is the main event. Provider selection defaults to what is
  * actually available on this machine, and an unavailable provider is shown
  * with the reason rather than hidden, so nothing silently does nothing.
+ *
+ * Two independent choices sit under it, and keeping them separate is the
+ * point: the working mode decides *what* the run produces, the execution
+ * profile decides *how much effort* it spends. Auto shows the mode it would
+ * pick, and why, before anything is created — a guess the user can see is a
+ * guess the user can correct.
  */
 export function NewTaskForm({
   project,
@@ -49,6 +73,7 @@ export function NewTaskForm({
 
   const [projectId, setProjectId] = useState(project.id);
   const [request, setRequest] = useState('');
+  const [mode, setMode] = useState<WorkMode>(DEFAULT_WORK_MODE);
   const [profile, setProfile] = useState<ExecutionProfileName>('standard');
   const [transformer, setTransformer] = useState(defaultTransformer);
   const [reviewer, setReviewer] = useState(defaultReviewer);
@@ -66,6 +91,13 @@ export function NewTaskForm({
   );
   const selectedProfile = profiles.find((p) => p.id === profile) ?? profiles[1] ?? profiles[0]!;
 
+  // Recomputed as the request is typed, using the same pure function the
+  // server uses when the run is created, so the preview cannot disagree with
+  // what actually happens.
+  const resolution = resolveWorkMode(mode, request);
+  const readOnly = isReadOnlyMode(resolution.mode);
+  const wording = WORK_MODE_WORDING[resolution.mode];
+
   const submit = async () => {
     setSubmitting(true);
     setError(null);
@@ -76,6 +108,7 @@ export function NewTaskForm({
         body: JSON.stringify({
           projectId,
           request,
+          mode,
           profile,
           transformer,
           reviewer,
@@ -149,7 +182,9 @@ export function NewTaskForm({
 
       <div className="panel">
         <div className="panel-head">
-          <h2 className="panel-title">Development request</h2>
+          <h2 className="panel-title">
+            {resolution.mode === 'ask' ? 'Question' : 'Development request'}
+          </h2>
           {projects.length > 1 ? (
             <select
               className="select max-w-52"
@@ -178,20 +213,71 @@ export function NewTaskForm({
             autoFocus
             value={request}
             placeholder={
-              'Describe what you want built or fixed.\n\nThe login form accepts an empty password and returns 500. It should reject it with a 400 and a field-level error, and there should be a test for it.'
+              resolution.mode === 'ask'
+                ? 'Ask something about this codebase.\n\nHow does session expiry work, and where is the cookie actually set?'
+                : resolution.mode === 'plan'
+                  ? 'Describe what you want planned.\n\nWe need to move password reset off the email queue. Plan how, in steps small enough to review one at a time.'
+                  : 'Describe what you want built or fixed.\n\nThe login form accepts an empty password and returns 500. It should reject it with a 400 and a field-level error, and there should be a test for it.'
             }
             onChange={(e) => setRequest(e.target.value)}
           />
           <p className="hint">
             Plain language is fine. This text is stored verbatim and, if a transformer is
-            selected, expanded into a specification before the implementer sees it.
+            selected, expanded into a specification before the agent sees it.
           </p>
         </div>
       </div>
 
       <div className="panel">
         <div className="panel-head">
+          <h2 className="panel-title">Working mode</h2>
+          <span className="text-[11px] text-ink-faint">what this run produces</span>
+        </div>
+        <div className="grid gap-2 p-3.5 sm:grid-cols-2 lg:grid-cols-4">
+          {WORK_MODES.map((option) => {
+            const active = option === mode;
+            return (
+              <button
+                key={option}
+                type="button"
+                onClick={() => setMode(option)}
+                aria-pressed={active}
+                className={`rounded border p-2.5 text-left transition-colors ${
+                  active
+                    ? 'border-accent bg-accent-soft'
+                    : 'border-line-strong bg-surface-raised hover:bg-surface-hover'
+                }`}
+              >
+                <span className="block text-[12.5px] font-semibold">
+                  {WORK_MODE_LABELS[option]}
+                </span>
+                <span className="mt-0.5 block text-[11.5px] leading-snug text-ink-muted">
+                  {WORK_MODE_DESCRIPTIONS[option]}
+                </span>
+                <span className="mt-1.5 block text-[10.5px] text-ink-faint">
+                  {MODE_FOOTNOTES[option]}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        {mode === 'auto' ? (
+          <p className="border-t border-line px-3.5 py-2 text-[12px] text-ink-muted">
+            <span className="font-semibold text-accent">
+              Auto → {WORK_MODE_LABELS[resolution.mode]}
+            </span>{' '}
+            — {resolution.reason}.{' '}
+            {request.trim().length === 0
+              ? 'Recomputed as you type; pick a mode to decide it yourself.'
+              : 'Pick a mode to decide it yourself.'}
+          </p>
+        ) : null}
+      </div>
+
+      <div className="panel">
+        <div className="panel-head">
           <h2 className="panel-title">Execution profile</h2>
+          <span className="text-[11px] text-ink-faint">how much effort it spends</span>
         </div>
         <div className="grid gap-2 p-3.5 sm:grid-cols-3">
           {profiles.map((option) => {
@@ -213,12 +299,19 @@ export function NewTaskForm({
                   {option.description}
                 </span>
                 <span className="mt-1.5 block text-[10.5px] text-ink-faint">
-                  effort {option.agentEffort} · reviewer {option.runReviewer ? 'on' : 'off'}
+                  effort {option.agentEffort}
+                  {readOnly ? '' : ` · reviewer ${option.runReviewer ? 'on' : 'off'}`}
                 </span>
               </button>
             );
           })}
         </div>
+        {readOnly ? (
+          <p className="border-t border-line px-3.5 py-2 text-[12px] text-ink-muted">
+            In {WORK_MODE_LABELS[resolution.mode]} mode the profile sets effort and the time cap
+            only. No checks and no review run either way.
+          </p>
+        ) : null}
       </div>
 
       <div className="panel">
@@ -226,6 +319,10 @@ export function NewTaskForm({
           <h2 className="panel-title">What will run</h2>
         </div>
         <div className="space-y-2 px-3.5 py-3 text-[12.5px]">
+          <Row label="Mode">
+            {WORK_MODE_LABELS[resolution.mode]}
+            {resolution.automatic ? ` — chosen by Auto because ${resolution.reason}.` : '.'}
+          </Row>
           <Row label="Isolation">
             A new Git worktree on its own branch, from{' '}
             <code className="mono">{effectiveBase}</code>
@@ -235,15 +332,32 @@ export function NewTaskForm({
             . Your checkout is not touched.
             {repoState.dirty ? ' Uncommitted work there is left alone.' : ''}
           </Row>
-          <Row label="Implementer">
+          <Row label={readOnly ? 'Agent' : 'Implementer'}>
             Claude Code, in that worktree, with permission mode{' '}
-            <code className="mono">{project.effectivePermissionMode}</code>
-            {permissionModeAllowsCommands(project.effectivePermissionMode)
-              ? ' — it can run your checks itself.'
-              : ' — shell commands are refused, so it works blind.'}
+            {readOnly ? (
+              <>
+                <code className="mono">plan</code>, which refuses every edit.
+              </>
+            ) : (
+              <>
+                <code className="mono">{project.effectivePermissionMode}</code>
+                {permissionModeAllowsCommands(project.effectivePermissionMode)
+                  ? ' — it can run your checks itself.'
+                  : ' — shell commands are refused, so it works blind.'}
+              </>
+            )}
+          </Row>
+          <Row label="Deliverable">
+            {resolution.mode === 'ask'
+              ? 'A written answer, stored as an artifact and shown on the run screen. No files change.'
+              : resolution.mode === 'plan'
+                ? 'A written plan, stored as an artifact and shown on the run screen. No files change.'
+                : 'A diff on the run branch, plus the recorded result of every check.'}
           </Row>
           <Row label="Validation">
-            {configured.length === 0 ? (
+            {readOnly ? (
+              'None — nothing changes, so there is nothing to check.'
+            ) : configured.length === 0 ? (
               <span className="text-warn">
                 Nothing configured — no checks will run.{' '}
                 <a href={`/projects/${project.id}`} className="underline">
@@ -259,14 +373,17 @@ export function NewTaskForm({
             )}
           </Row>
           <Row label="Review">
-            {reviewer === 'none'
-              ? 'None — findings are optional and off.'
-              : selectedProfile.runReviewer
-                ? `${reviewers.find((r) => r.id === reviewer)?.label ?? reviewer}, read-only.`
-                : `Configured, but the ${selectedProfile.label} profile skips it.`}
+            {readOnly
+              ? `None — there is no diff to review. You read the ${wording.deliverable}.`
+              : reviewer === 'none'
+                ? 'None — findings are optional and off.'
+                : selectedProfile.runReviewer
+                  ? `${reviewers.find((r) => r.id === reviewer)?.label ?? reviewer}, read-only.`
+                  : `Configured, but the ${selectedProfile.label} profile skips it.`}
           </Row>
           <Row label="Approval">
             Yours. Nothing is merged or pushed automatically.
+            {readOnly ? ' This run can be switched to Build later without losing its session.' : ''}
           </Row>
         </div>
       </div>
@@ -344,7 +461,11 @@ export function NewTaskForm({
 
       <div className="flex items-center justify-end gap-2">
         <span className="text-[11.5px] text-ink-faint">
-          {request.trim().length === 0 ? 'Describe the task to continue' : ''}
+          {request.trim().length === 0
+            ? resolution.mode === 'ask'
+              ? 'Type a question to continue'
+              : 'Describe the task to continue'
+            : ''}
         </span>
         <button
           type="button"
@@ -352,7 +473,13 @@ export function NewTaskForm({
           disabled={submitting || request.trim().length === 0}
           onClick={() => void submit()}
         >
-          {submitting ? 'Starting…' : 'Start implementation'}
+          {submitting
+            ? 'Starting…'
+            : resolution.mode === 'ask'
+              ? 'Ask'
+              : resolution.mode === 'plan'
+                ? 'Start planning'
+                : 'Start implementation'}
         </button>
       </div>
     </div>

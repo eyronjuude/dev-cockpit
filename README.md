@@ -109,14 +109,72 @@ Nothing is mandatory except the repository path and a name.
 
 ## Start a task
 
-**Projects → New task**, describe what you want, pick a profile, press **Start
-implementation**.
+**Projects → New task**, describe what you want, pick a mode and a profile,
+press **Start**.
+
+Two independent choices. The **mode** decides what the run produces; the
+**profile** decides how much effort it spends producing it.
+
+### Working modes
+
+| Mode | Produces | Edits files | Validation | Reviewer |
+| --- | --- | --- | --- | --- |
+| Ask | a written answer | **no** — permission mode forced to `plan` | not run | not run |
+| Plan | a written plan | **no** — permission mode forced to `plan` | not run | not run |
+| **Build** (default) | a diff plus check results | yes | as configured | as configured |
+| Auto | resolves to one of the above three | — | — | — |
+
+Ask and Plan read the repository and write nothing. The closing message *is*
+the deliverable: it is stored as an artifact and shown on the run screen. No
+checks run, because nothing changed — you are the reviewer.
+
+The difference between them is what you get back. Ask leads with the answer and
+cites `file:line` for every claim about the code; it is told **not** to hand you
+a plan. Plan gives you ordered steps, what would prove them, and the risks.
+
+A finished Ask or Plan run offers a switch to Build — **Implement this plan**,
+or **Switch to Build** from an answer — which resumes the same Claude Code
+session, so the reading behind it is not thrown away.
+
+Auto decides in two steps. First, is this read-only? Yes if the request forbids
+code changes, or names a plan as its deliverable, or — with no change verb
+anywhere — asks a question or asks for a judgement. Then, which read-only mode:
+**Ask** when the request asks about code that already exists, **Plan** when it
+asks what to do next. Otherwise **Build**.
+
+The ordering is what makes it work:
+
+| Request | Mode | Because |
+| --- | --- | --- |
+| *"Plan how to fix the login bug"* | Plan | a stated deliverable beats a change verb |
+| *"Explain why login 500s and fix it"* | Build | a change verb beats a question |
+| *"What's the best way to model this?"* | Plan | a request for judgement beats a bare question |
+| *"How does session expiry work?"* | Ask | a question with no change named |
+| *"Continue where we left off"* | Build | the default |
+
+It is a keyword rule, not a model call, so it is instant, offline and the same
+every time. The New Task screen shows the mode it would pick and why, before
+anything is created, and the reason is recorded on the run afterwards. Where it
+guesses wrong, pick the mode yourself.
+
+The mode belongs to the run, not the project: a run is one agent session, one
+worktree, one branch.
+
+These mirror three of Cursor's modes — Ask, Plan and Agent (here called Build).
+Cursor's Manual mode is deliberately not mirrored: it exists for editing what
+your cursor is pointing at, and there is no cursor here. See
+[ADR 0010](docs/adr/0010-working-modes.md), including the caveat that the
+mapping was written without access to Cursor's documentation.
+
+### Execution profiles
 
 | Profile | Implementation | Validation | Reviewer |
 | --- | --- | --- | --- |
 | Quick | effort `medium`, 15m cap | commands enabled for `quick` | skipped |
 | **Standard** (default) | effort `high`, 45m cap | all configured commands | on, if selected |
 | Deep | effort `xhigh`, 90m cap | all configured commands | on, if selected |
+
+In Ask and Plan mode a profile sets effort and the time cap only.
 
 The **What will run** panel on that page states exactly what is about to happen
 before you commit to it.
@@ -204,7 +262,9 @@ data/
     ├── changes.diff              git diff, verbatim
     ├── changed-files.json
     ├── agent/<iterationId>.stream.jsonl   raw Claude Code stream
-    ├── summaries/iteration-N.md
+    ├── answers/iteration-N.md        ask runs only
+    ├── plans/iteration-N.md          plan runs only
+    ├── summaries/iteration-N.md      build runs only
     ├── validation/attempt-N-<kind>.log
     ├── validation/attempt-N-report.md
     └── review/attempt-N.md
@@ -305,6 +365,27 @@ Two honest caveats:
 - **The transformer can rename a run.** It sets the run title from its own
   suggestion, which is usually an improvement but does mean the title is not
   always your words. The request itself is never altered.
+- **The read-only modes' permission handling has not been exercised against a
+  live CLI.** The wiring is deliberate — `--permission-mode plan` alongside the
+  existing `--permission-prompts none`, so anything that would ask to leave
+  plan mode is denied rather than left hanging — but it has not been run
+  end to end. Verify it on a throwaway question before trusting it with one
+  that matters, and check the run's Changes tab is empty. Readiness blocks a
+  read-only run that changed a file, so a failure here is reported rather than
+  silent.
+- **Auto mode is a keyword rule and will misread some requests.** It is off by
+  default for that reason, it shows what it picked and why before the run
+  starts, and a run can be switched afterwards without losing its session. The
+  rule is in `src/domain/modes.ts` and is the whole of it — there is no model
+  behind it.
+- **An Ask or Plan run still goes through a transformer, if one is selected.**
+  The specification it produces is useful input to both, but it is written as an
+  *implementation* specification, because the transformer boundary was left
+  unchanged. The heading is wrong; the content is not misleading.
+- **The mapping onto Cursor's modes was written without access to Cursor's
+  docs.** Ask, Plan and Agent-as-Build are from the author's own knowledge of
+  the product, which moves. The modes here stand on their own; only the claim
+  about what Cursor calls them is unverified.
 
 ## Extending it
 

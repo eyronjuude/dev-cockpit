@@ -8,6 +8,12 @@ import type { AgentOutcome, AgentStreamEvent, ImplementationAgent } from '@/agen
 import { landingBranchName } from '@/core/ids';
 import { AppError, errorMessage } from '@/core/errors';
 import { runLandingDir, runWorktreeDir } from '@/core/paths';
+import {
+  effectiveWorkMode,
+  WORK_MODE_LABELS,
+  WORK_MODE_WORDING,
+  type ResolvedWorkMode,
+} from '@/domain/modes';
 import { BLOCKING_SEVERITIES, type Disposition, type RunStatus } from '@/domain/types';
 import { collectRunDiff, commitAll } from '@/git/diff';
 import { commitInfo, isDirty, refExists, resolveCommit } from '@/git/git';
@@ -39,11 +45,13 @@ import {
   setIterationSummary,
   runProviders,
   setStatus,
+  switchRunMode,
   updateRunFields,
   type RunView,
 } from '@/services/runs';
 import { getTransformer } from '@/transformers/registry';
 import { formatDuration, runValidation } from '@/validation/engine';
+import { effectivePermissionMode, getWorkMode, type WorkModeBehaviour } from './modes';
 import { buildChangeRequestPrompt, buildInitialPrompt } from './prompt';
 import { getProfile, type ExecutionProfile } from './profiles';
 
@@ -145,8 +153,23 @@ export function startRun(runId: string): void {
   });
 }
 
+export interface RequestChangesOptions {
+  /**
+   * Switch the run into this mode for the follow-up iteration.
+   *
+   * This is how a plan becomes an implementation without losing the session
+   * that produced it: the same Claude Code session is resumed, told the rules
+   * have changed, and asked to build what it just planned.
+   */
+  mode?: ResolvedWorkMode;
+}
+
 /** Continues an existing run with user feedback, resuming the agent session. */
-export function requestChanges(runId: string, feedback: string): void {
+export function requestChanges(
+  runId: string,
+  feedback: string,
+  options: RequestChangesOptions = {},
+): void {
   if (activeRuns().has(runId)) {
     throw new AppError('This run is already in progress.', { code: 'already_running' });
   }
@@ -160,11 +183,13 @@ export function requestChanges(runId: string, feedback: string): void {
     phase: 'implementing',
   });
 
-  void execute(runId, controller.signal, { kind: 'change_request', feedback: trimmed }).finally(
-    () => {
-      activeRuns().delete(runId);
-    },
-  );
+  void execute(runId, controller.signal, {
+    kind: 'change_request',
+    feedback: trimmed,
+    switchTo: options.mode ?? null,
+  }).finally(() => {
+    activeRuns().delete(runId);
+  });
 }
 
 /** Re-runs validation only, without touching the implementation. */
@@ -172,6 +197,18 @@ export function revalidate(runId: string): void {
   if (activeRuns().has(runId)) {
     throw new AppError('This run is already in progress.', { code: 'already_running' });
   }
+
+  // A read-only run has no diff, so there is nothing to validate. Saying so
+  // beats recording an attempt whose every outcome is "not configured".
+  const run = requireRun(runId);
+  const mode = effectiveWorkMode(run);
+  if (!getWorkMode(mode).runValidation) {
+    throw new AppError(
+      `${WORK_MODE_LABELS[mode]} mode changes nothing, so there is nothing to validate. Switch the run to Build mode first.`,
+      { code: 'wrong_mode' },
+    );
+  }
+
   const controller = new AbortController();
   activeRuns().set(runId, {
     controller,
@@ -238,7 +275,7 @@ export function resolveLandingConflicts(runId: string): void {
 
 type ExecuteMode =
   | { kind: 'initial' }
-  | { kind: 'change_request'; feedback: string }
+  | { kind: 'change_request'; feedback: string; switchTo: ResolvedWorkMode | null }
   | { kind: 'revalidate' };
 
 type LandingMode = { kind: 'land' } | { kind: 'resolve_conflicts' };
@@ -249,14 +286,29 @@ async function execute(runId: string, signal: AbortSignal, mode: ExecuteMode): P
   const profile = getProfile(run.profile);
 
   try {
+    // The working mode governs which phases run at all, so it is settled
+    // before the first one. A switch is applied here rather than inside a
+    // phase: the stored mode has to be true for the whole of the iteration it
+    // describes.
+    let switched = false;
+    if (mode.kind === 'change_request' && mode.switchTo) {
+      switched = mode.switchTo !== effectiveWorkMode(run);
+      if (switched) {
+        switchRunMode(runId, mode.switchTo, 'requested with the change');
+        run = requireRun(runId);
+      }
+    }
+    const workMode = getWorkMode(effectiveWorkMode(run));
+
     if (mode.kind === 'initial') {
       run = await phaseTransform(run, project, profile, signal);
       run = await phasePrepare(run, project, signal);
-      run = await phaseImplement(run, project, profile, signal, { kind: 'initial' });
+      run = await phaseImplement(run, project, profile, workMode, signal, { kind: 'initial' });
     } else if (mode.kind === 'change_request') {
-      run = await phaseImplement(run, project, profile, signal, {
+      run = await phaseImplement(run, project, profile, workMode, signal, {
         kind: 'change_request',
         feedback: mode.feedback,
+        switched,
       });
     }
 
@@ -266,15 +318,15 @@ async function execute(runId: string, signal: AbortSignal, mode: ExecuteMode): P
     }
 
     run = await phaseCollectDiff(run, signal);
-    run = await phaseValidate(run, project, profile, signal);
+    run = await phaseValidate(run, project, profile, workMode, signal);
 
     if (signal.aborted) {
       await finishCancelled(runId);
       return;
     }
 
-    run = await phaseReview(run, project, profile, signal);
-    await phaseDecide(run, project);
+    run = await phaseReview(run, project, profile, workMode, signal);
+    await phaseDecide(run, project, workMode);
   } catch (err) {
     if (signal.aborted) {
       await finishCancelled(runId);
@@ -679,12 +731,15 @@ async function phasePrepare(
  * Phase: implement
  * ------------------------------------------------------------------ */
 
-type ImplementMode = { kind: 'initial' } | { kind: 'change_request'; feedback: string };
+type ImplementMode =
+  | { kind: 'initial' }
+  | { kind: 'change_request'; feedback: string; switched: boolean };
 
 async function phaseImplement(
   run: RunView,
   project: ProjectView,
   profile: ExecutionProfile,
+  workMode: WorkModeBehaviour,
   signal: AbortSignal,
   mode: ImplementMode,
 ): Promise<RunView> {
@@ -692,8 +747,10 @@ async function phaseImplement(
     throw new AppError('This run has no worktree. Start it before requesting changes.');
   }
 
+  const wording = WORK_MODE_WORDING[workMode.id];
+
   setStatus(run.id, 'IMPLEMENTING', { started: run.startedAt === null });
-  setPhase(run.id, 'implementing');
+  setPhase(run.id, wording.activity);
 
   const agent = getAgent(run.agentProvider);
 
@@ -705,19 +762,32 @@ async function phaseImplement(
     );
   }
 
+  // Resume when a session exists, so a change request keeps context.
+  const resumeSessionId = mode.kind === 'change_request' ? run.agentSessionId : null;
+
   const prompt =
     mode.kind === 'initial'
-      ? buildInitialPrompt({ run, project, profile })
+      ? buildInitialPrompt({ run, project, profile, mode: workMode })
       : buildChangeRequestPrompt({
           run,
           project,
           feedback: mode.feedback,
           validations: latestValidationAttempt(run.id),
           findings: latestFindings(run),
+          mode: workMode,
+          modeSwitched: mode.switched,
+          resumed: resumeSessionId !== null,
+          // A resumed session already holds what it wrote. Without one the
+          // agent starts cold, so the previous iteration's output has to travel
+          // in the prompt or the follow-up asks for work from nothing.
+          priorOutput:
+            resumeSessionId === null ? (latestIteration(run.id)?.finalText ?? null) : null,
         });
 
-  // Resume when a session exists, so a change request keeps context.
-  const resumeSessionId = mode.kind === 'change_request' ? run.agentSessionId : null;
+  // A mode can only take capability away, never add it: the read-only modes
+  // force Claude Code's own `plan` permission mode over whatever the project
+  // resolved to.
+  const permissionMode = effectivePermissionMode(project.effectivePermissionMode, workMode);
 
   const iteration = createIteration({
     runId: run.id,
@@ -727,12 +797,14 @@ async function phaseImplement(
     resumed: resumeSessionId !== null,
   });
 
+  const modeLabel = WORK_MODE_LABELS[workMode.id];
+
   appendEvent({
     runId: run.id,
     type: 'agent.started',
     message: resumeSessionId
-      ? `Resuming ${agent.label} session ${resumeSessionId.slice(0, 8)} (iteration ${iteration.ordinal})`
-      : `Starting ${agent.label} (iteration ${iteration.ordinal})`,
+      ? `Resuming ${agent.label} session ${resumeSessionId.slice(0, 8)} in ${modeLabel} mode (iteration ${iteration.ordinal})`
+      : `Starting ${agent.label} in ${modeLabel} mode (iteration ${iteration.ordinal})`,
     payload: {
       iterationId: iteration.id,
       provider: agent.id,
@@ -753,7 +825,7 @@ async function phaseImplement(
     worktreePath: run.worktreePath,
     additionalDirs: project.agentAddDirs,
     model: run.agentModel ?? project.agentModel,
-    permissionMode: project.effectivePermissionMode,
+    permissionMode,
     effort: profile.agentEffort,
     timeoutMs: profile.agentTimeoutMs,
     signal,
@@ -794,16 +866,19 @@ async function phaseImplement(
     updateRunFields(run.id, { costUsd: previousCost + outcome.costUsd });
   }
 
-  // A run whose agent had tools refused worked with less capability than the
-  // prompt assumed. Say so, rather than leaving the user to infer it from a
-  // closing message that mentions checks it could not run.
+  // A build run whose agent had tools refused worked with less capability than
+  // the prompt assumed. Say so, rather than leaving the user to infer it from a
+  // closing message that mentions checks it could not run. In a read-only mode
+  // a refusal is the mode doing its job, so it is recorded without the warning.
   if (outcome.deniedTools.length > 0) {
     const denied = outcome.deniedTools.join(', ');
     appendEvent({
       runId: run.id,
       type: 'agent.notice',
-      level: 'notice',
-      message: `Permission mode "${project.effectivePermissionMode}" refused ${denied} — the implementer could not run commands or verify its own work.`,
+      level: workMode.editsCode ? 'notice' : 'info',
+      message: workMode.editsCode
+        ? `Permission mode "${permissionMode}" refused ${denied} — the implementer could not run commands or verify its own work.`
+        : `Permission mode "${permissionMode}" refused ${denied}. Expected in ${modeLabel} mode, which changes nothing.`,
       payload: { iterationId: iteration.id, text: `Denied tools: ${denied}` },
     });
   }
@@ -813,7 +888,7 @@ async function phaseImplement(
       runId: run.id,
       type: 'agent.cancelled',
       level: 'notice',
-      message: 'Implementation cancelled',
+      message: `${wording.progressNoun} cancelled`,
       payload: { iterationId: iteration.id },
     });
     return requireRun(run.id);
@@ -824,7 +899,7 @@ async function phaseImplement(
       runId: run.id,
       type: 'agent.failed',
       level: 'error',
-      message: outcome.errorMessage ?? 'The implementation agent failed',
+      message: outcome.errorMessage ?? `The ${wording.agentNoun} failed`,
       payload: {
         iterationId: iteration.id,
         error: outcome.errorMessage ?? 'unknown',
@@ -837,7 +912,7 @@ async function phaseImplement(
     appendEvent({
       runId: run.id,
       type: 'agent.completed',
-      message: `Implementation finished${
+      message: `${wording.progressNoun} finished${
         outcome.durationMs === null ? '' : ` in ${formatDuration(outcome.durationMs)}`
       }${outcome.numTurns === null ? '' : `, ${outcome.numTurns} turn(s)`}`,
       payload: {
@@ -852,17 +927,36 @@ async function phaseImplement(
   }
 
   if (outcome.finalText?.trim()) {
+    // In a read-only mode the closing message is not a summary of work done,
+    // it *is* the work, so where it is stored and what it is called come from
+    // the mode rather than being the same for every run.
+    const artifact = workMode.outcomeArtifact;
     await writeTextArtifact({
       runId: run.id,
-      kind: 'markdown_report',
-      label: `Implementation summary (iteration ${iteration.ordinal})`,
-      fileName: path.join('summaries', `iteration-${iteration.ordinal}.md`),
+      kind: artifact.kind,
+      label: `${artifact.label} (iteration ${iteration.ordinal})`,
+      fileName: path.join(artifact.directory, `iteration-${iteration.ordinal}.md`),
       content: outcome.finalText,
       mimeType: 'text/markdown',
-      meta: { iterationId: iteration.id },
+      meta: { iterationId: iteration.id, mode: workMode.id },
     });
 
-    await phaseSummarise(run, iteration.id, iteration.ordinal, outcome.finalText, signal);
+    if (workMode.summariseOutcome) {
+      await phaseSummarise(run, iteration.id, iteration.ordinal, outcome.finalText, signal);
+    } else {
+      // Compressing the deliverable to three sentences would throw it away.
+      appendEvent({
+        runId: run.id,
+        type: 'summarise.skipped',
+        level: 'debug',
+        message: `${modeLabel} mode shows the ${wording.deliverable} as written rather than summarising it`,
+        payload: {
+          provider: runProviders(run.id).transformer,
+          iterationId: iteration.id,
+          reason: `${workMode.id} mode`,
+        },
+      });
+    }
   }
 
   return requireRun(run.id);
@@ -1109,9 +1203,24 @@ async function phaseValidate(
   run: RunView,
   project: ProjectView,
   profile: ExecutionProfile,
+  workMode: WorkModeBehaviour,
   signal: AbortSignal,
 ): Promise<RunView> {
   if (!run.worktreePath) return run;
+
+  if (!workMode.runValidation) {
+    // Not "skipped because it failed to start": there is genuinely nothing to
+    // check. Recording six `not_configured` rows instead would put an empty
+    // scorecard on the run screen and imply the checks were considered.
+    appendEvent({
+      runId: run.id,
+      type: 'validation.skipped',
+      message: `${WORK_MODE_LABELS[workMode.id]} mode changes no files, so no checks were run`,
+      payload: { reason: `${workMode.id} mode` },
+    });
+    return run;
+  }
+
   setStatus(run.id, 'VALIDATING');
   setPhase(run.id, 'validating');
 
@@ -1139,9 +1248,24 @@ async function phaseReview(
   run: RunView,
   project: ProjectView,
   profile: ExecutionProfile,
+  workMode: WorkModeBehaviour,
   signal: AbortSignal,
 ): Promise<RunView> {
   const providers = runProviders(run.id);
+
+  // Checked before the provider, so the reason given is the real one: a
+  // read-only run has no diff to review whether a reviewer is configured or
+  // not.
+  if (!workMode.runReviewer) {
+    appendEvent({
+      runId: run.id,
+      type: 'review.skipped',
+      message: `${WORK_MODE_LABELS[workMode.id]} mode produces no diff to review`,
+      payload: { provider: providers.reviewer, reason: `${workMode.id} mode` },
+    });
+    return run;
+  }
+
   const reviewer = getReviewer(providers.reviewer);
 
   if (!reviewer) {
@@ -1629,18 +1753,30 @@ Rules:
  *
  * This is where IMPLEMENTER != APPROVER becomes concrete: the agent's own
  * summary is not consulted. Only recorded validation outcomes, recorded
- * findings, and the project's policies decide.
+ * findings, and the project's policies decide. The working mode changes what
+ * counts as evidence, never who decides.
  */
-async function phaseDecide(run: RunView, project: ProjectView): Promise<void> {
+async function phaseDecide(
+  run: RunView,
+  project: ProjectView,
+  workMode: WorkModeBehaviour,
+): Promise<void> {
   const fresh = requireRun(run.id);
   const assessment = assessReadiness(fresh, project);
 
+  const deliverable = WORK_MODE_WORDING[workMode.id].deliverable;
+
   if (assessment.ready) {
-    setStatus(fresh.id, 'READY', { reason: 'validation passed', finished: true });
+    setStatus(fresh.id, 'READY', {
+      reason: workMode.editsCode ? 'validation passed' : `${deliverable} written`,
+      finished: true,
+    });
     appendEvent({
       runId: fresh.id,
       type: 'run.ready',
-      message: `Ready for review: ${assessment.validationsPassed} check(s) passed`,
+      message: workMode.editsCode
+        ? `Ready for review: ${assessment.validationsPassed} check(s) passed`
+        : `The ${deliverable} is ready for review`,
       payload: {
         validationsPassed: assessment.validationsPassed,
         blockingFindings: assessment.blockingFindings,

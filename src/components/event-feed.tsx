@@ -18,6 +18,8 @@ import { formatTime } from './status';
 const ICON: Partial<Record<EventType, string>> = {
   'run.created': '◆',
   'run.status_changed': '→',
+  'run.mode_selected': '◈',
+  'run.mode_switched': '◈',
   'transform.completed': '✎',
   'transform.skipped': '·',
   'transform.failed': '!',
@@ -36,6 +38,7 @@ const ICON: Partial<Record<EventType, string>> = {
   'validation.started': '⋯',
   'validation.result': '◇',
   'validation.completed': '◆',
+  'validation.skipped': '·',
   'artifact.created': '📎',
   'review.started': '⌕',
   'review.finding': '⚑',
