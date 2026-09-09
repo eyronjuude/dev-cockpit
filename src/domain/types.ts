@@ -241,7 +241,12 @@ export const BLOCKING_SEVERITIES: readonly FindingSeverity[] = ['high', 'critica
  * Iterations
  * ------------------------------------------------------------------ */
 
-export const ITERATION_KINDS = ['initial', 'change_request', 'merge_resolution'] as const;
+export const ITERATION_KINDS = [
+  'initial',
+  'change_request',
+  'merge_resolution',
+  'landing_repair',
+] as const;
 export type IterationKind = (typeof ITERATION_KINDS)[number];
 
 export const ITERATION_STATUSES = ['running', 'completed', 'failed', 'cancelled'] as const;

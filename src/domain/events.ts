@@ -56,6 +56,9 @@ export const EVENT_TYPES = [
   'landing.conflicted',
   'landing.resolution_started',
   'landing.resolution_completed',
+  'landing.repair_started',
+  'landing.repair_committed',
+  'landing.manual_instructions',
   'landing.validation_failed',
   'landing.applied',
   'landing.failed',
@@ -183,6 +186,14 @@ export interface EventPayloads {
     staged?: string[];
     markerFiles?: string[];
   };
+  'landing.repair_started': { path: string; failed: ValidationKind[] };
+  'landing.repair_committed': { branch: string; commitSha: string };
+  'landing.manual_instructions': {
+    reason: string;
+    artifactId: string | null;
+    path: string;
+    targetBranch: string;
+  };
   'landing.validation_failed': { failed: number; targetBranch: string };
   'landing.applied': { targetBranch: string; commitSha: string };
   'landing.failed': { error: string };
@@ -247,6 +258,9 @@ export const PROGRESS_EVENT_TYPES: readonly EventType[] = [
   'landing.conflicted',
   'landing.resolution_started',
   'landing.resolution_completed',
+  'landing.repair_started',
+  'landing.repair_committed',
+  'landing.manual_instructions',
   'landing.validation_failed',
   'landing.applied',
   'landing.failed',

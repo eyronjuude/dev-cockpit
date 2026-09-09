@@ -54,6 +54,9 @@ const ICON: Partial<Record<EventType, string>> = {
   'landing.conflicted': '⚑',
   'landing.resolution_started': '▶',
   'landing.resolution_completed': '✓',
+  'landing.repair_started': '▶',
+  'landing.repair_committed': '⑂',
+  'landing.manual_instructions': '!',
   'landing.validation_failed': '✕',
   'landing.applied': '✓',
   'landing.failed': '✕',
@@ -77,6 +80,7 @@ function toneFor(event: RunEvent): string {
     case 'landing.applied':
       return 'text-pass';
     case 'landing.conflicted':
+    case 'landing.manual_instructions':
     case 'landing.validation_failed':
       return 'text-warn';
     case 'agent.message':
