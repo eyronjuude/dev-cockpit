@@ -187,6 +187,7 @@ export const executionProfileSchema = z.enum(EXECUTION_PROFILES);
 export const ARTIFACT_KINDS = [
   'git_diff',
   'changed_files',
+  'implementation_map',
   'implementation_log',
   'validation_report',
   'stdout_log',
@@ -209,6 +210,7 @@ export const artifactKindSchema = z.enum(ARTIFACT_KINDS);
 export const ARTIFACT_KIND_LABELS: Record<ArtifactKind, string> = {
   git_diff: 'Git diff',
   changed_files: 'Changed files',
+  implementation_map: 'Implementation map',
   implementation_log: 'Implementation log',
   validation_report: 'Validation report',
   stdout_log: 'stdout',
@@ -245,7 +247,12 @@ export const BLOCKING_SEVERITIES: readonly FindingSeverity[] = ['high', 'critica
  * Iterations
  * ------------------------------------------------------------------ */
 
-export const ITERATION_KINDS = ['initial', 'change_request', 'merge_resolution'] as const;
+export const ITERATION_KINDS = [
+  'initial',
+  'change_request',
+  'merge_resolution',
+  'landing_repair',
+] as const;
 export type IterationKind = (typeof ITERATION_KINDS)[number];
 
 export const ITERATION_STATUSES = ['running', 'completed', 'failed', 'cancelled'] as const;

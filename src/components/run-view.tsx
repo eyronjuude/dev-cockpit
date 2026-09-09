@@ -3,16 +3,20 @@
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 
+import type { RunEvent } from '@/domain/events';
 import {
   effectiveWorkMode,
   isReadOnlyMode,
   WORK_MODE_LABELS,
   WORK_MODE_WORDING,
 } from '@/domain/modes';
+import { computeRunProgress } from '@/domain/progress';
 import type { ChangeType } from '@/domain/types';
+import { CHANGE_TYPE_TONE, type BadgeTone } from '@/domain/vocabulary';
 import { ArtifactPanel } from './artifact-panel';
 import { DiffView } from './diff-view';
 import { EventFeed } from './event-feed';
+import { LogStream } from './log-stream';
 import { Markdown } from './markdown';
 import { ReadinessNotice, RunActions } from './run-actions';
 import { Scorecard } from './scorecard';
@@ -22,19 +26,27 @@ import {
   RunStatusBadge,
   SeverityBadge,
   formatTime,
+  runStatusLabel,
 } from './status';
 import { useRunStream, type RunSnapshot } from './use-run-stream';
 
-const TABS = ['Overview', 'Changes', 'Diff', 'Tests', 'Artifacts', 'Logs'] as const;
+const TABS = ['Overview', 'Map', 'Changes', 'Diff', 'Tests', 'Artifacts', 'Logs'] as const;
 type Tab = (typeof TABS)[number];
 
-const CHANGE_TONE: Record<ChangeType, string> = {
-  added: 'text-pass',
-  untracked: 'text-pass',
-  modified: 'text-warn',
-  deleted: 'text-fail',
-  renamed: 'text-accent',
+/**
+ * Written out in full rather than interpolated: Tailwind scans source text for
+ * class names, so a composed `text-${tone}` would never be generated.
+ */
+const TONE_TEXT: Record<BadgeTone, string> = {
+  pass: 'text-pass',
+  fail: 'text-fail',
+  warn: 'text-warn',
+  running: 'text-running',
+  idle: 'text-ink-faint',
+  accent: 'text-accent',
 };
+
+const changeTone = (type: ChangeType): string => TONE_TEXT[CHANGE_TYPE_TONE[type]];
 
 export function RunView({ initial }: { initial: RunSnapshot }) {
   const { events, snapshot, connected, refresh } = useRunStream(initial.run.id, initial);
@@ -49,6 +61,7 @@ export function RunView({ initial }: { initial: RunSnapshot }) {
   const elapsed = useElapsed(run.startedAt, run.finishedAt, live.active);
 
   const diffArtifact = artifacts.filter((a) => a.kind === 'git_diff').at(-1);
+  const mapArtifacts = artifacts.filter((a) => a.kind === 'implementation_map');
   const logArtifacts = artifacts.filter(
     (a) =>
       a.kind === 'implementation_log' || a.kind === 'stdout_log' || a.kind === 'stderr_log',
@@ -59,6 +72,39 @@ export function RunView({ initial }: { initial: RunSnapshot }) {
   const currentFindings = run.findings.filter((f) => f.attempt === latestFindingAttempt);
 
   const workMode = effectiveWorkMode(run);
+
+  // Phase-level progress, recomputed from the snapshot the stream keeps fresh,
+  // so the bar advances while the run does rather than on a page reload.
+  const progress = useMemo(
+    () =>
+      computeRunProgress({
+        status: run.status,
+        phase: live.phase,
+        active: live.active,
+        evidence: {
+          hasSpec: run.spec !== null,
+          hasWorktree: run.worktreePath !== null,
+          iterations: run.iterations.length,
+          changedFiles: run.changedFiles.length,
+          validations: run.validations.length,
+          reviewFindings: run.findings.length,
+        },
+      }),
+    [
+      run.status,
+      run.spec,
+      run.worktreePath,
+      run.iterations.length,
+      run.changedFiles.length,
+      run.validations.length,
+      run.findings.length,
+      live.active,
+      live.phase,
+    ],
+  );
+
+  // The newest line, so the current activity is readable without scrolling.
+  const newestMessage = events.at(-1)?.message ?? null;
 
   return (
     <div className="flex h-full flex-col">
@@ -158,6 +204,11 @@ export function RunView({ initial }: { initial: RunSnapshot }) {
                 {name === 'Artifacts' && artifacts.length > 0 ? (
                   <span className="ml-1.5 text-[10.5px] text-ink-faint">{artifacts.length}</span>
                 ) : null}
+                {name === 'Logs' && live.active ? (
+                  <span className="ml-1.5 inline-flex items-center text-running" title="streaming">
+                    <span className="pulse-dot" aria-hidden />
+                  </span>
+                ) : null}
               </button>
             ))}
           </div>
@@ -170,6 +221,8 @@ export function RunView({ initial }: { initial: RunSnapshot }) {
                 latestIteration={latestIteration}
               />
             ) : null}
+
+            {tab === 'Map' ? <MapTab artifacts={mapArtifacts} /> : null}
 
             {tab === 'Changes' ? (
               run.changedFiles.length === 0 ? (
@@ -199,7 +252,7 @@ export function RunView({ initial }: { initial: RunSnapshot }) {
                             </span>
                           ) : null}
                         </td>
-                        <td className={`px-2 py-1.5 ${CHANGE_TONE[file.changeType]}`}>
+                        <td className={`px-2 py-1.5 ${changeTone(file.changeType)}`}>
                           {file.changeType}
                         </td>
                         <td className="px-2 py-1.5 text-right tabular-nums text-pass">
@@ -233,7 +286,14 @@ export function RunView({ initial }: { initial: RunSnapshot }) {
               </div>
             ) : null}
 
-            {tab === 'Logs' ? <LogsTab artifacts={logArtifacts} /> : null}
+            {tab === 'Logs' ? (
+              <LogsTab
+                events={events}
+                artifacts={logArtifacts}
+                connected={connected}
+                active={live.active}
+              />
+            ) : null}
           </div>
         </section>
 
@@ -258,7 +318,14 @@ export function RunView({ initial }: { initial: RunSnapshot }) {
           </div>
 
           <div className="min-h-0 flex-1 p-3.5">
-            <EventFeed events={events} connected={connected} active={live.active} />
+            <EventFeed
+              events={events}
+              connected={connected}
+              active={live.active}
+              progress={progress}
+              progressLabel={progress.activeLabel ?? runStatusLabel(run.status)}
+              progressDetail={live.active ? newestMessage : null}
+            />
           </div>
         </aside>
       </div>
@@ -536,11 +603,120 @@ function TestsTab({
   );
 }
 
-function LogsTab({ artifacts }: { artifacts: RunSnapshot['artifacts'] }) {
-  if (artifacts.length === 0) {
-    return <p className="empty-state">No logs captured yet.</p>;
+/**
+ * Logs, in two forms.
+ *
+ * The stream is the live one and the default: it is written from the event log
+ * as the run happens, so it is populated while an agent is still working. The
+ * saved files are what the agent process left behind — the raw NDJSON
+ * transcript and any setup output — and only exist once the step that produces
+ * them has finished, which is why they cannot be the live view.
+ */
+function LogsTab({
+  events,
+  artifacts,
+  connected,
+  active,
+}: {
+  events: readonly RunEvent[];
+  artifacts: RunSnapshot['artifacts'];
+  connected: boolean;
+  active: boolean;
+}) {
+  const [mode, setMode] = useState<'stream' | 'files'>('stream');
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex shrink-0 items-center gap-1 border-b border-line px-3 py-1.5">
+        <button
+          type="button"
+          className={`btn btn-sm ${mode === 'stream' ? 'btn-primary' : 'btn-ghost'}`}
+          onClick={() => setMode('stream')}
+        >
+          Live stream
+        </button>
+        <button
+          type="button"
+          className={`btn btn-sm ${mode === 'files' ? 'btn-primary' : 'btn-ghost'}`}
+          onClick={() => setMode('files')}
+        >
+          Saved files
+          {artifacts.length > 0 ? (
+            <span className="text-[10.5px] opacity-70">{artifacts.length}</span>
+          ) : null}
+        </button>
+      </div>
+
+      {mode === 'stream' ? (
+        <LogStream events={events} connected={connected} active={active} />
+      ) : artifacts.length === 0 ? (
+        <p className="empty-state">
+          No log files have been written yet. They are saved when the step that produces them
+          finishes; the live stream shows what is happening in the meantime.
+        </p>
+      ) : (
+        <ArtifactPanel artifacts={artifacts} />
+      )}
+    </div>
+  );
+}
+
+/**
+ * The implementation map, at the size it was drawn for.
+ *
+ * The latest pass is shown; earlier ones stay in the Artifacts tab rather than
+ * being replaced, because the map taken before a change request is the record
+ * of what that request was answering.
+ */
+function MapTab({ artifacts }: { artifacts: RunSnapshot['artifacts'] }) {
+  const latest = artifacts.at(-1) ?? null;
+
+  if (!latest) {
+    return (
+      <p className="empty-state">
+        No implementation map yet. One is drawn at the end of every pass, whatever the outcome.
+      </p>
+    );
   }
-  return <ArtifactPanel artifacts={artifacts} />;
+
+  if (!latest.exists) {
+    return <p className="empty-state">The file recorded for this map is no longer on disk.</p>;
+  }
+
+  const description =
+    typeof latest.meta.description === 'string' ? latest.meta.description : latest.label;
+
+  return (
+    <div className="space-y-2.5 p-3.5">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-[11px] text-ink-faint">
+          Computed from stored run state — file changes and check outcomes, not the
+          implementer&rsquo;s summary.
+        </p>
+        <a
+          className="btn btn-sm shrink-0"
+          href={`/api/artifacts/${latest.id}/raw?download=1`}
+          download
+        >
+          Download SVG
+        </a>
+      </div>
+
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={`/api/artifacts/${latest.id}/raw`}
+        alt={description}
+        className="w-full rounded border border-line"
+      />
+
+      {artifacts.length > 1 ? (
+        <p className="text-[11px] text-ink-faint">
+          Pass {artifacts.length}. The earlier {artifacts.length === 2 ? 'map is' : 'maps are'} in
+          the Artifacts tab.
+        </p>
+      ) : null}
+    </div>
+  );
 }
 
 /**

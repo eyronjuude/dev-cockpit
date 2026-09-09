@@ -494,17 +494,20 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
             <code className="mono">{targetBranch}</code>, merge{' '}
             <code className="mono">{run.branch}</code>, run validation there, then fast-forward{' '}
             <code className="mono">{targetBranch}</code> only if the result is clean.
+            If <code className="mono">{targetBranch}</code> moved since the landing worktree was
+            prepared, Dev Cockpit refreshes the landing worktree first. Merge conflicts and landing
+            validation failures get one agent repair pass before manual instructions are recorded.
           </p>
           {run.status === 'MERGE_CONFLICT' ? (
             <p className="mt-2 text-[12px] text-warn">
-              Conflicts are recorded for this landing. If you already resolved them in the landing
-              worktree, retrying will finish the merge and validate it.
+              Conflicts are recorded for this landing. Retry after resolving them yourself, or let
+              the retry ask the agent to resolve them in the landing worktree.
             </p>
           ) : null}
           {run.status === 'LANDING_FAILED' ? (
             <p className="mt-2 text-[12px] text-warn">
-              The previous landing attempt failed. Retry after fixing the recorded problem in the
-              landing worktree or target checkout.
+              The previous landing attempt failed. Retry after fixing the recorded problem; any
+              uncommitted landing-worktree repair edits will be committed before validation.
             </p>
           ) : null}
 

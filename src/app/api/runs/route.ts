@@ -4,6 +4,7 @@ import { assertLocalRequest, handle, readJson } from '@/app/api/_lib/handler';
 import { DEFAULT_WORK_MODE, workModeSchema } from '@/domain/modes';
 import { executionProfileSchema, runStatusSchema } from '@/domain/types';
 import { startRun } from '@/orchestrator/orchestrator';
+import { tryRecordImplementationMap } from '@/services/implementation-map';
 import { createRun, listRuns } from '@/services/runs';
 
 export const dynamic = 'force-dynamic';
@@ -64,6 +65,11 @@ export function POST(request: Request) {
 
     if (input.startImmediately !== false) {
       startRun(run.id);
+    } else {
+      // A run held in DRAFT never reaches the orchestrator, so it would be the
+      // one run with no implementation map. It gets the "nothing has happened
+      // yet" one instead; execution replaces it with a later pass.
+      await tryRecordImplementationMap(run.id);
     }
 
     return {

@@ -43,6 +43,30 @@ The agent reported success. The orchestrator disagreed, on evidence.
 | ![Blocked run](docs/screenshots/run-tests-failure.png) | ![Settings](docs/screenshots/settings.png) |
 | A run the orchestrator refused to mark ready, with the failing output that decided it. | Settings reports what can actually run on this machine, and why not when it cannot. |
 
+## Following a run
+
+Two views of the same event stream, pointing opposite ways on purpose.
+
+**Progress**, bottom right, answers *what is happening now*. Newest entry at the
+top, so the answer is never at the end of a list you have to chase, and a
+phase-by-phase bar above it — spec, worktree, implement, changes, validate,
+review, decision — with the running phase animated. Scroll down through it and
+you are reading backwards into the run's history; a counter offers the way back
+to the top.
+
+**Logs**, in the evidence tabs, is the log proper: every event in the order it
+happened, appended at the bottom, following the tail until you scroll up. Agent
+prose is printed in full under its summary line. Two filters narrow it —
+`verbose` includes the debug-level chatter (thinking, tool results, per-file
+diffs), and `code changes only` cuts it to the edits, writes and commits, which
+is the fastest way to see what the agent actually did to the tree.
+
+Both are written as the orchestrator writes them. Nothing needs a refresh, and
+the tab shows a pulse while a run is live. The `Saved files` view beside the
+stream holds the raw NDJSON transcript and any setup output — those are files an
+agent process leaves behind, so they only appear once the step producing them
+has finished.
+
 ## Requirements
 
 - **Node.js 22.12 or newer.** Built and tested on 22.17.
@@ -203,8 +227,11 @@ Specifically:
 - Landing an approved run creates or reuses a separate landing worktree from the
   target branch, merges the run branch there, runs validation, then
   fast-forwards the target checkout only when the merge and validation are
-  clean. Merge conflicts leave the landing worktree intact for manual or
-  AI-assisted resolution.
+  clean. If the target branch moved after the landing worktree was prepared, Dev
+  Cockpit refreshes the landing worktree from the current target branch before
+  validating and applying. Merge conflicts and failed landing validation get one
+  AI repair pass in the landing worktree; if that cannot finish, Dev Cockpit
+  records manual repair instructions and leaves the landing worktree intact.
 - Rejecting can remove the worktree. The branch is deleted with `git branch -d`,
   never `-D`, so work is never silently discarded.
 - Linked paths become junctions on Windows (no elevation needed) or symlinks
@@ -261,6 +288,7 @@ data/
     ├── specification.md          transformer output
     ├── changes.diff              git diff, verbatim
     ├── changed-files.json
+    ├── visualisation/implementation-map-N.svg
     ├── agent/<iterationId>.stream.jsonl   raw Claude Code stream
     ├── answers/iteration-N.md        ask runs only
     ├── plans/iteration-N.md          plan runs only
@@ -275,6 +303,40 @@ enough to open with any SQLite client, which is the point — this is your data.
 
 Artifacts are first-class records with their own browser in the UI. You should
 never need to read an agent transcript to find out what happened.
+
+## The implementation map
+
+Every run produces one, on the **Map** tab of the run screen: a single SVG
+showing what the run did.
+
+```
+Pipeline      Request → Specification → Worktree → Implementation
+              → Changes → Validation → Review → Verdict, each with the
+              state it actually reached
+Checks        one cell per validation kind, with its outcome and duration
+Change map    every changed file, grouped by directory, bar width = churn,
+              split green/red by additions and deletions
+Findings      review severities, tallied
+```
+
+Three things are deliberate about it:
+
+- **It is computed, not narrated.** Every value is read back out of stored run
+  state — iterations, recorded file changes, exit codes, findings, the event
+  log. No model is asked anything, so the map cannot disagree with the diff, and
+  it costs nothing to produce. Same rule as the scorecard: the implementer's
+  summary is not consulted.
+- **Every run gets one, including the ones that went wrong.** A run that failed
+  in preparation still produces a map; it shows the pipeline stopping at
+  `Worktree`, which is exactly the question a failed run raises. `skipped`, `no
+  change` and `not run` are three different words on it, and none of them is
+  `failed`.
+- **It is written down as well as drawn.** The whole map is also a paragraph of
+  plain text in the SVG's `<desc>`, reused as the image's alt text — so it reads
+  to a screen reader, and `grep` finds it on disk.
+
+A change request draws a second map rather than overwriting the first, so the
+picture taken before the request survives next to the one taken after it.
 
 ## Who does what
 
@@ -330,6 +392,12 @@ Two honest caveats:
   stdout captured; its HTML report is not yet registered as an artifact.
 - **`developmentCommand` is recorded but never started.** There is no preview
   server, so `previewUrl` on an artifact is always null in V1.
+- **The implementation map is a snapshot, not a live view.** It is drawn when a
+  pass finishes, so a run you approve afterwards still shows the verdict the
+  orchestrator reached — `Ready for review`, not `Approved`. The timestamp in
+  its footer says when it was taken. It also caps the change map at 40 file
+  rows and counts the rest, so a very large run is summarised rather than
+  drawn in full.
 - **Only the `claude-cli` providers have actually executed.** `codex-cli`,
   `openai-api` and `anthropic-api` are implemented against current published
   interfaces, but no OpenAI key, no Anthropic key and no installed Codex CLI

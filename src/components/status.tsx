@@ -1,50 +1,19 @@
 import type { FindingSeverity, RunStatus, ValidationOutcome } from '@/domain/types';
+import {
+  formatDuration,
+  OUTCOME_LABEL,
+  OUTCOME_TONE,
+  RUN_STATUS_LABEL,
+  RUN_STATUS_TONE,
+  SEVERITY_TONE,
+} from '@/domain/vocabulary';
 
 /**
- * Shared status vocabulary.
+ * The DOM half of the status vocabulary: a tone becomes a CSS class here.
  *
- * Colour is meaning here, so the mapping lives in one place: a "not configured"
- * check must never be able to look like a failure just because two components
- * chose different classes.
+ * The tones and labels themselves live in `@/domain/vocabulary`, because the
+ * SVG implementation map has to reach the same meanings without a stylesheet.
  */
-
-type BadgeTone = 'pass' | 'fail' | 'warn' | 'running' | 'idle' | 'accent';
-
-const RUN_STATUS_TONE: Record<RunStatus, BadgeTone> = {
-  DRAFT: 'idle',
-  PREPARING: 'running',
-  IMPLEMENTING: 'running',
-  VALIDATING: 'running',
-  REVIEWING: 'running',
-  NEEDS_CHANGES: 'warn',
-  READY: 'accent',
-  APPROVED: 'pass',
-  LANDING: 'running',
-  MERGE_CONFLICT: 'warn',
-  LANDING_FAILED: 'fail',
-  LANDED: 'pass',
-  REJECTED: 'idle',
-  FAILED: 'fail',
-  CANCELLED: 'idle',
-};
-
-const RUN_STATUS_LABEL: Record<RunStatus, string> = {
-  DRAFT: 'Draft',
-  PREPARING: 'Preparing',
-  IMPLEMENTING: 'Implementing',
-  VALIDATING: 'Validating',
-  REVIEWING: 'Reviewing',
-  NEEDS_CHANGES: 'Needs changes',
-  READY: 'Ready for review',
-  APPROVED: 'Approved',
-  LANDING: 'Landing',
-  MERGE_CONFLICT: 'Merge conflict',
-  LANDING_FAILED: 'Landing failed',
-  LANDED: 'Landed',
-  REJECTED: 'Rejected',
-  FAILED: 'Failed',
-  CANCELLED: 'Cancelled',
-};
 
 const ACTIVE: readonly RunStatus[] = [
   'PREPARING',
@@ -68,27 +37,6 @@ export function RunStatusBadge({ status }: { status: RunStatus }) {
 export const runStatusLabel = (status: RunStatus): string => RUN_STATUS_LABEL[status];
 export const isActiveStatus = (status: RunStatus): boolean => ACTIVE.includes(status);
 
-const OUTCOME_TONE: Record<ValidationOutcome, BadgeTone> = {
-  pass: 'pass',
-  fail: 'fail',
-  error: 'fail',
-  running: 'running',
-  skipped: 'idle',
-  not_configured: 'idle',
-  cancelled: 'idle',
-};
-
-const OUTCOME_LABEL: Record<ValidationOutcome, string> = {
-  pass: 'Pass',
-  fail: 'Fail',
-  error: 'Error',
-  running: 'Running',
-  skipped: 'Skipped',
-  // Deliberately not "Fail": an unconfigured check has not failed.
-  not_configured: 'Not configured',
-  cancelled: 'Cancelled',
-};
-
 export function OutcomeBadge({ outcome }: { outcome: ValidationOutcome }) {
   return (
     <span className={`badge badge-${OUTCOME_TONE[outcome]}`}>
@@ -100,26 +48,11 @@ export function OutcomeBadge({ outcome }: { outcome: ValidationOutcome }) {
 
 export const outcomeLabel = (outcome: ValidationOutcome): string => OUTCOME_LABEL[outcome];
 
-const SEVERITY_TONE: Record<FindingSeverity, BadgeTone> = {
-  info: 'idle',
-  low: 'idle',
-  medium: 'warn',
-  high: 'fail',
-  critical: 'fail',
-};
-
 export function SeverityBadge({ severity }: { severity: FindingSeverity }) {
   return <span className={`badge badge-${SEVERITY_TONE[severity]}`}>{severity}</span>;
 }
 
-export function formatDuration(ms: number | null): string {
-  if (ms === null) return '—';
-  if (ms < 1_000) return `${ms}ms`;
-  if (ms < 60_000) return `${(ms / 1_000).toFixed(1)}s`;
-  const minutes = Math.floor(ms / 60_000);
-  const seconds = Math.round((ms % 60_000) / 1_000);
-  return `${minutes}m ${seconds}s`;
-}
+export { formatDuration };
 
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;

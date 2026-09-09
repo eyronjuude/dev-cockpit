@@ -66,6 +66,7 @@ src/
 ├── transformers/  TransformerProvider + implementations + registry
 ├── reviewers/     ReviewerAgent + implementations + registry
 ├── validation/    Validator + the engine that sequences them
+├── visualisation/ the implementation map: stored run state → one SVG
 ├── orchestrator/  the state machine, prompts, working modes, execution profiles
 ├── services/      projects, runs, events, artifacts, event bus, bootstrap
 ├── components/    client components: run view, scorecard, diff, feed, forms
@@ -108,8 +109,11 @@ passing through implementation and validation.
 Statuses are recoverable by design: `NEEDS_CHANGES`, `READY`, `FAILED` and
 `CANCELLED` can all re-enter `IMPLEMENTING`, which is what "request changes" on
 a failed run does. `APPROVED` can proceed to `LANDING`. Clean landings reach
-`LANDED`; conflicted or failed landings can retry after manual or AI-assisted
-repair. `LANDED` and `REJECTED` are terminal.
+`LANDED`; stale landing branches are refreshed from the current target branch in
+the isolated landing worktree before validation and fast-forward apply.
+Conflicted or failed landings get one AI repair attempt in the landing worktree
+before Dev Cockpit records manual repair instructions for an explicit retry.
+`LANDED` and `REJECTED` are terminal.
 
 ## Working modes
 
@@ -202,15 +206,31 @@ strings, and why the feed can offer a "useful progress only" filter at all.
 
 `events.seq` is a monotonic integer and doubles as the SSE resume cursor.
 
+The same rows feed two views, ordered opposite ways because they answer
+different questions. `components/event-feed.tsx` is the right-rail progress
+panel: filtered, newest first, so the current state of the run needs no
+scrolling. `components/log-stream.tsx` is the Logs tab: unfiltered by default,
+oldest first, appended at the bottom and following the tail — a log, read the
+way logs are read. Event *messages* are redacted when stored; the stream also
+prints payload prose, so it runs the same patterns client-side through
+`core/redact-patterns.ts`.
+
+Above the feed, `domain/progress.ts` turns a run's status, the orchestrator's
+live phase and the run's own output into a phase bar. It is pure and folds no
+events: a bar reconstructed from a replay would disagree with the run record the
+moment the replay was truncated.
+
 ## Real-time
 
 Two channels, deliberately separate:
 
 - **`GET /api/runs/:id/events`** — SSE. Replays everything after the client's
-  cursor, then tails the in-process bus. A reconnect resumes from the stored
-  cursor rather than restarting, so a reload or a dropped connection loses
-  nothing. Heartbeat comments every 20s keep the stream from being timed out.
-- **`GET /api/runs/:id/snapshot`** — the current state, in full.
+  cursor in pages of 500, then tails the in-process bus. A reconnect resumes
+  from the stored cursor rather than restarting, so a reload or a dropped
+  connection loses nothing. Heartbeat comments every 20s keep the stream from
+  being timed out.
+- **`GET /api/runs/:id/snapshot`** — the current state, in full. Polled every 5s
+  while a run is active, because not every phase transition writes an event.
 
 Events say *what happened*; the snapshot says *what is now true*. Keeping them
 apart means the client never rebuilds run state by folding events, which is

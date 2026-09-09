@@ -48,6 +48,7 @@ export const EVENT_TYPES = [
   'validation.skipped',
 
   'artifact.created',
+  'visualisation.skipped',
 
   'review.started',
   'review.finding',
@@ -59,6 +60,11 @@ export const EVENT_TYPES = [
   'landing.conflicted',
   'landing.resolution_started',
   'landing.resolution_completed',
+  'landing.refresh_started',
+  'landing.refresh_completed',
+  'landing.repair_started',
+  'landing.repair_committed',
+  'landing.manual_instructions',
   'landing.validation_failed',
   'landing.applied',
   'landing.failed',
@@ -173,6 +179,8 @@ export interface EventPayloads {
   'validation.skipped': { reason: string };
 
   'artifact.created': { artifactId: string; kind: ArtifactKind; label: string; bytes: number };
+  /** The implementation map could not be drawn. The run itself is unaffected. */
+  'visualisation.skipped': { reason: string };
 
   'review.started': { provider: string };
   'review.finding': {
@@ -193,7 +201,22 @@ export interface EventPayloads {
   'landing.merged': { branch: string; targetBranch: string; sourceBranch: string; commitSha: string };
   'landing.conflicted': { files: string[] };
   'landing.resolution_started': { path: string; files: string[] };
-  'landing.resolution_completed': { iterationId: string; unresolved: string[] };
+  'landing.resolution_completed': {
+    iterationId: string;
+    unresolved: string[];
+    staged?: string[];
+    markerFiles?: string[];
+  };
+  'landing.refresh_started': { path: string; targetBranch: string; targetCommit: string };
+  'landing.refresh_completed': { branch: string; targetBranch: string; commitSha: string };
+  'landing.repair_started': { path: string; failed: ValidationKind[] };
+  'landing.repair_committed': { branch: string; commitSha: string };
+  'landing.manual_instructions': {
+    reason: string;
+    artifactId: string | null;
+    path: string;
+    targetBranch: string;
+  };
   'landing.validation_failed': { failed: number; targetBranch: string };
   'landing.applied': { targetBranch: string; commitSha: string };
   'landing.failed': { error: string };
@@ -251,6 +274,7 @@ export const PROGRESS_EVENT_TYPES: readonly EventType[] = [
   'validation.result',
   'validation.completed',
   'validation.skipped',
+  'visualisation.skipped',
   'review.started',
   'review.finding',
   'review.completed',
@@ -260,6 +284,11 @@ export const PROGRESS_EVENT_TYPES: readonly EventType[] = [
   'landing.conflicted',
   'landing.resolution_started',
   'landing.resolution_completed',
+  'landing.refresh_started',
+  'landing.refresh_completed',
+  'landing.repair_started',
+  'landing.repair_committed',
+  'landing.manual_instructions',
   'landing.validation_failed',
   'landing.applied',
   'landing.failed',

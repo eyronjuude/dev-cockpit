@@ -163,7 +163,7 @@ export function ArtifactPanel({ artifacts }: { artifacts: readonly ArtifactView[
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={`/api/artifacts/${selected.id}/raw`}
-                    alt={selected.label}
+                    alt={altText(selected)}
                     className="max-w-full rounded border border-line"
                   />
                 </div>
@@ -188,6 +188,18 @@ export function ArtifactPanel({ artifacts }: { artifacts: readonly ArtifactView[
       </div>
     </div>
   );
+}
+
+/**
+ * An image artifact that recorded its own description gets it as alt text.
+ *
+ * The implementation map does: everything the picture says is also written into
+ * the row, so the artifact carries meaning rather than only pixels.
+ */
+function altText(artifact: ArtifactView): string {
+  return typeof artifact.meta.description === 'string' && artifact.meta.description.trim()
+    ? artifact.meta.description
+    : artifact.label;
 }
 
 function ArtifactBody({ artifact, text }: { artifact: ArtifactView; text: string }) {
