@@ -110,6 +110,47 @@ async function makeApprovedRun(
   return { repo, project, run: runsService.requireRun(run.id), runPath };
 }
 
+async function makeApprovedProjectRun(
+  project: Awaited<ReturnType<typeof projectsService.createProject>>,
+  filePath: string,
+  fileText: string,
+) {
+  const run = runsService.createRun({
+    projectId: project.id,
+    request: `Change ${filePath}`,
+  });
+  const runPath = path.join(dataDir, 'worktrees', project.id, run.id);
+  const prepared = await worktree.prepareWorktree({
+    repositoryPath: project.repositoryPath,
+    worktreePath: runPath,
+    branch: run.branch ?? `cockpit/${run.id}`,
+    baseRef: 'main',
+    protectedBranches: project.protectedBranches,
+  });
+
+  const target = path.join(runPath, filePath);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, fileText);
+  const commitSha = await diff.commitAll(runPath, `feat: edit ${filePath}`, author);
+  const changed = await diff.collectRunDiff(runPath, prepared.baseCommit);
+
+  runsService.updateRunFields(run.id, {
+    worktreePath: prepared.worktreePath,
+    branch: prepared.branch,
+    baseCommit: prepared.baseCommit,
+    baseBranch: 'main',
+    commitSha,
+  });
+  runsService.replaceChangedFiles(run.id, changed.files);
+  runsService.setStatus(run.id, 'PREPARING', { started: true });
+  runsService.setStatus(run.id, 'IMPLEMENTING');
+  runsService.setStatus(run.id, 'VALIDATING');
+  runsService.setStatus(run.id, 'READY', { finished: true });
+  await orchestrator.approveRun(run.id, { createCommit: false });
+
+  return { run: runsService.requireRun(run.id), runPath };
+}
+
 async function prepareStaleLanding(
   repo: string,
   projectId: string,
@@ -380,6 +421,72 @@ describe('landing assistance', () => {
     expect(types).toContain('landing.resolution_started');
     expect(types).toContain('landing.refresh_completed');
     expect(types).toContain('landing.applied');
+  });
+
+  it('queues landings that target the same repository branch', async () => {
+    const repo = makeRepo('same-target-queue');
+    const project = await projectsService.createProject({
+      name: 'same-target-queue',
+      repositoryPath: repo,
+    });
+    const first = await makeApprovedProjectRun(project, 'first.txt', 'first landing\n');
+    const second = await makeApprovedProjectRun(project, 'second.txt', 'second landing\n');
+
+    orchestrator.landRun(first.run.id);
+    orchestrator.landRun(second.run.id);
+
+    expect(orchestrator.isRunActive(second.run.id)).toBe(true);
+    expect(orchestrator.activeRunPhase(second.run.id)).toBe('queued for landing');
+    expect(runsService.requireRun(second.run.id).status).toBe('APPROVED');
+
+    await waitForIdle(first.run.id);
+    await waitForIdle(second.run.id);
+
+    expect(runsService.requireRun(first.run.id).status).toBe('LANDED');
+    expect(runsService.requireRun(second.run.id).status).toBe('LANDED');
+    expect(normaliseLines(fs.readFileSync(path.join(repo, 'first.txt'), 'utf8'))).toBe(
+      'first landing\n',
+    );
+    expect(normaliseLines(fs.readFileSync(path.join(repo, 'second.txt'), 'utf8'))).toBe(
+      'second landing\n',
+    );
+
+    const secondTypes = eventsService.listEvents(second.run.id).map((event) => event.type);
+    expect(secondTypes).toContain('landing.queued');
+    expect(secondTypes).toContain('landing.dequeued');
+    expect(secondTypes.indexOf('landing.queued')).toBeLessThan(
+      secondTypes.indexOf('landing.dequeued'),
+    );
+    expect(secondTypes).toContain('landing.applied');
+  });
+
+  it('can cancel a queued landing without rejecting the approved run', async () => {
+    const repo = makeRepo('cancel-queued-landing');
+    const project = await projectsService.createProject({
+      name: 'cancel-queued-landing',
+      repositoryPath: repo,
+    });
+    const first = await makeApprovedProjectRun(project, 'first.txt', 'first landing\n');
+    const second = await makeApprovedProjectRun(project, 'second.txt', 'second landing\n');
+
+    orchestrator.landRun(first.run.id);
+    orchestrator.landRun(second.run.id);
+
+    expect(orchestrator.activeRunPhase(second.run.id)).toBe('queued for landing');
+    expect(orchestrator.cancelRun(second.run.id)).toBe(true);
+    expect(orchestrator.isRunActive(second.run.id)).toBe(false);
+
+    await waitForIdle(first.run.id);
+
+    expect(runsService.requireRun(first.run.id).status).toBe('LANDED');
+    expect(runsService.requireRun(second.run.id).status).toBe('APPROVED');
+    expect(fs.existsSync(path.join(repo, 'second.txt'))).toBe(false);
+
+    const secondTypes = eventsService.listEvents(second.run.id).map((event) => event.type);
+    expect(secondTypes).toContain('landing.queued');
+    expect(secondTypes).toContain('landing.cancelled');
+    expect(secondTypes).not.toContain('landing.started');
+    expect(secondTypes).not.toContain('landing.applied');
   });
 
   it('centres manual instructions on the target checkout when that checkout is dirty', async () => {

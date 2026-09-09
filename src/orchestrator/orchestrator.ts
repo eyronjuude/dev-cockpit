@@ -74,15 +74,42 @@ interface ActiveRun {
   controller: AbortController;
   startedAt: string;
   phase: string;
+  landingQueueKey?: string;
+  queuedLanding?: boolean;
 }
 
 const GLOBAL_KEY = '__devCockpitActiveRuns__' as const;
 type GlobalWithRuns = typeof globalThis & { [GLOBAL_KEY]?: Map<string, ActiveRun> };
 
+interface LandingQueueItem {
+  runId: string;
+  controller: AbortController;
+  mode: LandingMode;
+  queued: boolean;
+  repositoryPath: string;
+  targetBranch: string;
+}
+
+interface LandingQueue {
+  active: boolean;
+  items: LandingQueueItem[];
+}
+
+const LANDING_QUEUE_GLOBAL_KEY = '__devCockpitLandingQueues__' as const;
+type GlobalWithLandingQueues = typeof globalThis & {
+  [LANDING_QUEUE_GLOBAL_KEY]?: Map<string, LandingQueue>;
+};
+
 function activeRuns(): Map<string, ActiveRun> {
   const g = globalThis as GlobalWithRuns;
   g[GLOBAL_KEY] ??= new Map();
   return g[GLOBAL_KEY];
+}
+
+function landingQueues(): Map<string, LandingQueue> {
+  const g = globalThis as GlobalWithLandingQueues;
+  g[LANDING_QUEUE_GLOBAL_KEY] ??= new Map();
+  return g[LANDING_QUEUE_GLOBAL_KEY];
 }
 
 export function isRunActive(runId: string): boolean {
@@ -91,6 +118,71 @@ export function isRunActive(runId: string): boolean {
 
 export function activeRunPhase(runId: string): string | null {
   return activeRuns().get(runId)?.phase ?? null;
+}
+
+function normaliseRepositoryForQueue(repositoryPath: string): string {
+  const resolved = path.resolve(repositoryPath);
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+function landingTargetBranchForQueue(run: RunView, project: ProjectView): string {
+  return run.baseBranch?.trim() || project.defaultBranch;
+}
+
+function landingQueueKey(project: ProjectView, targetBranch: string): string {
+  return `${normaliseRepositoryForQueue(project.repositoryPath)}\0${targetBranch}`;
+}
+
+function getLandingQueue(key: string): LandingQueue {
+  const queues = landingQueues();
+  let queue = queues.get(key);
+  if (!queue) {
+    queue = { active: false, items: [] };
+    queues.set(key, queue);
+  }
+  return queue;
+}
+
+function removeQueuedLanding(runId: string, key: string): LandingQueueItem | null {
+  const queue = landingQueues().get(key);
+  if (!queue) return null;
+
+  const index = queue.items.findIndex((item) => item.runId === runId);
+  if (index < 0) return null;
+
+  const [item] = queue.items.splice(index, 1);
+  if (!item) return null;
+
+  if (!queue.active && queue.items.length === 0) {
+    landingQueues().delete(key);
+  }
+  return item;
+}
+
+function cancelQueuedLanding(
+  runId: string,
+  active: ActiveRun,
+  reason: string,
+): boolean {
+  if (!active.queuedLanding || !active.landingQueueKey) return false;
+
+  const item = removeQueuedLanding(runId, active.landingQueueKey);
+  if (!item) return false;
+
+  active.controller.abort();
+  activeRuns().delete(runId);
+  appendEvent({
+    runId,
+    type: 'landing.cancelled',
+    level: 'notice',
+    message: `Removed from landing queue for ${item.targetBranch}`,
+    payload: {
+      repositoryPath: item.repositoryPath,
+      targetBranch: item.targetBranch,
+      reason,
+    },
+  });
+  return true;
 }
 
 /**
@@ -102,6 +194,7 @@ export function activeRunPhase(runId: string): string | null {
 export function cancelRun(runId: string, reason = 'Cancelled by the user'): boolean {
   const active = activeRuns().get(runId);
   if (!active) return false;
+  if (cancelQueuedLanding(runId, active, reason)) return true;
   appendEvent({
     runId,
     type: 'run.cancelled',
@@ -249,6 +342,104 @@ function isLandable(run: RunView): boolean {
   );
 }
 
+function enqueueLanding(
+  run: RunView,
+  project: ProjectView,
+  mode: LandingMode,
+  initialPhase: string,
+): void {
+  const targetBranch = landingTargetBranchForQueue(run, project);
+  const key = landingQueueKey(project, targetBranch);
+  const queue = getLandingQueue(key);
+  const ahead = (queue.active ? 1 : 0) + queue.items.length;
+  const queued = ahead > 0;
+  const controller = new AbortController();
+
+  activeRuns().set(run.id, {
+    controller,
+    startedAt: new Date().toISOString(),
+    phase: queued ? 'queued for landing' : initialPhase,
+    landingQueueKey: key,
+    queuedLanding: queued,
+  });
+
+  queue.items.push({
+    runId: run.id,
+    controller,
+    mode,
+    queued,
+    repositoryPath: project.repositoryPath,
+    targetBranch,
+  });
+
+  if (queued) {
+    appendEvent({
+      runId: run.id,
+      type: 'landing.queued',
+      message: `Queued for landing on ${targetBranch}; ${ahead} landing${
+        ahead === 1 ? '' : 's'
+      } ahead`,
+      payload: {
+        repositoryPath: project.repositoryPath,
+        targetBranch,
+        ahead,
+        position: queue.items.length,
+      },
+    });
+  }
+
+  drainLandingQueue(key);
+}
+
+function drainLandingQueue(key: string): void {
+  const queue = landingQueues().get(key);
+  if (!queue || queue.active) return;
+
+  for (;;) {
+    const item = queue.items.shift();
+    if (!item) {
+      landingQueues().delete(key);
+      return;
+    }
+    if (item.controller.signal.aborted || !activeRuns().has(item.runId)) {
+      continue;
+    }
+
+    queue.active = true;
+    const active = activeRuns().get(item.runId);
+    if (active) {
+      active.phase =
+        item.mode.kind === 'resolve_conflicts' ? 'resolving merge conflicts' : 'landing';
+      active.queuedLanding = false;
+    }
+
+    if (item.queued) {
+      appendEvent({
+        runId: item.runId,
+        type: 'landing.dequeued',
+        message: `Landing queue turn started for ${item.targetBranch}`,
+        payload: {
+          repositoryPath: item.repositoryPath,
+          targetBranch: item.targetBranch,
+        },
+      });
+    }
+
+    void executeLanding(item.runId, item.controller.signal, item.mode).finally(() => {
+      activeRuns().delete(item.runId);
+      const latestQueue = landingQueues().get(key);
+      if (!latestQueue) return;
+      latestQueue.active = false;
+      if (latestQueue.items.length === 0) {
+        landingQueues().delete(key);
+      } else {
+        drainLandingQueue(key);
+      }
+    });
+    return;
+  }
+}
+
 /** Starts the approved-run landing flow in an isolated landing worktree. */
 export function landRun(runId: string): void {
   if (activeRuns().has(runId)) {
@@ -258,17 +449,9 @@ export function landRun(runId: string): void {
   if (!isLandable(run)) {
     throw new AppError(`Run ${run.id} is ${run.status}; approve it before landing.`);
   }
+  const project = requireProject(run.projectId);
 
-  const controller = new AbortController();
-  activeRuns().set(runId, {
-    controller,
-    startedAt: new Date().toISOString(),
-    phase: 'landing',
-  });
-
-  void executeLanding(runId, controller.signal, { kind: 'land' }).finally(() => {
-    activeRuns().delete(runId);
-  });
+  enqueueLanding(run, project, { kind: 'land' }, 'landing');
 }
 
 /** Lets the implementation agent try to resolve an existing landing conflict. */
@@ -280,17 +463,9 @@ export function resolveLandingConflicts(runId: string): void {
   if (run.status !== 'MERGE_CONFLICT') {
     throw new AppError(`Run ${run.id} is ${run.status}; there is no recorded merge conflict.`);
   }
+  const project = requireProject(run.projectId);
 
-  const controller = new AbortController();
-  activeRuns().set(runId, {
-    controller,
-    startedAt: new Date().toISOString(),
-    phase: 'resolving merge conflicts',
-  });
-
-  void executeLanding(runId, controller.signal, { kind: 'resolve_conflicts' }).finally(() => {
-    activeRuns().delete(runId);
-  });
+  enqueueLanding(run, project, { kind: 'resolve_conflicts' }, 'resolving merge conflicts');
 }
 
 type ExecuteMode =

@@ -81,7 +81,9 @@ economics visible, which matters when a run can cost a couple of dollars.
 **Multiple concurrent runs per project**
 Already supported technically — each run gets its own worktree and branch. What
 is missing is UI: a way to see several active runs at once without navigating
-between them.
+between them. Landing is narrower on purpose: runs targeting the same
+repository branch wait in a per-branch FIFO, while unrelated landing targets can
+proceed independently.
 
 **Resumable interrupted runs, properly**
 A run interrupted by a restart is marked `FAILED` and can be continued, because

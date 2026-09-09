@@ -132,6 +132,8 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
   const mode = effectiveWorkMode(run);
   const readOnly = isReadOnlyMode(mode);
   const wording = WORK_MODE_WORDING[mode];
+  const cancelSubject =
+    run.status === 'LANDING' || live.phase?.includes('landing') ? 'landing' : wording.activity;
   const canRequestChanges =
     !active && REWORKABLE_STATUSES.includes(run.status) && run.worktreePath !== null;
   // A read-only run has no diff, so there is nothing for the checks to run
@@ -190,7 +192,7 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
             disabled={busy !== null}
             onClick={() => void post(`/api/runs/${run.id}/cancel`, {}, 'cancel')}
           >
-            {busy === 'cancel' ? 'Cancelling…' : `Cancel ${wording.activity}`}
+            {busy === 'cancel' ? 'Cancelling…' : `Cancel ${cancelSubject}`}
           </button>
         ) : null}
 
@@ -512,6 +514,8 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
             <code className="mono">{targetBranch}</code>, merge{' '}
             <code className="mono">{run.branch}</code>, run validation there, then fast-forward{' '}
             <code className="mono">{targetBranch}</code> only if the result is clean.
+            If another landing is already updating this repository and branch, this run waits in
+            that branch&rsquo;s landing queue.
             If <code className="mono">{targetBranch}</code> moved since the landing worktree was
             prepared, Dev Cockpit refreshes the landing worktree first. Merge conflicts and landing
             validation failures get one agent repair pass before manual instructions are recorded.

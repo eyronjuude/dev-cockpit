@@ -3,9 +3,11 @@
 ## Shape
 
 One Next.js process. The UI and the orchestrator run together, talking to SQLite
-and the local filesystem. No queue, no worker, no broker — a single-user local
-tool does not need a distributed system, and adding one would make every failure
-harder to see.
+and the local filesystem. No external queue, no worker, no broker — a
+single-user local tool does not need a distributed system, and adding one would
+make every failure harder to see. The exception is deliberately small: landing
+uses an in-process FIFO per repository and target branch so two approved runs do
+not race to fast-forward the same checkout.
 
 ```
 ┌──────────────────────────── Next.js (127.0.0.1:4317) ────────────────────────┐
@@ -110,10 +112,12 @@ passing through implementation and validation.
 Statuses are recoverable by design: `NEEDS_CHANGES`, `READY`, `FAILED` and
 `CANCELLED` can all re-enter `IMPLEMENTING`, which is what "request changes" on
 a failed run does. `APPROVED` can proceed to `LANDING`. Clean landings reach
-`LANDED`; stale landing branches are refreshed from the current target branch in
-the isolated landing worktree before validation and fast-forward apply.
-Conflicted or failed landings get one AI repair attempt in the landing worktree
-before Dev Cockpit records manual repair instructions for an explicit retry.
+`LANDED`; if another run is already landing to the same repository and branch,
+the run waits in that branch's landing queue. Stale landing branches are
+refreshed from the current target branch in the isolated landing worktree before
+validation and fast-forward apply. Conflicted or failed landings get one AI
+repair attempt in the landing worktree before Dev Cockpit records manual repair
+instructions for an explicit retry.
 `LANDED` and `REJECTED` are terminal.
 
 ## Working modes

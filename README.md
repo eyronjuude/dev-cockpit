@@ -228,11 +228,14 @@ Specifically:
 - Landing an approved run creates or reuses a separate landing worktree from the
   target branch, merges the run branch there, runs validation, then
   fast-forwards the target checkout only when the merge and validation are
-  clean. If the target branch moved after the landing worktree was prepared, Dev
-  Cockpit refreshes the landing worktree from the current target branch before
-  validating and applying. Merge conflicts and failed landing validation get one
-  AI repair pass in the landing worktree; if that cannot finish, Dev Cockpit
-  records manual repair instructions and leaves the landing worktree intact.
+  clean. Landings are queued per repository and target branch, so two runs for
+  the same `main` land one at a time while unrelated repositories or branches
+  can proceed independently. If the target branch moved after the landing
+  worktree was prepared, Dev Cockpit refreshes the landing worktree from the
+  current target branch before validating and applying. Merge conflicts and
+  failed landing validation get one AI repair pass in the landing worktree; if
+  that cannot finish, Dev Cockpit records manual repair instructions and leaves
+  the landing worktree intact.
 - Once a run lands or is rejected, both of its worktrees are removed and their
   branches deleted with `git branch -d`, never `-D`. A worktree holding
   uncommitted changes is kept, an unmerged branch is kept, and the reason for
@@ -428,7 +431,8 @@ Two honest caveats:
 
 - **Single machine, single user.** No authentication, by design.
 - **One agent per run.** Concurrent runs across different projects are fine;
-  two agents editing one run is not supported.
+  two agents editing one run is not supported. Landing is serialized per
+  repository and target branch.
 - **A restart kills in-flight runs.** Child processes do not survive the server
   stopping. Such runs are marked `FAILED` with "interrupted by a restart" rather
   than left showing a spinner forever. The worktree and agent session id are

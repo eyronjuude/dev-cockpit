@@ -56,6 +56,9 @@ const ICON: Partial<Record<EventType, string>> = {
   'review.finding': '⚑',
   'review.completed': '⌕',
   'review.skipped': '·',
+  'landing.queued': '⋯',
+  'landing.dequeued': '▶',
+  'landing.cancelled': '⊘',
   'landing.started': '⑂',
   'landing.merged': '⑂',
   'landing.conflicted': '⚑',
@@ -90,9 +93,12 @@ function toneFor(event: RunEvent): string {
     case 'landing.applied':
       return 'text-pass';
     case 'landing.conflicted':
+    case 'landing.queued':
     case 'landing.manual_instructions':
     case 'landing.validation_failed':
       return 'text-warn';
+    case 'landing.dequeued':
+      return 'text-running';
     case 'agent.message':
       return 'text-ink';
     case 'validation.result':

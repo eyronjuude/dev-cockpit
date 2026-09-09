@@ -59,6 +59,9 @@ export const EVENT_TYPES = [
   'review.completed',
   'review.skipped',
 
+  'landing.queued',
+  'landing.dequeued',
+  'landing.cancelled',
   'landing.started',
   'landing.merged',
   'landing.conflicted',
@@ -226,6 +229,14 @@ export interface EventPayloads {
   'review.completed': { provider: string; findingCount: number; blocking: boolean };
   'review.skipped': { provider: string; reason: string };
 
+  'landing.queued': {
+    repositoryPath: string;
+    targetBranch: string;
+    ahead: number;
+    position: number;
+  };
+  'landing.dequeued': { repositoryPath: string; targetBranch: string };
+  'landing.cancelled': { repositoryPath: string; targetBranch: string; reason: string };
   'landing.started': {
     path: string;
     branch: string;
@@ -316,6 +327,9 @@ export const PROGRESS_EVENT_TYPES: readonly EventType[] = [
   'review.finding',
   'review.completed',
   'review.skipped',
+  'landing.queued',
+  'landing.dequeued',
+  'landing.cancelled',
   'landing.started',
   'landing.merged',
   'landing.conflicted',
