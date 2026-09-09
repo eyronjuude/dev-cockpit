@@ -34,6 +34,11 @@ export const EVENT_TYPES = [
   'worktree.setup',
   'worktree.removed',
 
+  'preview.started',
+  'preview.ready',
+  'preview.stopped',
+  'preview.failed',
+
   'agent.started',
   'agent.message',
   'agent.thinking',
@@ -166,6 +171,17 @@ export interface EventPayloads {
       reason: string | null;
     }[];
   };
+
+  'preview.started': {
+    command: string;
+    url: string;
+    port: number;
+    pid: number | null;
+    artifactId: string | null;
+  };
+  'preview.ready': { url: string; port: number };
+  'preview.stopped': { exitCode: number | null; signal: string | null; reason: string | null };
+  'preview.failed': { error: string; exitCode: number | null; signal: string | null };
 
   'agent.started': {
     iterationId: string;
@@ -315,3 +331,4 @@ export interface NewRunEvent<T extends EventType = EventType> {
   message: string;
   payload?: T extends keyof EventPayloads ? EventPayloads[T] : Record<string, unknown>;
 }
+

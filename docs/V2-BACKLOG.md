@@ -27,11 +27,11 @@ anything. A run started at process boot could delete artifact directories older
 than the window, and mark the rows so the UI shows "expired" rather than
 "missing".
 
-**Preview URLs**
-`developmentCommand` is recorded and never started; `previewUrl` on artifacts is
-always null. Starting a dev server per run means port allocation, health
-checking and lifecycle management — worth doing, but a subsystem rather than a
-feature.
+**Preview automation**
+Run previews can be started manually from a prepared worktree. What remains is
+policy: optional auto-start after a successful run, richer health checks beyond
+"the URL answered", and browser-capture integration that can register screenshots
+or Playwright reports against the preview URL.
 
 **Host-side permission allowlist**
 ADR 0010 made runs skip permission checks entirely, so the implementer can now

@@ -47,6 +47,10 @@ const ICON: Partial<Record<EventType, string>> = {
   'summarise.skipped': '·',
   'worktree.prepared': '⑂',
   'worktree.setup': '⚙',
+  'preview.started': '▶',
+  'preview.ready': '✓',
+  'preview.stopped': '⊘',
+  'preview.failed': '✕',
   'agent.started': '▶',
   'agent.message': '“',
   'agent.tool_started': '·',
@@ -101,6 +105,7 @@ function toneFor(event: RunEvent): string {
     case 'run.ready':
     case 'agent.completed':
     case 'run.approved':
+    case 'preview.ready':
     case 'landing.merged':
     case 'landing.refresh_completed':
     case 'landing.applied':
@@ -109,8 +114,10 @@ function toneFor(event: RunEvent): string {
     case 'landing.queued':
     case 'landing.manual_instructions':
     case 'landing.validation_failed':
+    case 'preview.failed':
       return 'text-warn';
     case 'landing.dequeued':
+    case 'preview.started':
       return 'text-running';
     case 'agent.message':
       return 'text-ink';
