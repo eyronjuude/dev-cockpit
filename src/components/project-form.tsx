@@ -412,7 +412,7 @@ export function ProjectForm({ existing }: { existing?: ProjectView }) {
                 placeholder="npm run dev"
                 onChange={(e) => setDevelopmentCommand(e.target.value)}
               />
-              <p className="hint">Recorded for reference. V1 does not start it.</p>
+                <p className="hint">Used by the run screen&apos;s Start preview action.</p>
             </div>
             <div>
               <label className="label" htmlFor="open-command">
@@ -551,7 +551,7 @@ export function ProjectForm({ existing }: { existing?: ProjectView }) {
               id="agent-model"
               className="input input-mono"
               value={agentModel}
-              placeholder="leave blank for the Claude Code default"
+              placeholder="leave blank for the default implementation model"
               onChange={(e) => setAgentModel(e.target.value)}
             />
           </div>

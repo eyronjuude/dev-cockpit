@@ -96,6 +96,17 @@ function outcome(overrides: Partial<AgentOutcome> = {}): AgentOutcome {
   };
 }
 
+function capacityOutcome(provider = 'Claude Code'): AgentOutcome {
+  return outcome({
+    ok: false,
+    sessionId: null,
+    exitCode: 1,
+    finalText: null,
+    costUsd: null,
+    errorMessage: `${provider} usage limit reached. Your limit will reset in 2 hours.`,
+  });
+}
+
 interface AgentCall {
   method: 'startRun' | 'continueRun';
   prompt: string;
@@ -110,14 +121,16 @@ interface AgentCall {
  * than inferred from the run row afterwards.
  */
 function recordingAgent(options: {
+  id?: string;
+  label?: string;
   available?: boolean;
   calls: AgentCall[];
   edit?: (input: AgentStartInput) => void | Promise<void>;
   result?: (call: number) => AgentOutcome;
 }): ImplementationAgent {
   return {
-    id: 'claude-code',
-    label: 'Recording Agent',
+    id: options.id ?? 'claude-code',
+    label: options.label ?? 'Recording Agent',
     async checkAvailability() {
       return options.available === false
         ? { available: false, detail: 'not installed in test', version: null }
@@ -237,6 +250,148 @@ describe('retrying a failed run', () => {
 
     const types = eventsService.listEvents(created.id).map((event) => event.type);
     expect(types).toContain('run.retried');
+  });
+
+  it('falls back to Codex CLI when the preferred agent is out of capacity', async () => {
+    const project = await makeProject('capacity-fallback');
+    const created = runsService.createRun({
+      projectId: project.id,
+      request: 'Add a marker file.',
+    });
+
+    const claudeCalls: AgentCall[] = [];
+    const codexCalls: AgentCall[] = [];
+    const restoreClaude = orchestrator.registerAgent(
+      recordingAgent({
+        calls: claudeCalls,
+        result: () => capacityOutcome('Claude Code'),
+      }),
+    );
+    const restoreCodex = orchestrator.registerAgent(
+      recordingAgent({
+        id: 'codex-code',
+        label: 'Codex CLI',
+        calls: codexCalls,
+        edit: writeAgentFile,
+        result: () =>
+          outcome({
+            sessionId: 'sess-codex',
+            finalText: 'Codex wrote the file.',
+            costUsd: null,
+          }),
+      }),
+    );
+
+    try {
+      orchestrator.startRun(created.id);
+      await waitForIdle(created.id);
+    } finally {
+      restoreCodex();
+      restoreClaude();
+    }
+
+    expect(claudeCalls).toHaveLength(1);
+    expect(codexCalls).toHaveLength(1);
+    expect(codexCalls[0]?.method).toBe('startRun');
+
+    const completed = runsService.requireRun(created.id);
+    expect(completed.status).toBe('READY');
+    expect(completed.agentProvider).toBe('codex-code');
+    expect(completed.agentSessionId).toBe('sess-codex');
+    expect(completed.iterations.map((iteration) => iteration.status)).toEqual([
+      'failed',
+      'completed',
+    ]);
+    expect(fs.existsSync(path.join(completed.worktreePath!, 'agent.txt'))).toBe(true);
+
+    const types = eventsService.listEvents(created.id).map((event) => event.type);
+    expect(types).toContain('agent.fallback_started');
+    expect(types).toContain('agent.completed');
+    expect(types).not.toContain('run.paused');
+  });
+
+  it('pauses and later retries when every implementation agent is out of capacity', async () => {
+    const project = await makeProject('capacity-paused');
+    const created = runsService.createRun({
+      projectId: project.id,
+      request: 'Add a marker file.',
+    });
+
+    const exhaustedClaude = orchestrator.registerAgent(
+      recordingAgent({
+        calls: [],
+        result: () => capacityOutcome('Claude Code'),
+      }),
+    );
+    const exhaustedCodex = orchestrator.registerAgent(
+      recordingAgent({
+        id: 'codex-code',
+        label: 'Codex CLI',
+        calls: [],
+        result: () => capacityOutcome('Codex CLI'),
+      }),
+    );
+
+    try {
+      orchestrator.startRun(created.id);
+      await waitForIdle(created.id);
+    } finally {
+      exhaustedCodex();
+      exhaustedClaude();
+    }
+
+    const paused = runsService.requireRun(created.id);
+    expect(paused.status).toBe('PAUSED');
+    expect(paused.error).toContain('provider limits refresh');
+    expect(paused.worktreePath).not.toBeNull();
+    expect(paused.iterations.map((iteration) => iteration.status)).toEqual([
+      'failed',
+      'failed',
+    ]);
+
+    const pausedEvents = eventsService.listEvents(created.id);
+    expect(pausedEvents.map((event) => event.type)).toContain('run.paused');
+    expect(pausedEvents.map((event) => event.type)).not.toContain('run.failed');
+
+    const retryClaude = orchestrator.registerAgent(
+      recordingAgent({
+        calls: [],
+        result: () => capacityOutcome('Claude Code'),
+      }),
+    );
+    const retryCodexCalls: AgentCall[] = [];
+    const retryCodex = orchestrator.registerAgent(
+      recordingAgent({
+        id: 'codex-code',
+        label: 'Codex CLI',
+        calls: retryCodexCalls,
+        edit: writeAgentFile,
+        result: () =>
+          outcome({
+            sessionId: 'sess-codex-retry',
+            finalText: 'Codex retried after capacity refreshed.',
+            costUsd: null,
+          }),
+      }),
+    );
+
+    let plan: ReturnType<typeof orchestrator.retryRun>;
+    try {
+      plan = orchestrator.retryRun(created.id);
+      await waitForIdle(created.id);
+    } finally {
+      retryCodex();
+      retryClaude();
+    }
+
+    expect(plan.stage).toBe('implement');
+    expect(retryCodexCalls).toHaveLength(1);
+
+    const retried = runsService.requireRun(created.id);
+    expect(retried.status).toBe('READY');
+    expect(retried.error).toBeNull();
+    expect(retried.agentProvider).toBe('codex-code');
+    expect(retried.iterations.at(-1)?.status).toBe('completed');
   });
 
   it('resumes at validation without running the agent again', async () => {

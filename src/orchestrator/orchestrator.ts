@@ -2,9 +2,17 @@ import 'server-only';
 
 import path from 'node:path';
 
+import { capacityExhaustionReason } from '@/agents/capacity';
 import { ClaudeCodeAgent } from '@/agents/claude-code';
+import { CodexCodeAgent } from '@/agents/codex-code';
 import { summariseToolInput } from '@/agents/stream-parser';
-import type { AgentOutcome, AgentStreamEvent, ImplementationAgent } from '@/agents/types';
+import type {
+  AgentAvailability,
+  AgentOutcome,
+  AgentStartInput,
+  AgentStreamEvent,
+  ImplementationAgent,
+} from '@/agents/types';
 import { landingBranchName, runAttemptBranchName } from '@/core/ids';
 import { AppError, errorMessage } from '@/core/errors';
 import {
@@ -79,6 +87,7 @@ import {
   setStatus,
   switchRunMode,
   updateRunFields,
+  type IterationView,
   type RunView,
 } from '@/services/runs';
 import { getTransformer } from '@/transformers/registry';
@@ -415,6 +424,7 @@ function setPhase(runId: string, phase: string): void {
 
 const AGENTS: Record<string, ImplementationAgent> = {
   'claude-code': new ClaudeCodeAgent(),
+  'codex-code': new CodexCodeAgent(),
 };
 
 export function getAgent(id: string): ImplementationAgent {
@@ -434,6 +444,40 @@ export function registerAgent(agent: ImplementationAgent): () => void {
 
 export function listAgents(): readonly ImplementationAgent[] {
   return Object.values(AGENTS);
+}
+
+const DEFAULT_AGENT_FALLBACKS: readonly string[] = ['claude-code', 'codex-code'];
+const AGENT_FALLBACKS_ENV = 'DEV_COCKPIT_AGENT_FALLBACKS';
+
+function implementationFallbackOrder(preferredId: string): ImplementationAgent[] {
+  const preferred = getAgent(preferredId);
+  const configured = process.env[AGENT_FALLBACKS_ENV];
+  const fallbackIds =
+    configured === undefined
+      ? DEFAULT_AGENT_FALLBACKS
+      : configured
+          .split(',')
+          .map((id) => id.trim())
+          .filter((id) => id.length > 0 && id !== 'none');
+
+  const ordered: ImplementationAgent[] = [];
+  const seen = new Set<string>();
+  for (const id of [preferred.id, ...fallbackIds]) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const agent = AGENTS[id];
+    if (agent) ordered.push(agent);
+  }
+  return ordered;
+}
+
+function modelForAgent(agentId: string, run: RunView, project: ProjectView): string | null {
+  const runModel = run.agentModel?.trim() || null;
+  const projectModel = project.agentModel?.trim() || null;
+
+  if (agentId === 'claude-code') return runModel ?? projectModel;
+  if (agentId === run.agentProvider) return runModel;
+  return null;
 }
 
 /* ------------------------------------------------------------------ *
@@ -457,7 +501,7 @@ export interface RequestChangesOptions {
    * Switch the run into this mode for the follow-up iteration.
    *
    * This is how a plan becomes an implementation without losing the session
-   * that produced it: the same Claude Code session is resumed, told the rules
+   * that produced it: the same agent session is resumed, told the rules
    * have changed, and asked to build what it just planned.
    */
   mode?: ResolvedWorkMode;
@@ -963,6 +1007,9 @@ async function execute(runId: string, signal: AbortSignal, mode: ExecuteMode): P
   } catch (err) {
     if (signal.aborted) {
       await finishCancelled(runId);
+      return;
+    }
+    if (err instanceof AppError && err.code === 'run_paused') {
       return;
     }
     const message = errorMessage(err);
@@ -1510,6 +1557,20 @@ const ITERATION_KIND_FOR_MODE: Record<ImplementMode['kind'], IterationKind> = {
   retry: 'retry',
 };
 
+interface AgentAttemptResult {
+  agent: ImplementationAgent;
+  iteration: IterationView;
+  outcome: AgentOutcome;
+  model: string | null;
+}
+
+interface CapacityAttempt {
+  provider: string;
+  label: string;
+  reason: string;
+  exitCode: number | null;
+}
+
 async function phaseImplement(
   run: RunView,
   project: ProjectView,
@@ -1523,24 +1584,18 @@ async function phaseImplement(
   }
 
   const wording = WORK_MODE_WORDING[workMode.id];
+  const modeLabel = WORK_MODE_LABELS[workMode.id];
 
   setStatus(run.id, 'IMPLEMENTING', { started: run.startedAt === null });
   setPhase(run.id, wording.activity);
 
-  const agent = getAgent(run.agentProvider);
-
-  const availability = await agent.checkAvailability();
-  if (!availability.available) {
-    throw new AppError(
-      `${agent.label} is not available: ${availability.detail}`,
-      { code: 'agent_unavailable' },
-    );
-  }
-
   // Resume when a session exists, so a change request or a retry keeps
   // context. A first pass has no session to resume, and a forced restart
   // cleared it, which is what makes that one genuinely cold.
-  const resumeSessionId = mode.kind === 'initial' ? null : run.agentSessionId;
+  const preferredResumeSessionId = mode.kind === 'initial' ? null : run.agentSessionId;
+  const priorOutput = latestIteration(run.id)?.finalText ?? null;
+  const validationEvidence = latestValidationAttempt(run.id);
+  const findingEvidence = latestFindings(run);
 
   // A retry re-issues the last implementation prompt verbatim: the instruction
   // is not the thing being changed, the attempt at it is. Falling back to the
@@ -1551,7 +1606,7 @@ async function phaseImplement(
       ? (lastImplementationIteration(run.iterations)?.prompt.trim() || null)
       : null;
 
-  const prompt =
+  const promptForAttempt = (resumeSessionId: string | null) =>
     mode.kind === 'initial' || (mode.kind === 'retry' && retriedPrompt === null)
       ? buildInitialPrompt({ run, project, profile, mode: workMode })
       : mode.kind === 'retry'
@@ -1560,51 +1615,21 @@ async function phaseImplement(
             run,
             project,
             feedback: mode.feedback,
-            validations: latestValidationAttempt(run.id),
-            findings: latestFindings(run),
+            validations: validationEvidence,
+            findings: findingEvidence,
             mode: workMode,
             modeSwitched: mode.switched,
             resumed: resumeSessionId !== null,
             // A resumed session already holds what it wrote. Without one the
             // agent starts cold, so the previous iteration's output has to
             // travel in the prompt or the follow-up asks for work from nothing.
-            priorOutput:
-              resumeSessionId === null ? (latestIteration(run.id)?.finalText ?? null) : null,
+            priorOutput: resumeSessionId === null ? priorOutput : null,
           });
 
   // A mode can only take capability away, never add it: the read-only modes
   // force Claude Code's own `plan` permission mode over whatever the project
   // resolved to.
   const permissionMode = effectivePermissionMode(project.effectivePermissionMode, workMode);
-
-  const iteration = createIteration({
-    runId: run.id,
-    kind: ITERATION_KIND_FOR_MODE[mode.kind],
-    prompt,
-    sessionId: resumeSessionId,
-    resumed: resumeSessionId !== null,
-  });
-
-  const modeLabel = WORK_MODE_LABELS[workMode.id];
-
-  appendEvent({
-    runId: run.id,
-    type: 'agent.started',
-    message: resumeSessionId
-      ? `Resuming ${agent.label} session ${resumeSessionId.slice(0, 8)} in ${modeLabel} mode (iteration ${iteration.ordinal})`
-      : `Starting ${agent.label} in ${modeLabel} mode (iteration ${iteration.ordinal})`,
-    payload: {
-      iterationId: iteration.id,
-      provider: agent.id,
-      sessionId: resumeSessionId,
-      resumed: resumeSessionId !== null,
-      model: run.agentModel ?? project.agentModel,
-    },
-  });
-
-  const onEvent = (event: AgentStreamEvent) => {
-    handleAgentEvent(run.id, iteration.id, event);
-  };
 
   /**
    * The attachment directory is handed over only when the run has a file that
@@ -1618,52 +1643,164 @@ async function phaseImplement(
       ? [...project.agentAddDirs, runAttachmentDir(run.id)]
       : project.agentAddDirs;
 
-  const startInput = {
-    runId: run.id,
-    iterationId: iteration.id,
-    prompt,
-    worktreePath: run.worktreePath,
-    additionalDirs,
-    model: run.agentModel ?? project.agentModel,
-    permissionMode,
-    effort: profile.agentEffort,
-    timeoutMs: profile.agentTimeoutMs,
-    signal,
-    onEvent,
-  };
+  const agents = implementationFallbackOrder(run.agentProvider);
+  const capacityAttempts: CapacityAttempt[] = [];
+  let finalAttempt: AgentAttemptResult | null = null;
 
-  const outcome: AgentOutcome = resumeSessionId
-    ? await agent.continueRun({ ...startInput, sessionId: resumeSessionId })
-    : await agent.startRun(startInput);
+  for (let index = 0; index < agents.length; index += 1) {
+    const agent = agents[index]!;
+    const resumeSessionId =
+      agent.id === run.agentProvider ? preferredResumeSessionId : null;
+    const model = modelForAgent(agent.id, run, project);
+    const availability: AgentAvailability = await agent.checkAvailability();
 
-  if (outcome.rawLogPath) {
-    await register({
+    if (!availability.available) {
+      if (capacityAttempts.length > 0) {
+        capacityAttempts.push({
+          provider: agent.id,
+          label: agent.label,
+          reason: `${agent.label} is not available: ${availability.detail}`,
+          exitCode: null,
+        });
+        continue;
+      }
+      throw new AppError(`${agent.label} is not available: ${availability.detail}`, {
+        code: 'agent_unavailable',
+      });
+    }
+
+    const prompt = promptForAttempt(resumeSessionId);
+    const iteration = createIteration({
       runId: run.id,
-      kind: 'implementation_log',
-      label: `Agent stream (iteration ${iteration.ordinal})`,
-      filePath: outcome.rawLogPath,
-      mimeType: 'application/x-ndjson',
-      meta: { iterationId: iteration.id, sessionId: outcome.sessionId },
+      kind: ITERATION_KIND_FOR_MODE[mode.kind],
+      prompt,
+      sessionId: resumeSessionId,
+      resumed: resumeSessionId !== null,
     });
+
+    appendEvent({
+      runId: run.id,
+      type: 'agent.started',
+      message: resumeSessionId
+        ? `Resuming ${agent.label} session ${resumeSessionId.slice(0, 8)} in ${modeLabel} mode (iteration ${iteration.ordinal})`
+        : `Starting ${agent.label} in ${modeLabel} mode (iteration ${iteration.ordinal})`,
+      payload: {
+        iterationId: iteration.id,
+        provider: agent.id,
+        sessionId: resumeSessionId,
+        resumed: resumeSessionId !== null,
+        model,
+      },
+    });
+
+    const onEvent = (event: AgentStreamEvent) => {
+      if (event.kind === 'session' && agent.id !== run.agentProvider) return;
+      handleAgentEvent(run.id, iteration.id, event);
+    };
+
+    const startInput: AgentStartInput = {
+      runId: run.id,
+      iterationId: iteration.id,
+      prompt,
+      worktreePath: run.worktreePath,
+      additionalDirs,
+      model,
+      permissionMode,
+      effort: profile.agentEffort,
+      timeoutMs: profile.agentTimeoutMs,
+      signal,
+      onEvent,
+    };
+
+    const outcome: AgentOutcome = resumeSessionId
+      ? await agent.continueRun({ ...startInput, sessionId: resumeSessionId })
+      : await agent.startRun(startInput);
+
+    if (outcome.rawLogPath) {
+      await register({
+        runId: run.id,
+        kind: 'implementation_log',
+        label: `${agent.label} stream (iteration ${iteration.ordinal})`,
+        filePath: outcome.rawLogPath,
+        mimeType: 'application/x-ndjson',
+        meta: { iterationId: iteration.id, sessionId: outcome.sessionId, provider: agent.id },
+      });
+    }
+
+    finishIteration(iteration.id, {
+      status: outcome.cancelled ? 'cancelled' : outcome.ok ? 'completed' : 'failed',
+      sessionId: outcome.sessionId,
+      exitCode: outcome.exitCode,
+      numTurns: outcome.numTurns,
+      costUsd: outcome.costUsd,
+      finalText: outcome.finalText,
+      error: outcome.errorMessage,
+    });
+
+    if (outcome.costUsd !== null) {
+      const fresh = requireRun(run.id);
+      updateRunFields(run.id, { costUsd: (fresh.costUsd ?? 0) + outcome.costUsd });
+    }
+
+    const capacityReason =
+      outcome.ok || outcome.cancelled ? null : capacityExhaustionReason(outcome.errorMessage);
+    const nextAgent = agents[index + 1] ?? null;
+
+    if (capacityReason) {
+      capacityAttempts.push({
+        provider: agent.id,
+        label: agent.label,
+        reason: capacityReason,
+        exitCode: outcome.exitCode,
+      });
+      appendEvent({
+        runId: run.id,
+        type: 'agent.failed',
+        level: 'notice',
+        message: `${agent.label} is out of provider capacity: ${capacityReason}`,
+        payload: {
+          iterationId: iteration.id,
+          provider: agent.id,
+          error: capacityReason,
+          exitCode: outcome.exitCode,
+        },
+      });
+
+      if (nextAgent) {
+        appendEvent({
+          runId: run.id,
+          type: 'agent.fallback_started',
+          level: 'notice',
+          message: `${agent.label} is out of provider capacity; trying ${nextAgent.label}`,
+          payload: {
+            iterationId: iteration.id,
+            from: agent.id,
+            to: nextAgent.id,
+            reason: capacityReason,
+          },
+        });
+        continue;
+      }
+
+      pauseRunForCapacity(run, capacityAttempts);
+    }
+
+    finalAttempt = { agent, iteration, outcome, model };
+    break;
   }
 
-  finishIteration(iteration.id, {
-    status: outcome.cancelled ? 'cancelled' : outcome.ok ? 'completed' : 'failed',
-    sessionId: outcome.sessionId,
-    exitCode: outcome.exitCode,
-    numTurns: outcome.numTurns,
-    costUsd: outcome.costUsd,
-    finalText: outcome.finalText,
-    error: outcome.errorMessage,
-  });
+  if (!finalAttempt) pauseRunForCapacity(run, capacityAttempts);
 
-  if (outcome.sessionId) {
+  const { agent, iteration, outcome, model } = finalAttempt;
+
+  if (outcome.ok && agent.id !== run.agentProvider) {
+    updateRunFields(run.id, {
+      agentProvider: agent.id,
+      agentSessionId: outcome.sessionId,
+      agentModel: model,
+    });
+  } else if (outcome.sessionId) {
     updateRunFields(run.id, { agentSessionId: outcome.sessionId });
-  }
-
-  const previousCost = run.costUsd ?? 0;
-  if (outcome.costUsd !== null) {
-    updateRunFields(run.id, { costUsd: previousCost + outcome.costUsd });
   }
 
   // A build run whose agent had tools refused worked with less capability than
@@ -1699,9 +1836,10 @@ async function phaseImplement(
       runId: run.id,
       type: 'agent.failed',
       level: 'error',
-      message: outcome.errorMessage ?? `The ${wording.agentNoun} failed`,
+      message: outcome.errorMessage ?? `${agent.label} failed`,
       payload: {
         iterationId: iteration.id,
+        provider: agent.id,
         error: outcome.errorMessage ?? 'unknown',
         exitCode: outcome.exitCode,
       },
@@ -1760,6 +1898,40 @@ async function phaseImplement(
   }
 
   return requireRun(run.id);
+}
+
+function pauseRunForCapacity(run: RunView, attempts: readonly CapacityAttempt[]): never {
+  const agents: CapacityAttempt[] =
+    attempts.length > 0
+      ? [...attempts]
+      : [
+          {
+            provider: run.agentProvider,
+            label: run.agentProvider,
+            reason: 'No implementation fallback was available',
+            exitCode: null,
+          },
+        ];
+  const summary =
+    agents.length === 1
+      ? `${agents[0]!.label} is currently out of provider capacity.`
+      : 'All configured implementation agents are currently out of provider capacity or unavailable.';
+  const details = agents.map((attempt) => `${attempt.label}: ${attempt.reason}`).join(' | ');
+  const message = `${summary} Retry this run after the provider limits refresh. ${details}`;
+
+  appendEvent({
+    runId: run.id,
+    type: 'run.paused',
+    level: 'notice',
+    message,
+    payload: { reason: message, agents },
+  });
+  setStatus(run.id, 'PAUSED', {
+    reason: 'implementation agents exhausted',
+    finished: true,
+    error: message,
+  });
+  throw new AppError(message, { code: 'run_paused' });
 }
 
 /* ------------------------------------------------------------------ *

@@ -3,10 +3,10 @@
 A local-first control centre for AI-assisted software engineering.
 
 You give it a development request in plain language. It creates a persistent
-Run, prepares an isolated Git worktree, launches Claude Code inside that
-worktree, captures what happened as structured data, runs your project's own
-checks against the result, collects the evidence, and presents all of it for you
-to approve or reject.
+Run, prepares an isolated Git worktree, launches an implementation agent inside
+that worktree, captures what happened as structured data, runs your project's
+own checks against the result, collects the evidence, and presents all of it for
+you to approve or reject.
 
 It is not a model and not an IDE. It is the layer that turns "make the login
 page remember the email address" into an auditable run with a diff, four exit
@@ -16,10 +16,11 @@ codes and a decision.
 
 **Implementer ≠ approver.**
 
-Claude Code is the implementer. It is never treated as authoritative about
-whether the work is done. Readiness is computed from stored run state and
-deterministic validation results — the agent's own summary is recorded as a
-claim and shown as one.
+Claude Code is the default implementer, with Codex CLI available as the built-in
+fallback when the default provider is out of capacity. Neither is treated as
+authoritative about whether the work is done. Readiness is computed from stored
+run state and deterministic validation results — the agent's own summary is
+recorded as a claim and shown as one.
 
 Here is that rule doing its job on a real run:
 
@@ -72,7 +73,7 @@ has finished.
 - **Node.js 22.12 or newer.** Built and tested on 22.17.
 - **Git 2.30 or newer**, with `git worktree` available. Tested on 2.43.
 - **Claude Code CLI** on `PATH`, already logged in. Tested against 2.1.263.
-  Check with `claude --version`.
+  Check with `claude --version`. This is the default implementer.
 - Windows, macOS or Linux. Developed and verified on Windows 11.
 
 No API key is required. The optional transformer and reviewer layers default to
@@ -80,10 +81,11 @@ providers that reuse a local CLI's own authentication.
 
 Optional, and each unlocks one more provider:
 
-- **Codex CLI** (`npm i -g @openai/codex`, then `codex login`) — runs the
-  transformer and reviewer on your **ChatGPT plan**, no API key. This is the
-  recommended reviewer, because a reviewer from a different vendor than the
-  implementer catches a different class of problem.
+- **Codex CLI** (`npm i -g @openai/codex`, then `codex login`) — provides the
+  implementation fallback and runs the transformer and reviewer on your
+  **ChatGPT plan**, no API key. This is the recommended reviewer, because a
+  reviewer from a different vendor than the implementer catches a different
+  class of problem.
 - `ANTHROPIC_API_KEY` — enables the `anthropic-api` providers.
 - `OPENAI_API_KEY` — enables the `openai-api` providers.
 
@@ -99,8 +101,8 @@ Then open <http://127.0.0.1:4317>.
 
 For development, `npm run dev` runs the same app with hot reloading.
 
-The server binds to `127.0.0.1` only. This application launches Claude Code and
-runs your project's shell commands, so it is never exposed on a network
+The server binds to `127.0.0.1` only. This application launches implementation
+agents and runs your project's shell commands, so it is never exposed on a network
 interface. Mutating API routes additionally require a local `Origin` header, so
 a page in another tab cannot start a run.
 
@@ -159,8 +161,8 @@ cites `file:line` for every claim about the code; it is told **not** to hand you
 a plan. Plan gives you ordered steps, what would prove them, and the risks.
 
 A finished Ask or Plan run offers a switch to Build — **Implement this plan**,
-or **Switch to Build** from an answer — which resumes the same Claude Code
-session, so the reading behind it is not thrown away.
+or **Switch to Build** from an answer — which resumes the same agent session, so
+the reading behind it is not thrown away.
 
 Approving a plan does not use that offer up. There is nothing to land, so
 **Approved** on an Ask or Plan run records the decision and leaves both
@@ -239,8 +241,17 @@ The button says which of those it will do, so pressing it holds no surprise.
 **Retry iteration** sends the last implementation prompt again, unchanged. It is
 for when the pass is what went wrong — a timeout, a CLI that died, an agent that
 stopped halfway — rather than the request, which is what *Request changes* is
-for. The recorded Claude Code session is resumed when there is one, so the second
+for. The recorded agent session is resumed when there is one, so the second
 attempt knows what the first already wrote.
+
+If the implementation provider reports a quota, credit or rate-limit exhaustion,
+Dev Cockpit tries the next configured implementation fallback. The default order
+is `claude-code`, then `codex-code`; override the fallback tail with
+`DEV_COCKPIT_AGENT_FALLBACKS=codex-code` or set it to `none` to disable
+fallbacks. If every implementation option is exhausted or unavailable after one
+has exhausted, the run moves to **Paused**. Its worktree, branch, prompt history
+and artifacts stay intact, and **Retry** picks it up at the agent pass after the
+provider limits refresh.
 
 Neither retry is offered while a run is live. The honest action there is
 **Cancel**, which already says what it does; a retry that quietly killed a
@@ -380,7 +391,7 @@ data/
     ├── changes.diff              git diff, verbatim
     ├── changed-files.json
     ├── visualisation/implementation-map-N.svg
-    ├── agent/<iterationId>.stream.jsonl   raw Claude Code stream
+    ├── agent/<iterationId>*.jsonl     raw implementation-agent stream
     ├── answers/iteration-N.md        ask runs only
     ├── plans/iteration-N.md          plan runs only
     ├── summaries/iteration-N.md      build runs only
@@ -479,11 +490,11 @@ attachments inform is the implementation.
 
 **The list is fixed once a run starts working.** You can add and remove while a
 run is a draft, and again whenever it comes back — `NEEDS_CHANGES`, `READY`,
-`FAILED` or `CANCELLED` — which is what makes "here is a screenshot of what is
-still wrong" work before you press Request changes. A follow-up prompt marks
-which files arrived since the last pass. While a run is implementing, its
-prompt is already built, so the list is read-only rather than quietly
-ineffective.
+`PAUSED`, `FAILED` or `CANCELLED` — which is what makes "here is a screenshot
+of what is still wrong" work before you press Request changes or Retry. A
+follow-up prompt marks which files arrived since the last pass. While a run is
+implementing, its prompt is already built, so the list is read-only rather than
+quietly ineffective.
 
 Both add and remove are recorded as run events, so a file that was attached and
 later withdrawn still shows in the log. What the agent was given stays
@@ -530,7 +541,7 @@ picture taken before the request survives next to the one taken after it.
 
 | Role | Providers | Credential |
 | --- | --- | --- |
-| Implementer | `claude-code` | Claude Code CLI login |
+| Implementer | `claude-code` default, `codex-code` fallback | CLI login |
 | Transformer — request → specification, and the implementer's closing message → plain language | `none` (default), `codex-cli`, `claude-cli`, `openai-api`, `anthropic-api` | CLI login, or an API key |
 | Reviewer — read-only opinion on the diff | `codex-cli`, `openai-api`, `claude-cli`, `anthropic-api` | CLI login, or an API key |
 
@@ -588,11 +599,12 @@ Two honest caveats:
   its footer says when it was taken. It also caps the change map at 40 file
   rows and counts the rest, so a very large run is summarised rather than
   drawn in full.
-- **Only the `claude-cli` providers have actually executed.** `codex-cli`,
-  `openai-api` and `anthropic-api` are implemented against current published
-  interfaces, but no OpenAI key, no Anthropic key and no installed Codex CLI
-  were available during development. Their *unavailable* paths are tested; their
-  success paths are not. Treat them as untested until you have run one.
+- **Only the Claude CLI implementation path has executed live end to end.**
+  `codex-code`, `codex-cli`, `openai-api` and `anthropic-api` are implemented
+  against current published interfaces, but the Codex and API-key success paths
+  were not exercised during development. Their unavailable paths and fallback
+  orchestration are tested; treat live success as unproven until you have run
+  one on your machine.
 - **Runs skip permission checks by default.** A run is unattended: there is no
   terminal to answer an approval in, so a permission check can only be bypassed
   or refused — asking is not an option. The default is therefore

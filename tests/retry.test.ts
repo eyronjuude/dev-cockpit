@@ -171,7 +171,13 @@ describe('lastImplementationIteration', () => {
 
 describe('canRetry', () => {
   it('offers a retry only for a run that stopped short of a verdict', () => {
-    expect(RETRYABLE_STATUSES).toEqual(['FAILED', 'CANCELLED', 'MERGE_CONFLICT', 'LANDING_FAILED']);
+    expect(RETRYABLE_STATUSES).toEqual([
+      'PAUSED',
+      'FAILED',
+      'CANCELLED',
+      'MERGE_CONFLICT',
+      'LANDING_FAILED',
+    ]);
     for (const status of RETRYABLE_STATUSES) {
       expect(canRetry(run({ status }), false), status).toBe(true);
     }
@@ -195,7 +201,7 @@ describe('canRetry', () => {
 
 describe('canRetryIteration', () => {
   it('offers the current iteration wherever a change request is offered', () => {
-    for (const status of ['NEEDS_CHANGES', 'READY', 'FAILED', 'CANCELLED'] as RunStatus[]) {
+    for (const status of ['NEEDS_CHANGES', 'READY', 'PAUSED', 'FAILED', 'CANCELLED'] as RunStatus[]) {
       expect(canRetryIteration(run({ status }), false), status).toBe(true);
     }
   });
@@ -229,6 +235,7 @@ describe('canRetryIteration', () => {
 describe('canForceRestart', () => {
   it('applies to every run that has not finished, including a live one', () => {
     expect(canForceRestart(run({ status: 'IMPLEMENTING' }))).toBe(true);
+    expect(canForceRestart(run({ status: 'PAUSED' }))).toBe(true);
     expect(canForceRestart(run({ status: 'DRAFT' }))).toBe(true);
     expect(canForceRestart(run({ status: 'APPROVED' }))).toBe(true);
     expect(canForceRestart(run({ status: 'LANDED' }))).toBe(false);

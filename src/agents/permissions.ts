@@ -63,3 +63,19 @@ export function claudePermissionArgs(mode: string): string[] {
     ? ['--dangerously-skip-permissions']
     : ['--permission-mode', effective];
 }
+
+/**
+ * The closest Codex CLI equivalent for Dev Cockpit's unattended permission
+ * modes.
+ *
+ * `bypassPermissions` matches the default project posture: Dev Cockpit has
+ * already isolated the run in a throwaway worktree, so the CLI is allowed to
+ * execute without stopping for confirmations. `plan` stays read-only. The
+ * legacy modes fall back to workspace-write with automatic approval review,
+ * which avoids an interactive prompt in a process nobody is watching.
+ */
+export function codexPermissionArgs(mode: string): string[] {
+  if (mode === 'plan') return ['--sandbox', 'read-only'];
+  if (mode === 'bypassPermissions') return ['--dangerously-bypass-approvals-and-sandbox'];
+  return ['--sandbox', 'workspace-write', '--approve-for-me'];
+}

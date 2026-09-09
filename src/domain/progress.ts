@@ -46,6 +46,7 @@ const PHASE_INDEX: Record<string, number> = {
 const STATUS_INDEX: Partial<Record<RunStatus, number>> = {
   PREPARING: 1,
   IMPLEMENTING: 2,
+  PAUSED: 2,
   VALIDATING: 4,
   REVIEWING: 5,
 };
@@ -93,6 +94,7 @@ const TONE: Partial<Record<RunStatus, ProgressTone>> = {
   APPROVED: 'pass',
   NEEDS_CHANGES: 'warn',
   FAILED: 'fail',
+  PAUSED: 'warn',
   CANCELLED: 'idle',
   REJECTED: 'idle',
   DRAFT: 'idle',
@@ -118,7 +120,7 @@ export function computeRunProgress({
 }: RunProgressInput): RunProgress {
   const total = RUN_PHASES.length;
   const finished = FINISHED.includes(status);
-  const halted = status === 'FAILED' || status === 'CANCELLED';
+  const halted = status === 'FAILED' || status === 'CANCELLED' || status === 'PAUSED';
   const running = active && !finished;
 
   const fromPhase = phase === null ? undefined : PHASE_INDEX[phase];

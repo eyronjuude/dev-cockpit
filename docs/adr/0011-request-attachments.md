@@ -24,7 +24,7 @@ Four questions had to be answered before any of this was buildable.
 
 Attachments can be added when a request is created and afterwards, while the
 run is in a status that can re-enter implementation: `DRAFT`, `NEEDS_CHANGES`,
-`READY`, `FAILED`, `CANCELLED`. The set is `ATTACHMENT_MUTABLE_STATUSES` in
+`READY`, `PAUSED`, `FAILED`, `CANCELLED`. The set is `ATTACHMENT_MUTABLE_STATUSES` in
 `domain/attachments.ts`.
 
 Create-only would have been simpler and would have missed the best case for the

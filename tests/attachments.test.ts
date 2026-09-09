@@ -134,7 +134,7 @@ describe('when attachments may change', () => {
     // Every mutable status has a documented transition back to IMPLEMENTING,
     // which is what makes a file attached now something the run will read.
     expect([...ATTACHMENT_MUTABLE_STATUSES].sort()).toEqual(
-      ['CANCELLED', 'DRAFT', 'FAILED', 'NEEDS_CHANGES', 'READY'].sort(),
+      ['CANCELLED', 'DRAFT', 'FAILED', 'NEEDS_CHANGES', 'PAUSED', 'READY'].sort(),
     );
   });
 

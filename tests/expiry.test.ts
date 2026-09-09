@@ -81,6 +81,7 @@ describe('retention policy', () => {
       'DRAFT',
       'PREPARING',
       'IMPLEMENTING',
+      'PAUSED',
       'VALIDATING',
       'REVIEWING',
       'NEEDS_CHANGES',

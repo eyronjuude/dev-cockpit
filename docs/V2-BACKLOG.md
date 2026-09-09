@@ -14,12 +14,12 @@ a configured E2E command runs, scan the worktree for `playwright-report/`,
 honour the project's `captureScreenshots` policy. This is the largest gap
 between what the UI implies and what the system does.
 
-**Exercise the key-based and Codex providers** — *gap*
-`codex-cli`, `openai-api` and `anthropic-api` are implemented against current
-published interfaces and none has ever executed a success path — no keys, and
-no installed Codex CLI. Each needs one real run before being described as
-working. `codex-cli` is the cheapest to prove: `npm i -g @openai/codex` and an
-interactive `codex login`.
+**Exercise the key-based and live Codex paths** — *gap*
+`codex-code`, `codex-cli`, `openai-api` and `anthropic-api` are implemented
+against current published interfaces, but their success paths still need real
+runs on a configured machine. The unavailable paths and fallback orchestration
+are tested. `codex-code` and `codex-cli` are the cheapest to prove:
+`npm i -g @openai/codex` and an interactive `codex login`.
 
 **Disk usage reporting**
 Retention now enforces both windows (ADR 0012), but nothing shows the user how
@@ -102,10 +102,10 @@ The `codex-cli` and `openai-api` reviewers make a different vendor from the
 implementer possible, which is what ADR 0005 said was missing. Neither has
 executed a success path yet. Once one has, this stops being a limitation.
 
-**Additional implementation agents**
-`ImplementationAgent` exists precisely so a second one can be added. None was,
-because one working integration verified end to end is worth more than two
-half-tested ones.
+**Project-level implementation agent preference**
+`claude-code` remains the default and `codex-code` is the built-in fallback, but
+there is no project form control for choosing a different primary implementer
+yet. The run row can store it; the UI to set it is the missing part.
 
 **Validator plugins beyond shell commands**
 The `Validator` interface is the seam. `runValidation` constructs

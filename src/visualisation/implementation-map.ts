@@ -190,6 +190,7 @@ const VERDICT_STATE: Record<RunStatus, StageState> = {
   DRAFT: 'pending',
   PREPARING: 'active',
   IMPLEMENTING: 'active',
+  PAUSED: 'blocked',
   VALIDATING: 'active',
   REVIEWING: 'active',
   NEEDS_CHANGES: 'blocked',

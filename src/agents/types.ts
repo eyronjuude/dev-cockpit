@@ -1,8 +1,8 @@
 /**
  * The implementation agent boundary.
  *
- * The orchestrator talks only to this interface. Claude Code is the V1
- * implementation; a second provider slots in without the orchestrator changing.
+ * The orchestrator talks only to this interface. CLI-backed implementation
+ * agents slot in behind this boundary without changing run orchestration.
  *
  * IMPLEMENTER != APPROVER. Nothing an agent reports here marks a run complete.
  * `AgentOutcome.ok` means "the process ended without erroring", not "the work

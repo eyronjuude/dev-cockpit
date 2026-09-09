@@ -367,7 +367,8 @@ export function NewTaskForm({
             {repoState.dirty ? ' Uncommitted work there is left alone.' : ''}
           </Row>
           <Row label={readOnly ? 'Agent' : 'Implementer'}>
-            Claude Code, in that worktree, with permission mode{' '}
+            Claude Code, in that worktree. If it is out of provider capacity, Dev Cockpit tries
+            the next implementation fallback. Permission mode:{' '}
             {readOnly ? (
               <>
                 <code className="mono">plan</code>, which refuses every edit.

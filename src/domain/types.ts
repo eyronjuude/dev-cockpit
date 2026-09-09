@@ -8,6 +8,7 @@ export const RUN_STATUSES = [
   'DRAFT',
   'PREPARING',
   'IMPLEMENTING',
+  'PAUSED',
   'VALIDATING',
   'REVIEWING',
   'NEEDS_CHANGES',
@@ -43,6 +44,7 @@ export const TERMINAL_STATUSES: readonly RunStatus[] = ['LANDED', 'REJECTED'];
  * `APPROVED`, `MERGE_CONFLICT` and `LANDING_FAILED` are deliberately absent:
  * landing is still pending in all three, and it needs the run worktree.
  * `READY` and `NEEDS_CHANGES` are absent because the user has not decided yet.
+ * `PAUSED` is absent because the run is intentionally saved for a later retry.
  * `FAILED` and `CANCELLED` are here — nothing more happens on its own — but
  * they can be reworked, so only an explicit action reclaims those.
  */
@@ -77,6 +79,7 @@ const TRANSITIONS: Record<RunStatus, readonly RunStatus[]> = {
   DRAFT: ['PREPARING', 'FAILED', 'CANCELLED'],
   PREPARING: ['IMPLEMENTING', 'FAILED', 'CANCELLED', 'DRAFT'],
   IMPLEMENTING: [
+    'PAUSED',
     'VALIDATING',
     'REVIEWING',
     'NEEDS_CHANGES',
@@ -85,6 +88,7 @@ const TRANSITIONS: Record<RunStatus, readonly RunStatus[]> = {
     'CANCELLED',
     'DRAFT',
   ],
+  PAUSED: ['IMPLEMENTING', 'REJECTED', 'CANCELLED', 'DRAFT'],
   VALIDATING: ['REVIEWING', 'NEEDS_CHANGES', 'READY', 'FAILED', 'CANCELLED', 'DRAFT'],
   REVIEWING: ['NEEDS_CHANGES', 'READY', 'FAILED', 'CANCELLED', 'DRAFT'],
   NEEDS_CHANGES: [

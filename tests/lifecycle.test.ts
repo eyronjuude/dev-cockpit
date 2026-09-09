@@ -44,6 +44,14 @@ describe('run lifecycle', () => {
   it('allows a change request to re-enter implementation', () => {
     expect(canTransition('NEEDS_CHANGES', 'IMPLEMENTING')).toBe(true);
     expect(canTransition('READY', 'IMPLEMENTING')).toBe(true);
+    expect(canTransition('PAUSED', 'IMPLEMENTING')).toBe(true);
+  });
+
+  it('lets a capacity pause stop without spending the run', () => {
+    expect(canTransition('IMPLEMENTING', 'PAUSED')).toBe(true);
+    expect(canTransition('PAUSED', 'REJECTED')).toBe(true);
+    expect(isActive('PAUSED')).toBe(false);
+    expect(isTerminal('PAUSED')).toBe(false);
   });
 
   it('allows re-running validation on a failed run', () => {

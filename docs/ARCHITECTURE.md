@@ -43,7 +43,7 @@ only the interfaces.
 
 | Boundary | Interface | V1 implementations |
 | --- | --- | --- |
-| Implementation agent | `ImplementationAgent` | `ClaudeCodeAgent` |
+| Implementation agent | `ImplementationAgent` | `ClaudeCodeAgent`, `CodexCodeAgent` |
 | Transformer | `TransformerProvider` | `NoopTransformer`, `CodexCliTransformer`, `ClaudeCliTransformer`, `OpenAiTransformer`, `AnthropicApiTransformer` |
 | Reviewer | `ReviewerAgent` | `CodexCliReviewer`, `OpenAiReviewer`, `ClaudeCliReviewer`, `AnthropicApiReviewer` |
 | Validator | `Validator` | `CommandValidator` |
@@ -65,7 +65,7 @@ src/
 ├── db/            drizzle schema, client, generated SQL migrations
 ├── process/       command execution, process-tree kill, executable resolution
 ├── git/           git wrapper, diff collection, worktree lifecycle
-├── agents/        ImplementationAgent + Claude Code adapter + stream parser
+├── agents/        ImplementationAgent + CLI adapters + stream parser
 ├── transformers/  TransformerProvider + implementations + registry
 ├── reviewers/     ReviewerAgent + implementations + registry
 ├── validation/    Validator + the engine that sequences them
@@ -83,6 +83,9 @@ Dependencies point inwards. `core` and `domain` import nothing from the app;
 
 ```
 DRAFT ──► PREPARING ──► IMPLEMENTING ──► VALIDATING ──► REVIEWING
+                              │
+                              ▼
+                           PAUSED
                                                             │
                           ┌─────────────────────────────────┴────┐
                           ▼                                      ▼
@@ -109,9 +112,9 @@ opinion — the source of truth.
 `DRAFT → READY` is not a legal transition. Nothing can reach `READY` without
 passing through implementation and validation.
 
-Statuses are recoverable by design: `NEEDS_CHANGES`, `READY`, `FAILED` and
-`CANCELLED` can all re-enter `IMPLEMENTING`, which is what "request changes" on
-a failed run does. `APPROVED` can too, and that edge exists for the read-only
+Statuses are recoverable by design: `NEEDS_CHANGES`, `READY`, `PAUSED`,
+`FAILED` and `CANCELLED` can all re-enter `IMPLEMENTING`, which is what
+"request changes" on a failed run does. `APPROVED` can too, and that edge exists for the read-only
 modes: a plan has nothing to land, so approving one is a decision to build it
 rather than the end of the run, and "Implement this plan" resumes the same
 session from there. `APPROVED` can also proceed to `LANDING`. Clean landings reach
@@ -141,7 +144,7 @@ thing while the orchestrator does another.
 ```
 planRetry(run) ─► land       when the run is landable (landing keeps its own worktree)
                ─► prepare    when there is no worktree — nothing was done yet
-               ─► implement  when no implementation iteration finished
+               ─► implement  when no implementation iteration finished, including PAUSED
                ─► validate   when one did, so the failure was downstream
 ```
 
@@ -150,6 +153,14 @@ prompt verbatim, resuming the recorded agent session. `restartRun` is the
 forceful one — it stops in-flight work, waits for the process to exit, removes
 the worktree, moves the run to the next free `-rN` branch and re-runs the
 pipeline cold.
+
+`PAUSED` is the capacity-exhaustion case. The implementation phase uses
+`DEV_COCKPIT_AGENT_FALLBACKS` after the run's preferred provider, defaulting to
+`codex-code` after `claude-code`. A quota, credit or rate-limit error finishes
+that attempt as failed, records `agent.fallback_started`, and tries the next
+implementation agent. If every option is exhausted or unavailable after one has
+exhausted, the run records `run.paused`, keeps its worktree and branch, and the
+normal **Retry** action re-enters `IMPLEMENTING`.
 
 One run gets one work slot, claimed through `begin` in the orchestrator. Every
 entry point goes through it, so "is something already running for this run" is
@@ -290,7 +301,15 @@ status and validation events refresh promptly, tool chatter waits.
 The in-process bus is only a wake-up mechanism. Persistence is authoritative, so
 a missed notification costs nothing.
 
-## Claude Code integration
+## Implementation agents
+
+The run stores one preferred `agentProvider`, currently `claude-code` for new
+runs. When a fallback provider successfully implements the run, the run's
+provider is moved to that agent so later change requests do not try to resume a
+session with the wrong CLI. Provider-specific model names are only forwarded to
+the matching adapter.
+
+### Claude Code integration
 
 Through the supported programmatic interface, not a terminal:
 
@@ -329,6 +348,26 @@ than assumed:
 
 The wire protocol is parsed by `agents/stream-parser.ts`, which is pure and
 directly tested against fixtures captured from real CLI output.
+
+### Codex CLI integration
+
+Codex is driven through `codex exec --json` with the prompt on stdin and the
+last assistant message written to an artifact file:
+
+```
+codex exec --cd <worktree>
+           --json --color never
+           --output-last-message <file>
+           --dangerously-bypass-approvals-and-sandbox
+             | --sandbox read-only
+             | --sandbox workspace-write --approve-for-me
+```
+
+Fresh sessions omit `resume`; continued sessions use `codex exec resume
+<session-id> -`. The adapter records the JSONL stream under the run's agent
+artifacts just like Claude. Because the Codex JSON event format is intentionally
+not used as a domain contract, only generic message, thinking, notice and
+session-like events are translated upward.
 
 ## Process execution
 

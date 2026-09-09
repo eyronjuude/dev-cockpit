@@ -56,9 +56,11 @@ const APPROVABLE_STATUSES: readonly RunStatus[] = [
   'FAILED',
   'CANCELLED',
 ];
+const REJECTABLE_STATUSES: readonly RunStatus[] = [...APPROVABLE_STATUSES, 'PAUSED'];
 const REWORKABLE_STATUSES: readonly RunStatus[] = [
   'NEEDS_CHANGES',
   'READY',
+  'PAUSED',
   'FAILED',
   'CANCELLED',
 ];
@@ -170,6 +172,7 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
     REVALIDATABLE_STATUSES.includes(run.status) &&
     run.worktreePath !== null &&
     !readOnly;
+  const canReject = !active && REJECTABLE_STATUSES.includes(run.status);
   const canApprove = !active && APPROVABLE_STATUSES.includes(run.status);
   // Approving a read-only run creates no commit, so its branch holds nothing to
   // merge. Landing it would report success for a no-op.
@@ -295,7 +298,7 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
             disabled={busy !== null}
             title={
               run.agentSessionId
-                ? `Sends iteration ${retriedIteration.ordinal}'s prompt again, continuing Claude Code session ${run.agentSessionId.slice(0, 8)}. Nothing about the instruction changes.`
+                ? `Sends iteration ${retriedIteration.ordinal}'s prompt again, continuing agent session ${run.agentSessionId.slice(0, 8)}. Nothing about the instruction changes.`
                 : `Sends iteration ${retriedIteration.ordinal}'s prompt again. No agent session is recorded, so the ${wording.agentNoun} starts cold.`
             }
             onClick={() =>
@@ -415,7 +418,7 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
           </button>
         ) : null}
 
-        {canApprove ? (
+        {canReject ? (
           <>
             <button
               type="button"
@@ -425,6 +428,11 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
             >
               Reject
             </button>
+          </>
+        ) : null}
+
+        {canApprove ? (
+          <>
             <button
               type="button"
               className="btn btn-approve"
@@ -469,7 +477,7 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
           />
           <p className="hint">
             {run.agentSessionId
-              ? `Continues Claude Code session ${run.agentSessionId.slice(0, 8)}, so the reading behind the ${wording.deliverable} is not thrown away.`
+              ? `Continues agent session ${run.agentSessionId.slice(0, 8)}, so the reading behind the ${wording.deliverable} is not thrown away.`
               : `No agent session is recorded for this run, so the implementer starts fresh with the ${wording.deliverable} text in its prompt.`}
           </p>
           <div className="mt-2.5 flex justify-end gap-1.5">
@@ -575,7 +583,7 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
           />
           <p className="hint">
             {run.agentSessionId
-              ? `Continues Claude Code session ${run.agentSessionId.slice(0, 8)}, so the ${
+              ? `Continues agent session ${run.agentSessionId.slice(0, 8)}, so the ${
                   readOnly ? `reading behind the ${wording.deliverable}` : 'implementation context'
                 } is kept. ${
                   readOnly ? 'Still changes no files.' : 'Validation runs again afterwards.'

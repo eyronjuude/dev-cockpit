@@ -609,7 +609,7 @@ export function setStatus(
   appendEvent({
     runId,
     type: 'run.status_changed',
-    level: to === 'FAILED' ? 'error' : 'info',
+    level: to === 'FAILED' ? 'error' : to === 'PAUSED' ? 'notice' : 'info',
     message: `${from} → ${to}${options.reason ? ` (${options.reason})` : ''}`,
     payload: { from, to, reason: options.reason },
   });
@@ -629,6 +629,7 @@ export function updateRunFields(
     branch: string;
     /** Cleared to null once the worktree is gone â€” reclaimed, or torn down by a restart. */
     worktreePath: string | null;
+    agentProvider: string;
     agentSessionId: string | null;
     agentModel: string | null;
     commitSha: string | null;

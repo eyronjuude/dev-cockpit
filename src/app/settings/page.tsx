@@ -1,4 +1,5 @@
 import { claudeBinary } from '@/agents/claude-code';
+import { codexBinary } from '@/agents/codex-query';
 import { dataDir, dbPath } from '@/core/paths';
 import {
   DEFAULT_WORK_MODE,
@@ -52,6 +53,13 @@ export default async function SettingsPage() {
           <Row label="Data directory" value={dataDir()} mono />
           <Row label="Database" value={dbPath()} mono />
           <Row label="Claude Code binary" value={claudeBinary()} mono />
+          <Row label="Codex CLI binary" value={codexBinary()} mono />
+          <Row
+            label="Agent fallbacks"
+            value={process.env.DEV_COCKPIT_AGENT_FALLBACKS?.trim() || 'default'}
+            mono
+            hint="Comma-separated implementation-agent ids tried after the run's primary agent. Use none to disable fallbacks."
+          />
           <Row
             label="ANTHROPIC_API_KEY"
             value={process.env.ANTHROPIC_API_KEY ? 'set' : 'not set'}

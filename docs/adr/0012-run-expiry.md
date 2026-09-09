@@ -39,8 +39,9 @@ pick which of those to ignore.
 **Eligibility is `FINISHED_STATUSES`, including `FAILED` and `CANCELLED`.** That
 is the difference between a window and a hook: a rework happens within days, so
 a run nobody returned to in a week is a checkout that is pure cost. A run
-waiting on the user (`READY`, `NEEDS_CHANGES`) or with landing still ahead of it
-(`APPROVED`, `MERGE_CONFLICT`, `LANDING_FAILED`) is never expired at any age.
+waiting on the user (`READY`, `NEEDS_CHANGES`, `PAUSED`) or with landing still
+ahead of it (`APPROVED`, `MERGE_CONFLICT`, `LANDING_FAILED`) is never expired at
+any age.
 
 **Expiry never forces.** Worktree removal is the same non-forcing path the
 user's own **Remove worktrees** button takes, so a checkout holding uncommitted

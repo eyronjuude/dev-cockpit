@@ -40,6 +40,7 @@ const ICON: Partial<Record<EventType, string>> = {
   'run.mode_switched': '◈',
   'run.retried': '↻',
   'run.restarted': '↺',
+  'run.paused': '!',
   'transform.completed': '✎',
   'transform.skipped': '·',
   'transform.failed': '!',
@@ -58,6 +59,7 @@ const ICON: Partial<Record<EventType, string>> = {
   'agent.tool_completed': '·',
   'agent.completed': '✓',
   'agent.failed': '✕',
+  'agent.fallback_started': '↻',
   'agent.cancelled': '⊘',
   'agent.notice': '!',
   'validation.started': '⋯',
@@ -116,6 +118,8 @@ function toneFor(event: RunEvent): string {
     case 'landing.manual_instructions':
     case 'landing.validation_failed':
     case 'preview.failed':
+    case 'run.paused':
+    case 'agent.fallback_started':
       return 'text-warn';
     case 'landing.dequeued':
     case 'preview.started':

@@ -23,6 +23,7 @@ export const EVENT_TYPES = [
   'run.mode_switched',
   'run.retried',
   'run.restarted',
+  'run.paused',
 
   'transform.started',
   'transform.completed',
@@ -48,6 +49,7 @@ export const EVENT_TYPES = [
   'agent.tool_completed',
   'agent.completed',
   'agent.failed',
+  'agent.fallback_started',
   'agent.cancelled',
   'agent.notice',
 
@@ -136,6 +138,11 @@ export interface EventPayloads {
     previousBranch: string | null;
     worktreeRemoved: boolean;
     stoppedActiveWork: boolean;
+  };
+  /** The run is saved for a later retry because no implementation agent can work now. */
+  'run.paused': {
+    reason: string;
+    agents: { provider: string; label: string; reason: string; exitCode: number | null }[];
   };
 
   'transform.started': { provider: string };
@@ -233,7 +240,18 @@ export interface EventPayloads {
     costUsd: number | null;
     finalText: string | null;
   };
-  'agent.failed': { iterationId: string; error: string; exitCode: number | null };
+  'agent.failed': {
+    iterationId: string;
+    error: string;
+    exitCode: number | null;
+    provider?: string;
+  };
+  'agent.fallback_started': {
+    iterationId: string;
+    from: string;
+    to: string;
+    reason: string;
+  };
   'agent.cancelled': { iterationId: string };
   'agent.notice': { iterationId: string; text: string };
 

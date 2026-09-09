@@ -117,7 +117,9 @@ export class MyAgent implements ImplementationAgent {
 ```
 
 Register in the `AGENTS` map in `src/orchestrator/orchestrator.ts`, and set
-`runs.agentProvider` when creating a run.
+`runs.agentProvider` when creating a run. The orchestrator tries the run's
+preferred provider first, then the ids in `DEV_COCKPIT_AGENT_FALLBACKS`, or the
+built-in default order when that variable is unset.
 
 **Contract notes.**
 
@@ -126,6 +128,10 @@ Register in the `AGENTS` map in `src/orchestrator/orchestrator.ts`, and set
   change must not rewrite history.
 - `AgentOutcome.ok` means "the process ended without erroring". It is not an
   approval signal and nothing treats it as one.
+- Quota, credit and rate-limit failures should be surfaced in
+  `AgentOutcome.errorMessage`. The orchestrator detects those messages, tries
+  the next fallback provider, and moves the run to `PAUSED` when every
+  implementation option is exhausted.
 - `continueRun` should genuinely continue the prior session. If the provider
   cannot, return a fresh session id and set `resumed: false` so the UI can say
   so honestly rather than implying context was kept.

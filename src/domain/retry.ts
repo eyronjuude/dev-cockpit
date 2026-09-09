@@ -76,6 +76,7 @@ export interface RetryableIteration {
  * already exist and say plainly what they do.
  */
 export const RETRYABLE_STATUSES: readonly RunStatus[] = [
+  'PAUSED',
   'FAILED',
   'CANCELLED',
   'MERGE_CONFLICT',
@@ -93,6 +94,7 @@ export const RETRYABLE_STATUSES: readonly RunStatus[] = [
 export const ITERATION_RETRYABLE_STATUSES: readonly RunStatus[] = [
   'NEEDS_CHANGES',
   'READY',
+  'PAUSED',
   'FAILED',
   'CANCELLED',
 ];

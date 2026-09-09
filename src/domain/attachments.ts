@@ -218,6 +218,7 @@ export const ATTACHMENT_MUTABLE_STATUSES: readonly RunStatus[] = [
   'DRAFT',
   'NEEDS_CHANGES',
   'READY',
+  'PAUSED',
   'FAILED',
   'CANCELLED',
 ];
