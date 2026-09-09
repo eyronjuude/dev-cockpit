@@ -55,6 +55,7 @@ export const createProjectSchema = z.object({
   captureScreenshots: z.boolean().optional(),
   allowAgentCommit: z.boolean().optional(),
   reviewBlocksReady: z.boolean().optional(),
+  cleanUpWorktreeOnFinish: z.boolean().optional(),
   artifactRetentionDays: z.number().int().min(1).max(3_650).optional(),
   agentModel: z.string().trim().max(120).nullable().optional(),
   agentPermissionMode: agentPermissionModeSchema.optional(),
@@ -112,6 +113,8 @@ export interface ProjectView {
   captureScreenshots: boolean;
   allowAgentCommit: boolean;
   reviewBlocksReady: boolean;
+  /** Reclaim the run and landing worktrees once a run lands or is rejected. */
+  cleanUpWorktreeOnFinish: boolean;
   artifactRetentionDays: number;
   agentModel: string | null;
   /** What the project stores. May be overridden for a run. */
@@ -158,6 +161,7 @@ function toProjectView(row: ProjectRow, commands: ValidationCommandRow[]): Proje
     captureScreenshots: row.captureScreenshots,
     allowAgentCommit: row.allowAgentCommit,
     reviewBlocksReady: row.reviewBlocksReady,
+    cleanUpWorktreeOnFinish: row.cleanUpWorktreeOnFinish,
     artifactRetentionDays: row.artifactRetentionDays,
     agentModel: row.agentModel,
     agentPermissionMode: row.agentPermissionMode,
@@ -330,6 +334,7 @@ export async function createProject(input: CreateProjectInput): Promise<ProjectV
       captureScreenshots: parsed.captureScreenshots ?? true,
       allowAgentCommit: parsed.allowAgentCommit ?? false,
       reviewBlocksReady: parsed.reviewBlocksReady ?? false,
+      cleanUpWorktreeOnFinish: parsed.cleanUpWorktreeOnFinish ?? true,
       artifactRetentionDays: parsed.artifactRetentionDays ?? 30,
       agentModel: parsed.agentModel ?? null,
       agentPermissionMode: parsed.agentPermissionMode ?? DEFAULT_AGENT_PERMISSION_MODE,
@@ -375,6 +380,8 @@ export function updateProject(id: string, input: UpdateProjectInput): ProjectVie
       captureScreenshots: parsed.captureScreenshots ?? existing.captureScreenshots,
       allowAgentCommit: parsed.allowAgentCommit ?? existing.allowAgentCommit,
       reviewBlocksReady: parsed.reviewBlocksReady ?? existing.reviewBlocksReady,
+      cleanUpWorktreeOnFinish:
+        parsed.cleanUpWorktreeOnFinish ?? existing.cleanUpWorktreeOnFinish,
       artifactRetentionDays: parsed.artifactRetentionDays ?? existing.artifactRetentionDays,
       agentModel: parsed.agentModel === undefined ? existing.agentModel : parsed.agentModel,
       agentPermissionMode: parsed.agentPermissionMode ?? existing.agentPermissionMode,

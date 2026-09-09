@@ -3,6 +3,7 @@ import { activeRunPhase, isRunActive } from '@/orchestrator/orchestrator';
 import { listArtifacts } from '@/services/artifacts';
 import { requireProject } from '@/services/projects';
 import { assessReadiness, requireRun } from '@/services/runs';
+import { runWorktrees } from '@/services/worktrees';
 
 export const dynamic = 'force-dynamic';
 
@@ -27,6 +28,9 @@ export function GET(_request: Request, { params }: Params) {
       readiness,
       artifacts: listArtifacts(runId),
       live: { active: isRunActive(runId), phase: activeRunPhase(runId) },
+      // Which of this run's worktrees are still on disk, so the action bar can
+      // offer to reclaim them without guessing from the status alone.
+      worktrees: runWorktrees(run, project),
       // Needed so the scorecard can distinguish a kind the project never
       // configured from one that is configured but has not run yet.
       configuredValidations: project.validationCommands

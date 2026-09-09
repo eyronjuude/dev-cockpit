@@ -38,6 +38,30 @@ export const ACTIVE_STATUSES: readonly RunStatus[] = [
 export const TERMINAL_STATUSES: readonly RunStatus[] = ['LANDED', 'REJECTED'];
 
 /**
+ * Statuses where the run is over and its worktrees are spent.
+ *
+ * `APPROVED`, `MERGE_CONFLICT` and `LANDING_FAILED` are deliberately absent:
+ * landing is still pending in all three, and it needs the run worktree.
+ * `READY` and `NEEDS_CHANGES` are absent because the user has not decided yet.
+ * `FAILED` and `CANCELLED` are here — nothing more happens on its own — but
+ * they can be reworked, so only an explicit action reclaims those.
+ */
+export const FINISHED_STATUSES: readonly RunStatus[] = [
+  'LANDED',
+  'REJECTED',
+  'FAILED',
+  'CANCELLED',
+];
+
+/**
+ * Statuses whose worktrees may be reclaimed without the user asking, when the
+ * project allows it. Both are terminal: no rework path leads back out.
+ */
+export const AUTO_CLEANUP_STATUSES: readonly RunStatus[] = ['LANDED', 'REJECTED'];
+
+export const isFinished = (status: RunStatus): boolean => FINISHED_STATUSES.includes(status);
+
+/**
  * The orchestrator is the source of truth for run state; this table is the
  * whole of the permitted state space. Anything not listed is a bug rather than
  * a judgement call, so `assertTransition` throws on it.

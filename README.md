@@ -232,8 +232,14 @@ Specifically:
   validating and applying. Merge conflicts and failed landing validation get one
   AI repair pass in the landing worktree; if that cannot finish, Dev Cockpit
   records manual repair instructions and leaves the landing worktree intact.
-- Rejecting can remove the worktree. The branch is deleted with `git branch -d`,
-  never `-D`, so work is never silently discarded.
+- Once a run lands or is rejected, both of its worktrees are removed and their
+  branches deleted with `git branch -d`, never `-D`. A worktree holding
+  uncommitted changes is kept, an unmerged branch is kept, and the reason for
+  each goes into the event log. Turn this off per project with **Remove a run's
+  worktrees once it lands or is rejected**.
+- A run that failed or was cancelled keeps its worktree until you ask for it
+  back, with **Remove worktrees** on the run screen. Rejecting offers the same
+  thing with the option to discard uncommitted work as well.
 - Linked paths become junctions on Windows (no elevation needed) or symlinks
   elsewhere. Files are *copied* rather than linked, so the agent editing
   `.env.local` cannot reach your original.

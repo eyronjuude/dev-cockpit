@@ -9,7 +9,7 @@ import {
   WORK_MODE_WORDING,
   type ResolvedWorkMode,
 } from '@/domain/modes';
-import type { RunStatus } from '@/domain/types';
+import { isFinished, type RunStatus } from '@/domain/types';
 import type { RunSnapshot } from './use-run-stream';
 
 /**
@@ -81,11 +81,11 @@ function buildFeedbackFor(mode: ResolvedWorkMode, note: string): string {
     : 'Implement what your answer describes. If the answer did not describe a change, say what you would need to know instead of guessing.';
 }
 
-type Dialog = 'none' | 'changes' | 'approve' | 'reject' | 'land' | 'implement';
+type Dialog = 'none' | 'changes' | 'approve' | 'reject' | 'land' | 'implement' | 'cleanup';
 
 export function RunActions({ snapshot, onChanged }: ActionsProps) {
   const router = useRouter();
-  const { run, readiness, live } = snapshot;
+  const { run, readiness, live, worktrees } = snapshot;
 
   const [dialog, setDialog] = useState<Dialog>('none');
   const [busy, setBusy] = useState<string | null>(null);
@@ -97,6 +97,8 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
   const [createCommit, setCreateCommit] = useState(true);
   const [commitMessage, setCommitMessage] = useState('');
   const [cleanUp, setCleanUp] = useState(false);
+  const [discardChanges, setDiscardChanges] = useState(false);
+  const [deleteBranches, setDeleteBranches] = useState(true);
 
   const active = live.active;
   const targetBranch = run.baseBranch ?? 'the target branch';
@@ -149,6 +151,11 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
       (run.status === 'CANCELLED' && run.disposition === 'approved'));
   const canResolveMerge = !active && run.status === 'MERGE_CONFLICT';
   const canOpenLanding = !active && LANDING_WORKTREE_STATUSES.includes(run.status);
+  // Only once the run is over. Landing needs the run worktree, so an approved
+  // run that has not landed yet is deliberately not offered this.
+  const remainingWorktrees = worktrees.filter((w) => w.exists);
+  const canCleanUp =
+    !active && isFinished(run.status) && remainingWorktrees.length > 0;
   const canStart = !active && run.status === 'DRAFT';
   // Only once there is something finished to build on. An iteration that
   // failed part-way can still hold text, and switching to Build on half a plan
@@ -243,6 +250,17 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
             onClick={() => void post(`/api/runs/${run.id}/open`, { target: 'landing' }, 'open')}
           >
             Open landing worktree
+          </button>
+        ) : null}
+
+        {canCleanUp ? (
+          <button
+            type="button"
+            className="btn"
+            disabled={busy !== null}
+            onClick={() => setDialog(dialog === 'cleanup' ? 'none' : 'cleanup')}
+          >
+            {remainingWorktrees.length === 1 ? 'Remove worktree' : 'Remove worktrees'}
           </button>
         ) : null}
 
@@ -527,6 +545,77 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
         </div>
       ) : null}
 
+      {dialog === 'cleanup' ? (
+        <div className="panel p-3">
+          <p className="text-[12.5px] text-ink-muted">
+            Deletes the directories below and frees the disk they hold. Nothing else about the run
+            changes: its events, artifacts, diff and validation results stay exactly as they are.
+          </p>
+          <ul className="mt-2 space-y-1">
+            {remainingWorktrees.map((worktree) => (
+              <li key={worktree.path} className="text-[12px]">
+                <span className="text-ink-faint">
+                  {worktree.kind === 'landing' ? 'Landing' : 'Run'}
+                </span>{' '}
+                <code className="mono break-all">{worktree.path}</code>
+              </li>
+            ))}
+          </ul>
+
+          <label className="mt-2.5 flex cursor-pointer items-start gap-2 text-[12.5px]">
+            <input
+              type="checkbox"
+              className="mt-0.5 accent-accent"
+              checked={deleteBranches}
+              onChange={(e) => setDeleteBranches(e.target.checked)}
+            />
+            <span>
+              Delete the branches too
+              <span className="block text-[11.5px] text-ink-faint">
+                Only when Git agrees the branch holds nothing unmerged. An unmerged branch is
+                kept whatever this says.
+              </span>
+            </span>
+          </label>
+
+          <label className="mt-2 flex cursor-pointer items-start gap-2 text-[12.5px]">
+            <input
+              type="checkbox"
+              className="mt-0.5 accent-accent"
+              checked={discardChanges}
+              onChange={(e) => setDiscardChanges(e.target.checked)}
+            />
+            <span>
+              Discard uncommitted changes
+              <span className="block text-[11.5px] text-ink-faint">
+                Without this, a worktree holding uncommitted work is left alone and the reason is
+                recorded in the event log.
+              </span>
+            </span>
+          </label>
+
+          <div className="mt-2.5 flex justify-end gap-1.5">
+            <button type="button" className="btn btn-ghost" onClick={() => setDialog('none')}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn-danger"
+              disabled={busy !== null}
+              onClick={() =>
+                void post(
+                  `/api/runs/${run.id}/cleanup`,
+                  { force: discardChanges, deleteBranches },
+                  'cleanup',
+                )
+              }
+            >
+              {busy === 'cleanup' ? 'Removing…' : 'Remove'}
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       {dialog === 'reject' ? (
         <div className="panel p-3">
           <label className="label" htmlFor="reject-note">
@@ -548,10 +637,12 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
               onChange={(e) => setCleanUp(e.target.checked)}
             />
             <span>
-              Remove the worktree and delete the branch
+              Remove the worktrees, discarding uncommitted changes
               <span className="block text-[11.5px] text-ink-faint">
-                The branch is only deleted when it holds no commits. Artifacts and the event
-                log are kept either way.
+                Covers both the run and landing worktrees. The branch is only deleted when it
+                holds no unmerged commits. Artifacts and the event log are kept either way.
+                Leave this off and the project&rsquo;s own cleanup policy decides, which never
+                discards uncommitted work.
               </span>
             </span>
           </label>

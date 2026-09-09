@@ -35,13 +35,14 @@ import {
   stageResolvedConflictFiles,
   unmergedFiles,
 } from '@/git/landing';
-import { linkIntoWorktree, prepareWorktree, removeWorktree } from '@/git/worktree';
+import { linkIntoWorktree, prepareWorktree } from '@/git/worktree';
 import { runCommand } from '@/process/spawn';
 import { getReviewer } from '@/reviewers/registry';
 import { register, writeTextArtifact } from '@/services/artifacts';
 import { appendEvent } from '@/services/events';
 import { tryRecordImplementationMap } from '@/services/implementation-map';
 import { requireProject, type ProjectView } from '@/services/projects';
+import { cleanUpFinishedRunWorktrees, cleanUpRunWorktrees } from '@/services/worktrees';
 import {
   assessReadiness,
   createIteration,
@@ -604,6 +605,11 @@ async function executeLanding(
       payload: { targetBranch, commitSha: appliedSha },
     });
     setStatus(run.id, 'LANDED', { reason: `landed on ${targetBranch}`, finished: true });
+
+    // The work is on the target branch now, so both worktrees are spent.
+    // Reclaiming them must never turn a successful landing into a failure,
+    // hence the swallow: the run is already LANDED at this point.
+    await tryCleanUpWorktrees(run.id);
   } catch (err) {
     if (signal.aborted) {
       await finishCancelled(runId);
@@ -2502,13 +2508,16 @@ export async function approveRun(runId: string, options: ApproveOptions = {}): P
 
 export interface RejectOptions {
   note?: string | null;
-  /** Removes the worktree and deletes the branch if it holds no commits. */
+  /**
+   * Removes the worktrees and deletes the branches, discarding uncommitted
+   * changes. Left unset, the project's own cleanup policy decides, and that
+   * pass never discards anything.
+   */
   cleanUp?: boolean;
 }
 
 export async function rejectRun(runId: string, options: RejectOptions = {}): Promise<RunView> {
-  const run = requireRun(runId);
-  const project = requireProject(run.projectId);
+  requireRun(runId);
 
   if (isRunActive(runId)) {
     cancelRun(runId, 'Cancelled because the run was rejected');
@@ -2527,23 +2536,40 @@ export async function rejectRun(runId: string, options: RejectOptions = {}): Pro
     payload: { note: options.note ?? null },
   });
 
-  if (options.cleanUp && run.worktreePath) {
-    const result = await removeWorktree(
-      project.repositoryPath,
-      run.worktreePath,
-      run.branch,
-      { force: true, deleteBranch: true },
-    );
-    appendEvent({
-      runId,
-      type: 'run.cancelled',
-      level: 'info',
-      message: result.removed
-        ? `Worktree removed${result.branchDeleted ? ' and branch deleted' : ''}`
-        : `Worktree not removed: ${result.reason ?? 'unknown reason'}`,
-      payload: { reason: result.reason ?? 'cleanup' },
-    });
-  }
+  // The ticked box is an instruction to discard uncommitted work; left unset,
+  // the project's policy decides and never discards anything.
+  await tryCleanUpWorktrees(
+    runId,
+    options.cleanUp ? { force: true, deleteBranches: true } : undefined,
+  );
 
   return requireRun(runId);
+}
+
+/**
+ * Reclaims a finished run's worktrees, for the effect only.
+ *
+ * With `explicit` set the user asked for it; without, the project's policy
+ * decides and may do nothing. Either way the run has already reached LANDED or
+ * REJECTED, so a failure here is recorded and dropped rather than raised —
+ * reporting a rejection as a server error because a directory would not delete
+ * would be a lie about what happened.
+ */
+async function tryCleanUpWorktrees(
+  runId: string,
+  explicit?: { force: boolean; deleteBranches: boolean },
+): Promise<void> {
+  try {
+    if (explicit) await cleanUpRunWorktrees(runId, explicit);
+    else await cleanUpFinishedRunWorktrees(runId);
+  } catch (err) {
+    const message = errorMessage(err);
+    appendEvent({
+      runId,
+      type: 'worktree.removed',
+      level: 'notice',
+      message: `Could not reclaim this run's worktrees: ${message}`,
+      payload: { automatic: true, removed: 0, kept: 0, targets: [] },
+    });
+  }
 }

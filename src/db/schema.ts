@@ -56,6 +56,14 @@ export const projects = sqliteTable(
       .notNull()
       .default(false),
     artifactRetentionDays: integer('artifact_retention_days').notNull().default(30),
+    /**
+     * Removes a run's worktrees once it lands or is rejected. On by default:
+     * both states are terminal, and the removal refuses a dirty worktree or an
+     * unmerged branch rather than forcing either.
+     */
+    cleanUpWorktreeOnFinish: integer('clean_up_worktree_on_finish', { mode: 'boolean' })
+      .notNull()
+      .default(true),
 
     /** Agent configuration. */
     agentModel: text('agent_model'),

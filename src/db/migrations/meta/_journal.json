@@ -29,6 +29,13 @@
       "when": 1788939128487,
       "tag": "0002_polite_wolverine",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1789060000000,
+      "tag": "0003_worktree_reclamation",
+      "breakpoints": true
     }
   ]
 }

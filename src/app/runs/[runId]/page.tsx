@@ -5,6 +5,7 @@ import { activeRunPhase, isRunActive } from '@/orchestrator/orchestrator';
 import { listArtifacts } from '@/services/artifacts';
 import { getProject } from '@/services/projects';
 import { assessReadiness, getRun } from '@/services/runs';
+import { runWorktrees } from '@/services/worktrees';
 
 export const dynamic = 'force-dynamic';
 
@@ -28,6 +29,7 @@ export default async function RunPage({ params }: { params: Promise<{ runId: str
     readiness: assessReadiness(run, project),
     artifacts: listArtifacts(runId),
     live: { active: isRunActive(runId), phase: activeRunPhase(runId) },
+    worktrees: runWorktrees(run, project),
     configuredValidations: project.validationCommands
       .filter((c) => c.enabled && c.command.trim().length > 0)
       .map((c) => ({ kind: c.kind, command: c.command, blocking: c.blocking })),
