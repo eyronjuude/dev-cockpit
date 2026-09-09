@@ -16,6 +16,10 @@ interface DbHandle {
   sqlite: Database.Database;
 }
 
+interface TableInfoRow {
+  name: unknown;
+}
+
 /**
  * Next.js reloads modules on every edit in dev. A module-level singleton would
  * open a new SQLite handle each time and leak them, so the handle is parked on
@@ -55,7 +59,34 @@ function open(): DbHandle {
     );
   }
 
+  repairSkippedAdditiveMigrations(sqlite);
+
   return { db, sqlite };
+}
+
+function columnExists(sqlite: Database.Database, table: string, column: string): boolean {
+  const rows = sqlite.prepare(`PRAGMA table_info("${table}")`).all() as TableInfoRow[];
+  return rows.some((row) => row.name === column);
+}
+
+/**
+ * Migration 0006 was created with a timestamp older than migrations already
+ * present in some local databases. Drizzle compares pending migrations against
+ * the latest `created_at`, so those databases can skip the file even though the
+ * schema still needs these additive columns.
+ */
+function repairSkippedAdditiveMigrations(sqlite: Database.Database): void {
+  if (!columnExists(sqlite, 'artifacts', 'expired_at')) {
+    sqlite.prepare('ALTER TABLE "artifacts" ADD "expired_at" text').run();
+  }
+
+  if (!columnExists(sqlite, 'projects', 'worktree_retention_days')) {
+    sqlite
+      .prepare(
+        'ALTER TABLE "projects" ADD "worktree_retention_days" integer DEFAULT 7 NOT NULL',
+      )
+      .run();
+  }
 }
 
 export function getDb(): Db {
