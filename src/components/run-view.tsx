@@ -16,9 +16,9 @@ import { CHANGE_TYPE_TONE, type BadgeTone } from '@/domain/vocabulary';
 import { ArtifactPanel } from './artifact-panel';
 import { AttachmentList } from './attachments';
 import { DiffView } from './diff-view';
-import { EventFeed } from './event-feed';
 import { LogStream } from './log-stream';
 import { Markdown } from './markdown';
+import { ProgressPanel } from './progress-panel';
 import { ReadinessNotice, RunActions } from './run-actions';
 import { Scorecard } from './scorecard';
 import {
@@ -103,9 +103,6 @@ export function RunView({ initial }: { initial: RunSnapshot }) {
       live.phase,
     ],
   );
-
-  // The newest line, so the current activity is readable without scrolling.
-  const newestMessage = events.at(-1)?.message ?? null;
 
   return (
     <div className="flex h-full flex-col">
@@ -299,9 +296,9 @@ export function RunView({ initial }: { initial: RunSnapshot }) {
           </div>
         </section>
 
-        {/* Right rail: actions and live state, always visible without scrolling */}
+        {/* Right rail: actions above, progress pinned below */}
         <aside className="flex min-h-0 flex-col">
-          <div className="shrink-0 space-y-3 p-3.5 pb-0">
+          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3.5">
             <RunActions snapshot={snapshot} onChanged={refresh} />
             <ReadinessNotice readiness={readiness} status={run.status} />
 
@@ -319,14 +316,14 @@ export function RunView({ initial }: { initial: RunSnapshot }) {
             />
           </div>
 
-          <div className="min-h-0 flex-1 p-3.5">
-            <EventFeed
+          {/* Pinned to the bottom: the bar and the newest line, never scrolled away. */}
+          <div className="shrink-0 px-3.5 pb-3.5">
+            <ProgressPanel
               events={events}
               connected={connected}
               active={live.active}
               progress={progress}
               progressLabel={progress.activeLabel ?? runStatusLabel(run.status)}
-              progressDetail={live.active ? newestMessage : null}
             />
           </div>
         </aside>

@@ -205,9 +205,11 @@ must not be able to disagree.
 ## Adding an event type
 
 Add the name to `EVENT_TYPES` and its payload to `EventPayloads` in
-`src/domain/events.ts`. Add it to `PROGRESS_EVENT_TYPES` if it belongs in the
-default progress feed, and give it an icon in `src/components/event-feed.tsx`.
-Unlisted types still render with a fallback icon.
+`src/domain/events.ts`, then give it a glyph in `ICON` and, if it needs one, a
+colour in `toneFor` — both in `src/components/log-line.tsx`, which draws the row
+for the Logs tab and the progress panel alike. Unlisted types still render, with
+a fallback glyph. Add it to `TEXT_EVENTS` in the same file if its payload
+carries prose worth printing in full under the line.
 
 ## Changing the schema
 
