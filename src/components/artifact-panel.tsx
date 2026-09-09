@@ -50,7 +50,13 @@ export function ArtifactPanel({ artifacts }: { artifacts: readonly ArtifactView[
     if (!selected.exists) {
       finish({
         content: null,
-        message: 'The file recorded for this artifact is no longer on disk.',
+        // Expiry and loss look identical on disk and read very differently to
+        // the person holding the run screen, so they are told apart here.
+        message: selected.expiredAt
+          ? `Expired under this project's retention policy on ` +
+            `${new Date(selected.expiredAt).toLocaleDateString()}. ` +
+            `It held ${formatBytes(selected.bytes)}; the record of it is kept.`
+          : 'The file recorded for this artifact is no longer on disk.',
       });
       return () => {
         cancelled = true;
@@ -108,7 +114,12 @@ export function ArtifactPanel({ artifacts }: { artifacts: readonly ArtifactView[
                   <span>{ARTIFACT_KIND_LABELS[artifact.kind]}</span>
                   <span aria-hidden>·</span>
                   <span>{formatBytes(artifact.bytes)}</span>
-                  {!artifact.exists ? (
+                  {artifact.expiredAt ? (
+                    <>
+                      <span aria-hidden>·</span>
+                      <span className="text-ink-faint">expired</span>
+                    </>
+                  ) : !artifact.exists ? (
                     <>
                       <span aria-hidden>·</span>
                       <span className="text-fail">missing</span>

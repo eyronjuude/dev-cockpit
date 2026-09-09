@@ -55,11 +55,20 @@ export const projects = sqliteTable(
     reviewBlocksReady: integer('review_blocks_ready', { mode: 'boolean' })
       .notNull()
       .default(false),
+    /**
+     * Retention windows for the two kinds of storage a finished run leaves
+     * behind, in days. Zero keeps that target forever. Worktrees get the
+     * shorter window because they cost far more per run; see `domain/expiry`.
+     */
     artifactRetentionDays: integer('artifact_retention_days').notNull().default(30),
+    worktreeRetentionDays: integer('worktree_retention_days').notNull().default(7),
     /**
      * Removes a run's worktrees once it lands or is rejected. On by default:
      * both states are terminal, and the removal refuses a dirty worktree or an
      * unmerged branch rather than forcing either.
+     *
+     * Independent of `worktree_retention_days`: this reclaims immediately on
+     * the two terminal statuses, retention catches everything else later.
      */
     cleanUpWorktreeOnFinish: integer('clean_up_worktree_on_finish', { mode: 'boolean' })
       .notNull()
@@ -341,6 +350,12 @@ export const artifacts = sqliteTable(
     previewUrl: text('preview_url'),
     /** Free-form JSON: which validation produced it, screenshot dimensions, etc. */
     meta: text('meta').notNull().default('{}'),
+    /**
+     * Set when retention deleted the bytes. The row survives on purpose: it
+     * still records that the run produced this, and how large it was, which is
+     * a different and more useful statement than the file being missing.
+     */
+    expiredAt: text('expired_at'),
     createdAt: text('created_at').notNull().default(now),
   },
   (t) => [index('artifacts_run_idx').on(t.runId), index('artifacts_kind_idx').on(t.kind)],

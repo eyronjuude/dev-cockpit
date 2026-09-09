@@ -21,11 +21,14 @@ no installed Codex CLI. Each needs one real run before being described as
 working. `codex-cli` is the cheapest to prove: `npm i -g @openai/codex` and an
 interactive `codex login`.
 
-**Artifact retention enforcement** — *gap*
-`artifactRetentionDays` is configured per project and stored. No job prunes
-anything. A run started at process boot could delete artifact directories older
-than the window, and mark the rows so the UI shows "expired" rather than
-"missing".
+**Disk usage reporting**
+Retention now enforces both windows (ADR 0012), but nothing shows the user how
+much disk the data directory holds, so the problem the windows solve is
+invisible until it is urgent. The sweep reports artifact bytes exactly and
+worktree counts only — a recursive stat over a checkout costs more than the
+number is worth during a sweep, but computing it once for a Settings panel is
+cheap. That panel is the missing half: per-project totals for `worktrees/`,
+`landings/` and `artifacts/`, and a **Sweep now** button beside them.
 
 **Preview URLs**
 `developmentCommand` is recorded and never started; `previewUrl` on artifacts is

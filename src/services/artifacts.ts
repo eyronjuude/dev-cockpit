@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { asc, eq } from 'drizzle-orm';
+import { and, asc, eq, isNull } from 'drizzle-orm';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -28,6 +28,13 @@ export interface ArtifactView {
   createdAt: string;
   /** False when the file has been removed from disk since it was recorded. */
   exists: boolean;
+  /**
+   * Set when retention deleted the bytes. Kept distinct from `exists`: an
+   * expired artifact is gone on purpose and `bytes` still says how large it
+   * was, which is a different thing to tell the user than a file that
+   * vanished.
+   */
+  expiredAt: string | null;
   /** Whether the UI can render it inline. */
   inlineViewable: boolean;
 }
@@ -71,6 +78,7 @@ function hydrate(row: typeof artifacts.$inferSelect): ArtifactView {
     meta,
     createdAt: row.createdAt,
     exists,
+    expiredAt: row.expiredAt,
     inlineViewable: exists && (isTextMime(row.mimeType) || isImageMime(row.mimeType)),
   };
 }
@@ -244,11 +252,88 @@ export async function readArtifactText(id: string): Promise<ArtifactContent | nu
   }
 }
 
-/** Deletes every artifact file for a run. Used by retention cleanup. */
+/**
+ * Deletes every artifact file for a run and forgets the rows.
+ *
+ * For the paths that discard a run outright. Retention uses
+ * `expireRunArtifacts` instead, which keeps the rows.
+ */
 export async function purgeRunArtifacts(runId: string): Promise<void> {
   const dir = runArtifactDir(runId);
   if (!isInside(artifactsDir(), dir)) return;
   await fsp.rm(dir, { recursive: true, force: true });
   const db = getDb();
   db.delete(artifacts).where(eq(artifacts.runId, runId)).run();
+}
+
+export interface ArtifactExpiryResult {
+  /** How many rows this pass marked. Zero when they were already expired. */
+  expired: number;
+  /** Bytes the deleted files were recorded as holding. */
+  bytesReclaimed: number;
+}
+
+/**
+ * Retention's half of artifact cleanup: the bytes go, the records stay.
+ *
+ * Rows are marked rather than deleted because they are the run's own account
+ * of what it produced. "Validation report — 4.2 MB, expired on the 30-day
+ * policy" is a true and useful statement; deleting the row would leave the run
+ * looking like it never wrote one.
+ *
+ * Idempotent, and safe on a run whose directory is already gone. Request
+ * attachments are deliberately untouched — they live under a different root
+ * for exactly this reason, and the app holds the only copy.
+ */
+export async function expireRunArtifacts(runId: string): Promise<ArtifactExpiryResult> {
+  const db = getDb();
+  const rows = db
+    .select()
+    .from(artifacts)
+    .where(and(eq(artifacts.runId, runId), isNull(artifacts.expiredAt)))
+    .all();
+
+  if (rows.length === 0) return { expired: 0, bytesReclaimed: 0 };
+
+  const root = artifactsDir();
+  let bytesReclaimed = 0;
+
+  for (const row of rows) {
+    // Re-checked against the root rather than trusted from the row: a stale or
+    // tampered `file_path` must not turn retention into an arbitrary unlink.
+    if (!isInside(root, row.filePath)) continue;
+    try {
+      const stat = await fsp.stat(row.filePath);
+      bytesReclaimed += stat.size;
+    } catch {
+      // Already gone. The row is still marked, so the UI stops calling it missing.
+    }
+    await fsp.rm(row.filePath, { force: true });
+  }
+
+  // The run's own directory, so anything the agent left beside a registered
+  // artifact goes with it.
+  const dir = runArtifactDir(runId);
+  if (isInside(root, dir)) {
+    await fsp.rm(dir, { recursive: true, force: true });
+  }
+
+  const expiredAt = new Date().toISOString();
+  db.update(artifacts)
+    .set({ expiredAt })
+    .where(and(eq(artifacts.runId, runId), isNull(artifacts.expiredAt)))
+    .run();
+
+  return { expired: rows.length, bytesReclaimed };
+}
+
+/** Bytes a run's still-present artifacts are recorded as holding. */
+export function runArtifactBytes(runId: string): number {
+  const db = getDb();
+  return db
+    .select()
+    .from(artifacts)
+    .where(and(eq(artifacts.runId, runId), isNull(artifacts.expiredAt)))
+    .all()
+    .reduce((total, row) => total + row.bytes, 0);
 }

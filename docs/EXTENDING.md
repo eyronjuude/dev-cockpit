@@ -237,3 +237,9 @@ copy the app holds, so it is stored verbatim and nothing prunes it.
 
 A new kind of file belongs to whichever of those two it is. If it is neither,
 that is a third root and a decision worth writing down.
+
+"Retention is allowed to delete it" now means something specific: after
+`artifact_retention_days`, the sweep in `services/expiry` deletes the bytes and
+sets `expired_at` on the row. So an artifact must be *reproducible or
+disposable*. Anything a run's record depends on being readable a year later does
+not belong under `artifacts/`.

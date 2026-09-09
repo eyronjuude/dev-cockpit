@@ -36,6 +36,7 @@ const ICON: Partial<Record<EventType, string>> = {
   'summarise.skipped': '·',
   'worktree.prepared': '⑂',
   'worktree.setup': '⚙',
+  'run.expired': '⌛',
   'agent.started': '▶',
   'agent.message': '“',
   'agent.tool_started': '·',

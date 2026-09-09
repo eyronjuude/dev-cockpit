@@ -1,3 +1,4 @@
+import type { ExpiryTarget } from './expiry';
 import type { ResolvedWorkMode, WorkMode } from './modes';
 import type { RetryStage } from './retry';
 import type {
@@ -33,6 +34,7 @@ export const EVENT_TYPES = [
   'worktree.prepared',
   'worktree.setup',
   'worktree.removed',
+  'run.expired',
 
   'agent.started',
   'agent.message',
@@ -165,6 +167,24 @@ export interface EventPayloads {
       branchDeleted: boolean;
       reason: string | null;
     }[];
+  };
+
+  /**
+   * A retention window elapsed and the run's storage was reclaimed. Recorded
+   * against the run because the run is where someone will look for the reason
+   * its diff can no longer be opened.
+   */
+  'run.expired': {
+    targets: ExpiryTarget[];
+    retentionDays: Record<ExpiryTarget, number>;
+    /** Null when the worktree window had not elapsed. */
+    worktreesRemoved: number | null;
+    worktreesKept: number | null;
+    /** Null when the artifact window had not elapsed. */
+    artifactsExpired: number | null;
+    bytesReclaimed: number;
+    /** Set when the pass was a preview and nothing was actually removed. */
+    dryRun: boolean;
   };
 
   'agent.started': {
@@ -331,6 +351,7 @@ export const PROGRESS_EVENT_TYPES: readonly EventType[] = [
   'worktree.prepared',
   'worktree.setup',
   'worktree.removed',
+  'run.expired',
   'agent.started',
   'agent.message',
   'agent.tool_started',

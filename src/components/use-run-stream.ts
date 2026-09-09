@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { RunEvent } from '@/domain/events';
+import type { ExpiryPlan } from '@/domain/expiry';
 import type { ValidationKind } from '@/domain/types';
 import type { ArtifactView } from '@/services/artifacts';
 import type { ReadinessAssessment, RunView } from '@/services/runs';
@@ -22,6 +23,11 @@ export interface RunSnapshot {
   /** This run's worktrees, and whether each is still on disk. */
   worktrees: RunWorktree[];
   /**
+   * When retention will reclaim this run's storage. Computed server-side from
+   * the project's windows, so the screen and the sweep can never disagree.
+   */
+  expiry: ExpiryPlan;
+  /**
    * Whether the attachment list can still be added to or removed from.
    *
    * Server-decided rather than derived on the client from the status, because
@@ -36,6 +42,8 @@ export interface RunSnapshot {
     reviewBlocksReady: boolean;
     allowAgentCommit: boolean;
     protectedBranches: string[];
+    worktreeRetentionDays: number;
+    artifactRetentionDays: number;
   };
 }
 

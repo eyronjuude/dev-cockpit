@@ -302,7 +302,8 @@ Specifically:
   worktrees once it lands or is rejected**.
 - A run that failed or was cancelled keeps its worktree until you ask for it
   back, with **Remove worktrees** on the run screen. Rejecting offers the same
-  thing with the option to discard uncommitted work as well.
+  thing with the option to discard uncommitted work as well — or leave it, and
+  retention reclaims it after a week. See *Expiry and retention*.
 - Force restarting removes the worktree but keeps the branch, and prepares the
   new attempt on `cockpit/<runId>-r2`. Same reason: nothing is deleted with
   `-D`, so an attempt that committed stays reachable.
@@ -382,6 +383,61 @@ Attachments sit under their own root, not inside `artifacts/`. The two look
 alike and travel in opposite directions: an artifact is evidence a run
 produced, and retention is allowed to delete it; an attachment is an input you
 supplied, and this is the only copy.
+
+## Expiry and retention
+
+A run's storage is reclaimed by the passage of time, not by anything in its
+lifecycle. Each project has two windows, both counted from the moment the run
+finished, and both on the project form under **Policies**:
+
+| Window                    | Default | What goes                                          |
+| ------------------------- | ------- | -------------------------------------------------- |
+| **Expire worktrees after** | 7 days  | `worktrees/<runId>/` and `landings/<runId>/`        |
+| **Expire artifacts after** | 30 days | the bytes under `artifacts/<runId>/`                |
+
+Two windows because the costs differ by orders of magnitude. A worktree is a
+full checkout plus whatever `linkPaths` brought in — usually `node_modules`, so
+hundreds of megabytes per run — and it is worthless once nobody is going to
+open the diff again. Artifacts are logs and reports measured in megabytes, and
+they are the evidence for what the run claimed, so they stay three times as
+long. Set either to `0` to keep that target forever.
+
+What expiry will not do:
+
+- **It never forces.** Worktree removal is the same non-forcing path the
+  **Remove worktrees** button uses, so a checkout holding uncommitted changes
+  and a branch holding unmerged commits both survive, and the refusal goes into
+  the event log — once, not on every sweep. Overdue does not mean expendable,
+  and later sweeps keep trying, so committing the work is enough to let the
+  directory go.
+- **It never removes history.** The run row, its events, iterations,
+  validation results, findings and diff statistics all stay. An expired
+  artifact keeps its row and reads "expired" in the browser, with the size it
+  held — which is a more useful thing to be told than that a file is missing.
+- **It never touches attachments.** Those are your files.
+- **It never touches a run that is not over.** Only `LANDED`, `REJECTED`,
+  `FAILED` and `CANCELLED` are eligible. A run waiting on your decision, or
+  with landing still ahead of it, is not expired at any age.
+
+`FAILED` and `CANCELLED` are eligible even though both can be picked back up.
+That is what the window is for: a rework happens within days, and a run nobody
+returned to in a week is a checkout that is pure cost. Nothing is lost either
+way, because removal still refuses to discard work.
+
+The sweep runs at startup, then every six hours for as long as the process
+lives — a startup-only sweep would never fire on a machine that leaves the
+server running, and a timer-only sweep would never fire on one that does not.
+`DEV_COCKPIT_DISABLE_EXPIRY=1` turns it off entirely. To see what a sweep would
+free without freeing it:
+
+```
+curl http://127.0.0.1:4317/api/maintenance/expiry
+```
+
+`GET` always previews; `POST` acts.
+
+The reasoning behind both defaults, and why expiry refuses to force, is in
+[ADR 0012](docs/adr/0012-run-expiry.md).
 
 ## Attachments
 
@@ -545,10 +601,11 @@ Two honest caveats:
   replace the system prompt outright; the Codex ones prepend the instruction to
   the prompt body instead. The output schema does the constraining either way,
   but it is a smaller guarantee.
-- **Artifact retention is configurable but not enforced.** The field is stored;
-  no job prunes old artifacts yet. Attachments are outside retention by
-  design — they are your files, not the run's output — so nothing prunes those
-  either.
+- **Retention does not measure what it frees from a worktree.** The sweep
+  reports artifact bytes exactly and worktree *counts* only: a recursive stat
+  over a checkout costs more than the number is worth. So "reclaimed 12 MB and
+  4 worktrees" under-reports the disk actually freed, usually by a very large
+  margin. Nothing reports the total size of the data directory yet either.
 - **Attachment delivery has not been exercised against a live CLI.** The
   wiring is deliberate: the directory is passed with `--add-dir` and every
   file is named by absolute path in the prompt, so the agent opens them with

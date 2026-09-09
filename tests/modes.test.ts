@@ -54,6 +54,7 @@ function makeProject(overrides: Partial<ProjectView> = {}): ProjectView {
     reviewBlocksReady: false,
     cleanUpWorktreeOnFinish: true,
     artifactRetentionDays: 30,
+    worktreeRetentionDays: 7,
     agentModel: null,
     agentPermissionMode: stored,
     effectivePermissionMode: stored,

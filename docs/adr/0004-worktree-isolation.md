@@ -45,7 +45,9 @@ landing still needs the run worktree.
   another run's worktree.
 - Junctions are unlinked before the directory is deleted, so a delete cannot
   reach through into the developer's own `node_modules`.
-- Artifact retention is recorded but still not enforced.
+- Artifact retention is recorded but still not enforced. *(Closed by ADR 0012:
+  both windows are enforced, and worktrees gained one of their own for the
+  finished statuses this immediate cleanup deliberately leaves alone.)*
 - Junction creation can fail on unusual filesystems. Failures are reported per
   path in a `worktree.setup` event rather than failing the run.
 - Publishing the work is manual. Deliberate.
