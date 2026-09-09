@@ -111,6 +111,7 @@ function makeRun(overrides: Partial<RunView> = {}): RunView {
     validations: [],
     changedFiles: [],
     findings: [],
+    attachments: [],
     ...overrides,
   };
 }

@@ -3,6 +3,7 @@
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 
+import { safeAttachmentFileName } from '@/domain/attachments';
 import {
   DEFAULT_WORK_MODE,
   isReadOnlyMode,
@@ -20,6 +21,7 @@ import {
 } from '@/domain/types';
 import type { ExecutionProfile } from '@/orchestrator/profiles';
 import type { ProjectView, RepositoryState } from '@/services/projects';
+import { AttachmentPicker } from './attachments';
 
 export interface ProviderOption {
   id: string;
@@ -73,6 +75,9 @@ export function NewTaskForm({
 
   const [projectId, setProjectId] = useState(project.id);
   const [request, setRequest] = useState('');
+  // Held as browser `File` objects until the run is submitted, so abandoning
+  // the form leaves nothing on disk to clean up.
+  const [attachments, setAttachments] = useState<File[]>([]);
   const [mode, setMode] = useState<WorkMode>(DEFAULT_WORK_MODE);
   const [profile, setProfile] = useState<ExecutionProfileName>('standard');
   const [transformer, setTransformer] = useState(defaultTransformer);
@@ -102,18 +107,30 @@ export function NewTaskForm({
     setSubmitting(true);
     setError(null);
     try {
+      const payload = JSON.stringify({
+        projectId,
+        request,
+        mode,
+        profile,
+        transformer,
+        reviewer,
+        baseRef: baseRef.trim() || undefined,
+      });
+
+      /**
+       * Multipart only when there is a file to carry. The fields ride in a
+       * JSON `payload` part and are parsed by the same schema either way, so
+       * the common case stays a plain JSON body and no boundary is negotiated
+       * for a request that has nothing to attach.
+       *
+       * `Content-Type` is left unset for the multipart case deliberately: the
+       * browser has to set it, because only it knows the boundary.
+       */
       const response = await fetch('/api/runs', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          projectId,
-          request,
-          mode,
-          profile,
-          transformer,
-          reviewer,
-          baseRef: baseRef.trim() || undefined,
-        }),
+        ...(attachments.length > 0
+          ? { body: buildMultipartBody(payload, attachments) }
+          : { headers: { 'Content-Type': 'application/json' }, body: payload }),
       });
 
       if (!response.ok) {
@@ -228,6 +245,12 @@ export function NewTaskForm({
         </div>
       </div>
 
+      <AttachmentPicker
+        files={attachments}
+        onChange={setAttachments}
+        disabled={submitting}
+      />
+
       <div className="panel">
         <div className="panel-head">
           <h2 className="panel-title">Working mode</h2>
@@ -323,6 +346,17 @@ export function NewTaskForm({
             {WORK_MODE_LABELS[resolution.mode]}
             {resolution.automatic ? ` — chosen by Auto because ${resolution.reason}.` : '.'}
           </Row>
+          {attachments.length > 0 ? (
+            <Row label="Attachments">
+              {attachments.length} file{attachments.length === 1 ? '' : 's'}, stored outside the
+              worktree and listed to the{' '}
+              {readOnly ? WORK_MODE_WORDING[resolution.mode].agentNoun : 'implementer'} by path, so
+              it reads them with its own tools and they never enter the diff.
+              {transformer !== 'none'
+                ? ' The transformer sees only your text — it handles prose and never files.'
+                : ''}
+            </Row>
+          ) : null}
           <Row label="Isolation">
             A new Git worktree on its own branch, from{' '}
             <code className="mono">{effectiveBase}</code>
@@ -484,6 +518,21 @@ export function NewTaskForm({
       </div>
     </div>
   );
+}
+
+/**
+ * The create-run body when files come with it.
+ *
+ * Named with the sanitised file name rather than the browser's, so what the
+ * server stores is what the list in the form said it would.
+ */
+function buildMultipartBody(payload: string, files: readonly File[]): FormData {
+  const form = new FormData();
+  form.append('payload', payload);
+  for (const file of files) {
+    form.append('attachments', file, safeAttachmentFileName(file.name));
+  }
+  return form;
 }
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {

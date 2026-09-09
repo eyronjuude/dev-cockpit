@@ -1,5 +1,7 @@
 import type { ResolvedWorkMode } from '@/domain/modes';
 import { permissionModeAllowsCommands } from '@/domain/types';
+import { formatBytes } from '@/domain/vocabulary';
+import type { AttachmentView } from '@/services/attachments';
 import type { ProjectView } from '@/services/projects';
 import type { RunView, ValidationResultView } from '@/services/runs';
 import { effectivePermissionMode, type WorkModeBehaviour } from './modes';
@@ -109,6 +111,73 @@ function taskSection(run: RunView): string {
   return `# Task\n\n${run.request}`;
 }
 
+/**
+ * The attachments an agent could actually open: recorded, and still on disk.
+ *
+ * One function rather than the same filter written twice, because two callers
+ * must agree. This one decides whether the prompt names any attachment; the
+ * orchestrator uses it to decide whether to grant `--add-dir` over the
+ * directory holding them. A prompt naming a path the session cannot open
+ * costs the agent a turn to discover; a grant the prompt never mentions is
+ * access for nothing.
+ */
+export function readableAttachments(run: RunView): AttachmentView[] {
+  return run.attachments.filter((a) => a.exists);
+}
+
+/**
+ * The files the developer attached, by absolute path.
+ *
+ * Paths rather than contents, and paths outside the worktree. The agent gets
+ * read access to the attachment directory through `--add-dir`, so it can open
+ * a screenshot or a 40,000-line log with its own tools and read only the part
+ * it needs — pasting them into the prompt would spend the context window on
+ * bytes the agent may not want.
+ *
+ * They stay outside the worktree because anything inside it lands in the diff,
+ * and an attached log is not a change the developer asked for.
+ *
+ * Returns null when there are none, so no empty heading reaches the agent.
+ */
+function attachmentSection(
+  run: RunView,
+  mode: WorkModeBehaviour,
+  /**
+   * ISO timestamp the previous iteration started at, when there was one.
+   * Attachments newer than it are marked, because a file added between two
+   * passes is usually the reason the second pass was asked for.
+   */
+  newSince: string | null = null,
+): string | null {
+  const present = readableAttachments(run);
+  if (present.length === 0) return null;
+
+  const isNew = (createdAt: string) => newSince !== null && createdAt > newSince;
+
+  const list = present
+    .map(
+      (a) =>
+        `- \`${a.fileName}\` — ${a.mimeType}, ${formatBytes(a.bytes)}${
+          isNew(a.createdAt) ? ' — **added since your last pass**' : ''
+        } — ${a.filePath}`,
+    )
+    .join('\n');
+
+  const count = present.length === 1 ? 'one file' : `${present.length} files`;
+
+  const care = mode.editsCode
+    ? 'Do not copy them into the worktree, and do not modify or delete them: they belong to the developer, and the diff is meant to hold your work alone.'
+    : 'Do not modify or delete them: they belong to the developer.';
+
+  return `# Attachments
+
+The developer attached ${count} to this request. They sit outside the worktree and this session has been granted read access to the directory holding them, so open the ones you need with your normal file tools. ${care}
+
+${list}
+
+Treat them as part of the request. If one contradicts the text of the request, say so rather than picking silently.`;
+}
+
 export interface BuildPromptInput {
   run: RunView;
   project: ProjectView;
@@ -181,6 +250,9 @@ export function buildInitialPrompt(input: BuildPromptInput): string {
 
   sections.push(taskSection(run));
 
+  const attachmentsText = attachmentSection(run, mode);
+  if (attachmentsText) sections.push(attachmentsText);
+
   return sections.join('\n\n');
 }
 
@@ -232,6 +304,19 @@ export function buildChangeRequestPrompt(input: BuildChangeRequestInput): string
   } else if (modeSwitched) {
     sections.push(...openingRules(project, mode), MODE_SWITCH_NOTE[mode.id]);
   }
+
+  /**
+   * Listed on every follow-up, resumed or not. A resumed session has seen the
+   * older ones, but repeating four lines is cheap and the alternative is that a
+   * screenshot attached specifically to explain this round of feedback never
+   * gets mentioned.
+   */
+  const attachmentsText = attachmentSection(
+    run,
+    mode,
+    run.iterations.at(-1)?.startedAt ?? null,
+  );
+  if (attachmentsText) sections.push(attachmentsText);
 
   const priorOutput = input.priorOutput?.trim();
   if (priorOutput) {

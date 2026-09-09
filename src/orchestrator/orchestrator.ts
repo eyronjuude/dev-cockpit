@@ -7,7 +7,7 @@ import { summariseToolInput } from '@/agents/stream-parser';
 import type { AgentOutcome, AgentStreamEvent, ImplementationAgent } from '@/agents/types';
 import { landingBranchName } from '@/core/ids';
 import { AppError, errorMessage } from '@/core/errors';
-import { runLandingDir, runWorktreeDir } from '@/core/paths';
+import { runAttachmentDir, runLandingDir, runWorktreeDir } from '@/core/paths';
 import {
   effectiveWorkMode,
   WORK_MODE_LABELS,
@@ -62,7 +62,7 @@ import {
 import { getTransformer } from '@/transformers/registry';
 import { formatDuration, runValidation, type ValidationRunSummary } from '@/validation/engine';
 import { effectivePermissionMode, getWorkMode, type WorkModeBehaviour } from './modes';
-import { buildChangeRequestPrompt, buildInitialPrompt } from './prompt';
+import { buildChangeRequestPrompt, buildInitialPrompt, readableAttachments } from './prompt';
 import { getProfile, type ExecutionProfile } from './profiles';
 
 /* ------------------------------------------------------------------ *
@@ -950,12 +950,24 @@ async function phaseImplement(
     handleAgentEvent(run.id, iteration.id, event);
   };
 
+  /**
+   * The attachment directory is handed over only when the run has a file that
+   * is really on disk — the same condition the prompt uses to decide whether
+   * to list any. `--add-dir` on a directory that was never created points at
+   * nothing, and access the prompt never mentions is capability with no
+   * purpose.
+   */
+  const additionalDirs =
+    readableAttachments(run).length > 0
+      ? [...project.agentAddDirs, runAttachmentDir(run.id)]
+      : project.agentAddDirs;
+
   const startInput = {
     runId: run.id,
     iterationId: iteration.id,
     prompt,
     worktreePath: run.worktreePath,
-    additionalDirs: project.agentAddDirs,
+    additionalDirs,
     model: run.agentModel ?? project.agentModel,
     permissionMode,
     effort: profile.agentEffort,

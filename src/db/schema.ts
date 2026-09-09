@@ -339,6 +339,38 @@ export const artifacts = sqliteTable(
 );
 
 /* ------------------------------------------------------------------ *
+ * Request attachments
+ * ------------------------------------------------------------------ */
+
+/**
+ * Files the developer attached to a request.
+ *
+ * A separate table from `artifacts` even though the shape is close, because
+ * the direction of travel is opposite. An artifact is evidence a run produced
+ * and retention is allowed to delete it; an attachment is an input the
+ * developer supplied and is the only copy the app has. Sharing one table would
+ * mean every cleanup path had to remember the difference.
+ */
+export const attachments = sqliteTable(
+  'attachments',
+  {
+    id: text('id').primaryKey(),
+    runId: text('run_id')
+      .notNull()
+      .references(() => runs.id, { onDelete: 'cascade' }),
+    /** Sanitised for the filesystem and the UI; see `safeAttachmentFileName`. */
+    fileName: text('file_name').notNull(),
+    /** Absolute path on disk. Always inside the attachments directory. */
+    filePath: text('file_path').notNull(),
+    /** Derived from the extension, never taken from the browser. */
+    mimeType: text('mime_type').notNull().default('application/octet-stream'),
+    bytes: integer('bytes').notNull().default(0),
+    createdAt: text('created_at').notNull().default(now),
+  },
+  (t) => [index('attachments_run_idx').on(t.runId)],
+);
+
+/* ------------------------------------------------------------------ *
  * Review findings
  * ------------------------------------------------------------------ */
 
@@ -384,4 +416,6 @@ export type EventRow = typeof events.$inferSelect;
 export type ChangedFileRow = typeof changedFiles.$inferSelect;
 export type ValidationResultRow = typeof validationResults.$inferSelect;
 export type ArtifactRow = typeof artifacts.$inferSelect;
+export type AttachmentRow = typeof attachments.$inferSelect;
+export type NewAttachmentRow = typeof attachments.$inferInsert;
 export type ReviewFindingRow = typeof reviewFindings.$inferSelect;

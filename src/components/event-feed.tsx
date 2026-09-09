@@ -48,6 +48,10 @@ const ICON: Partial<Record<EventType, string>> = {
   'validation.skipped': '·',
   'artifact.created': '📎',
   'visualisation.skipped': '·',
+  // An input arriving reads differently from an output being produced, so it
+  // gets its own glyph rather than sharing the artifact paperclip.
+  'attachment.added': '⊕',
+  'attachment.removed': '⊖',
   'review.started': '⌕',
   'review.finding': '⚑',
   'review.completed': '⌕',

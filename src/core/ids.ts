@@ -20,6 +20,7 @@ export const newRunId = () => shortId('run');
 export const newIterationId = () => shortId('itr');
 export const newValidationId = () => shortId('val');
 export const newArtifactId = () => shortId('art');
+export const newAttachmentId = () => shortId('att');
 export const newFindingId = () => shortId('fnd');
 
 /** Git branch component derived from a run id. Safe for `refs/heads/`. */

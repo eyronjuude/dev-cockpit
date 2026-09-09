@@ -50,6 +50,9 @@ export const EVENT_TYPES = [
   'artifact.created',
   'visualisation.skipped',
 
+  'attachment.added',
+  'attachment.removed',
+
   'review.started',
   'review.finding',
   'review.completed',
@@ -182,6 +185,19 @@ export interface EventPayloads {
   /** The implementation map could not be drawn. The run itself is unaffected. */
   'visualisation.skipped': { reason: string };
 
+  /**
+   * An attachment arrived or left. Both are recorded because the attachment
+   * list is part of what was asked for: a file removed after an iteration read
+   * it would otherwise leave the run looking like it never had it.
+   */
+  'attachment.added': {
+    attachmentId: string;
+    fileName: string;
+    mimeType: string;
+    bytes: number;
+  };
+  'attachment.removed': { attachmentId: string; fileName: string };
+
   'review.started': { provider: string };
   'review.finding': {
     findingId: string;
@@ -275,6 +291,8 @@ export const PROGRESS_EVENT_TYPES: readonly EventType[] = [
   'validation.completed',
   'validation.skipped',
   'visualisation.skipped',
+  'attachment.added',
+  'attachment.removed',
   'review.started',
   'review.finding',
   'review.completed',

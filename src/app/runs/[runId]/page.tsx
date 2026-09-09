@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation';
 import { RunView } from '@/components/run-view';
 import { activeRunPhase, isRunActive } from '@/orchestrator/orchestrator';
 import { listArtifacts } from '@/services/artifacts';
+import { canModifyAttachments } from '@/services/attachments';
 import { getProject } from '@/services/projects';
 import { assessReadiness, getRun } from '@/services/runs';
 
@@ -23,11 +24,14 @@ export default async function RunPage({ params }: { params: Promise<{ runId: str
   const project = getProject(run.projectId);
   if (!project) notFound();
 
+  const active = isRunActive(runId);
+
   const initial = {
     run,
     readiness: assessReadiness(run, project),
     artifacts: listArtifacts(runId),
-    live: { active: isRunActive(runId), phase: activeRunPhase(runId) },
+    live: { active, phase: activeRunPhase(runId) },
+    attachmentsMutable: canModifyAttachments(runId) && !active,
     configuredValidations: project.validationCommands
       .filter((c) => c.enabled && c.command.trim().length > 0)
       .map((c) => ({ kind: c.kind, command: c.command, blocking: c.blocking })),

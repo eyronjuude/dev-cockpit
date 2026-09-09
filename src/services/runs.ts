@@ -40,6 +40,7 @@ import {
   type ValidationOutcome,
 } from '@/domain/types';
 import type { FileChange } from '@/git/diff';
+import { listAttachments, type AttachmentView } from './attachments';
 import { appendEvent } from './events';
 import { fromLines, requireProject, type ProjectView } from './projects';
 import type { ReviewFinding } from '@/reviewers/types';
@@ -172,6 +173,14 @@ export interface RunView {
   validations: ValidationResultView[];
   changedFiles: ChangedFileView[];
   findings: ReviewFindingView[];
+  /**
+   * Files the developer attached to the request.
+   *
+   * Part of the run rather than a separate lookup because both prompt builders
+   * and the run screen need them, and a request whose attachments arrive by a
+   * different route is a request that can be read without them.
+   */
+  attachments: AttachmentView[];
 }
 
 /* ------------------------------------------------------------------ *
@@ -316,6 +325,7 @@ export function getRun(id: string): RunView | null {
       suggestion: f.suggestion,
       createdAt: f.createdAt,
     })),
+    attachments: listAttachments(id),
   };
 }
 

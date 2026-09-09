@@ -4,7 +4,12 @@ const nextConfig: NextConfig = {
   // better-sqlite3 is a native addon: it must stay outside the bundler.
   serverExternalPackages: ['better-sqlite3'],
   outputFileTracingExcludes: {
-    '/*': ['./data/worktrees/**/*', './data/landings/**/*', './data/artifacts/**/*'],
+    '/*': [
+      './data/worktrees/**/*',
+      './data/landings/**/*',
+      './data/artifacts/**/*',
+      './data/attachments/**/*',
+    ],
   },
   // The orchestrator holds long-lived child processes in module scope. Double
   // mounting in dev would spawn duplicates of everything.
