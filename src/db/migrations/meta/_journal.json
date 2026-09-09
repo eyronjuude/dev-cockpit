@@ -43,6 +43,13 @@
       "when": 1789070000000,
       "tag": "0004_request_attachments",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1788931924199,
+      "tag": "0006_run_expiry",
+      "breakpoints": true
     }
   ]
 }

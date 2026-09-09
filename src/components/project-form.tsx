@@ -9,6 +9,10 @@ import {
   VALIDATION_KINDS,
   type ValidationKind,
 } from '@/domain/types';
+import {
+  DEFAULT_ARTIFACT_RETENTION_DAYS,
+  DEFAULT_WORKTREE_RETENTION_DAYS,
+} from '@/domain/expiry';
 import type { ProjectView } from '@/services/projects';
 import type { RepositoryProbe } from '@/services/projects';
 
@@ -44,6 +48,21 @@ const PLACEHOLDERS: Record<ValidationKind, string> = {
   build: 'npm run build',
 };
 
+/**
+ * A retention box back to a number of days.
+ *
+ * A blank field means "leave it at the default" rather than zero, because zero
+ * is the setting that turns retention off and nobody turns it off by deleting
+ * the contents of a box.
+ */
+function retentionOr(value: string, fallback: number): number {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return fallback;
+  const parsed = Number.parseInt(trimmed, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) return fallback;
+  return Math.min(parsed, 3_650);
+}
+
 export function ProjectForm({ existing }: { existing?: ProjectView }) {
   const router = useRouter();
   const editing = existing !== undefined;
@@ -73,6 +92,14 @@ export function ProjectForm({ existing }: { existing?: ProjectView }) {
   const [allowAgentCommit, setAllowAgentCommit] = useState(existing?.allowAgentCommit ?? false);
   const [cleanUpWorktreeOnFinish, setCleanUpWorktreeOnFinish] = useState(
     existing?.cleanUpWorktreeOnFinish ?? true,
+  );
+  // Held as strings so clearing the box does not snap back to a number the
+  // user did not type. Parsed on submit; a blank falls back to the default.
+  const [worktreeRetentionDays, setWorktreeRetentionDays] = useState(
+    String(existing?.worktreeRetentionDays ?? DEFAULT_WORKTREE_RETENTION_DAYS),
+  );
+  const [artifactRetentionDays, setArtifactRetentionDays] = useState(
+    String(existing?.artifactRetentionDays ?? DEFAULT_ARTIFACT_RETENTION_DAYS),
   );
   const [agentModel, setAgentModel] = useState(existing?.agentModel ?? '');
   const [agentPermissionMode, setAgentPermissionMode] = useState<string>(
@@ -151,6 +178,8 @@ export function ProjectForm({ existing }: { existing?: ProjectView }) {
       reviewBlocksReady,
       allowAgentCommit,
       cleanUpWorktreeOnFinish,
+      worktreeRetentionDays: retentionOr(worktreeRetentionDays, DEFAULT_WORKTREE_RETENTION_DAYS),
+      artifactRetentionDays: retentionOr(artifactRetentionDays, DEFAULT_ARTIFACT_RETENTION_DAYS),
       agentModel: agentModel || null,
       agentPermissionMode,
       validationCommands: VALIDATION_KINDS.map((kind) => ({
@@ -441,6 +470,53 @@ export function ProjectForm({ existing }: { existing?: ProjectView }) {
             label="Remove a run's worktrees once it lands or is rejected"
             hint="Never forces: a worktree with uncommitted changes, or a branch with unmerged commits, is kept and the reason recorded."
           />
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <label className="label" htmlFor="worktree-retention">
+                Expire worktrees after
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  id="worktree-retention"
+                  className="input input-mono w-24"
+                  type="number"
+                  min={0}
+                  max={3650}
+                  value={worktreeRetentionDays}
+                  onChange={(e) => setWorktreeRetentionDays(e.target.value)}
+                />
+                <span className="text-[12px] text-ink-muted">days after a run finishes</span>
+              </div>
+              <p className="hint">
+                Covers every finished run, including failed and cancelled ones, not only the
+                two the toggle above catches. Removal still never forces.{' '}
+                <code className="mono">0</code> keeps them forever.
+              </p>
+            </div>
+            <div>
+              <label className="label" htmlFor="artifact-retention">
+                Expire artifacts after
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  id="artifact-retention"
+                  className="input input-mono w-24"
+                  type="number"
+                  min={0}
+                  max={3650}
+                  value={artifactRetentionDays}
+                  onChange={(e) => setArtifactRetentionDays(e.target.value)}
+                />
+                <span className="text-[12px] text-ink-muted">days after a run finishes</span>
+              </div>
+              <p className="hint">
+                Logs, diffs and reports. The record of each stays on the run and reads
+                &ldquo;expired&rdquo;; only the bytes go. Attached files are never touched.{' '}
+                <code className="mono">0</code> keeps them forever.
+              </p>
+            </div>
+          </div>
 
           <div>
             <label className="label" htmlFor="protected-branches">

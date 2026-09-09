@@ -104,7 +104,7 @@ type Dialog =
 
 export function RunActions({ snapshot, onChanged }: ActionsProps) {
   const router = useRouter();
-  const { run, readiness, live, preview, worktrees } = snapshot;
+  const { run, readiness, live, preview, worktrees, expiry } = snapshot;
 
   const [dialog, setDialog] = useState<Dialog>('none');
   const [busy, setBusy] = useState<string | null>(null);
@@ -734,6 +734,8 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
             ))}
           </ul>
 
+          <p className="mt-2 text-[11.5px] text-ink-faint">{retentionNote(expiry)}</p>
+
           <label className="mt-2.5 flex cursor-pointer items-start gap-2 text-[12.5px]">
             <input
               type="checkbox"
@@ -873,4 +875,25 @@ export function ReadinessNotice({
       {readiness.reasons.join('; ')}
     </div>
   );
+}
+
+/**
+ * What retention will do to these worktrees if the user closes this dialog.
+ *
+ * Worth saying here rather than nowhere: the reason to press Remove is to free
+ * disk, and knowing it frees itself on Friday changes that decision.
+ */
+function retentionNote(expiry: RunSnapshot['expiry']): string {
+  const worktrees = expiry.targets.find((t) => t.target === 'worktrees');
+
+  if (!worktrees || worktrees.retentionDays === 0) {
+    return 'Retention is off for this project, so these stay until something removes them.';
+  }
+  if (worktrees.expired) {
+    return `Past the ${worktrees.retentionDays}-day window — the next retention sweep will try this anyway, without discarding anything.`;
+  }
+  if (worktrees.dueAt === null) {
+    return `Retention removes them ${worktrees.retentionDays} days after the run finishes.`;
+  }
+  return `Retention would remove them on its own after ${worktrees.retentionDays} days, from ${new Date(worktrees.dueAt).toLocaleDateString()}.`;
 }

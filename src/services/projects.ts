@@ -14,6 +14,11 @@ import {
   VALIDATION_KINDS,
   type ValidationKind,
 } from '@/domain/types';
+import {
+  DEFAULT_ARTIFACT_RETENTION_DAYS,
+  DEFAULT_WORKTREE_RETENTION_DAYS,
+  type RetentionPolicy,
+} from '@/domain/expiry';
 import { resolvePermissionMode } from '@/agents/permissions';
 import {
   aheadBehind,
@@ -40,6 +45,12 @@ export const validationCommandInputSchema = z.object({
   profiles: z.array(z.string()).optional(),
 });
 
+/**
+ * A retention window in days. Zero is meaningful — it turns that window off —
+ * so the floor is zero rather than one, and ten years is the ceiling.
+ */
+const retentionDaysSchema = z.number().int().min(0).max(3_650);
+
 export const createProjectSchema = z.object({
   name: z.string().trim().min(1).max(120),
   repositoryPath: z.string().trim().min(1),
@@ -56,7 +67,9 @@ export const createProjectSchema = z.object({
   allowAgentCommit: z.boolean().optional(),
   reviewBlocksReady: z.boolean().optional(),
   cleanUpWorktreeOnFinish: z.boolean().optional(),
-  artifactRetentionDays: z.number().int().min(1).max(3_650).optional(),
+  /** Retention windows, in days. Zero keeps that target forever. */
+  artifactRetentionDays: retentionDaysSchema.optional(),
+  worktreeRetentionDays: retentionDaysSchema.optional(),
   agentModel: z.string().trim().max(120).nullable().optional(),
   agentPermissionMode: agentPermissionModeSchema.optional(),
   agentAddDirs: z.array(z.string()).optional(),
@@ -115,7 +128,9 @@ export interface ProjectView {
   reviewBlocksReady: boolean;
   /** Reclaim the run and landing worktrees once a run lands or is rejected. */
   cleanUpWorktreeOnFinish: boolean;
+  /** See `domain/expiry`. Zero on either means that target never expires. */
   artifactRetentionDays: number;
+  worktreeRetentionDays: number;
   agentModel: string | null;
   /** What the project stores. May be overridden for a run. */
   agentPermissionMode: string;
@@ -163,6 +178,7 @@ function toProjectView(row: ProjectRow, commands: ValidationCommandRow[]): Proje
     reviewBlocksReady: row.reviewBlocksReady,
     cleanUpWorktreeOnFinish: row.cleanUpWorktreeOnFinish,
     artifactRetentionDays: row.artifactRetentionDays,
+    worktreeRetentionDays: row.worktreeRetentionDays,
     agentModel: row.agentModel,
     agentPermissionMode: row.agentPermissionMode,
     effectivePermissionMode: resolvePermissionMode(row.agentPermissionMode),
@@ -335,7 +351,8 @@ export async function createProject(input: CreateProjectInput): Promise<ProjectV
       allowAgentCommit: parsed.allowAgentCommit ?? false,
       reviewBlocksReady: parsed.reviewBlocksReady ?? false,
       cleanUpWorktreeOnFinish: parsed.cleanUpWorktreeOnFinish ?? true,
-      artifactRetentionDays: parsed.artifactRetentionDays ?? 30,
+      artifactRetentionDays: parsed.artifactRetentionDays ?? DEFAULT_ARTIFACT_RETENTION_DAYS,
+      worktreeRetentionDays: parsed.worktreeRetentionDays ?? DEFAULT_WORKTREE_RETENTION_DAYS,
       agentModel: parsed.agentModel ?? null,
       agentPermissionMode: parsed.agentPermissionMode ?? DEFAULT_AGENT_PERMISSION_MODE,
       agentAddDirs: toLines(parsed.agentAddDirs) ?? null,
@@ -383,6 +400,7 @@ export function updateProject(id: string, input: UpdateProjectInput): ProjectVie
       cleanUpWorktreeOnFinish:
         parsed.cleanUpWorktreeOnFinish ?? existing.cleanUpWorktreeOnFinish,
       artifactRetentionDays: parsed.artifactRetentionDays ?? existing.artifactRetentionDays,
+      worktreeRetentionDays: parsed.worktreeRetentionDays ?? existing.worktreeRetentionDays,
       agentModel: parsed.agentModel === undefined ? existing.agentModel : parsed.agentModel,
       agentPermissionMode: parsed.agentPermissionMode ?? existing.agentPermissionMode,
       agentAddDirs: toLines(parsed.agentAddDirs) ?? existing.agentAddDirs.join('\n'),
@@ -487,6 +505,20 @@ export function recentRunSummaries(projectId: string, limit = 10) {
     .orderBy(desc(runs.createdAt))
     .limit(limit)
     .all();
+}
+
+/**
+ * The project's retention windows, in the shape `domain/expiry` reads.
+ *
+ * `ProjectView` already satisfies `RetentionPolicy` structurally; this exists
+ * so a caller passing retention somewhere states that it is retention it is
+ * passing, rather than handing over a whole project.
+ */
+export function retentionPolicy(project: ProjectView): RetentionPolicy {
+  return {
+    worktreeRetentionDays: project.worktreeRetentionDays,
+    artifactRetentionDays: project.artifactRetentionDays,
+  };
 }
 
 /** Guards a project's protected-branch policy at run creation time. */

@@ -71,7 +71,7 @@ src/
 ├── validation/    Validator + the engine that sequences them
 ├── visualisation/ the implementation map: stored run state → one SVG
 ├── orchestrator/  the state machine, prompts, working modes, execution profiles
-├── services/      projects, runs, events, artifacts, previews, attachments, event bus, bootstrap
+├── services/      projects, runs, events, artifacts, previews, attachments, expiry, bus, bootstrap
 ├── components/    client components: run view, scorecard, diff, feed, forms
 └── app/           routes and API handlers
 ```
@@ -394,6 +394,55 @@ Dependency direction: `services/runs` imports `services/attachments` to hydrate
 `RunView.attachments`, never the reverse. `services/attachments` reads run
 status straight off the `runs` table for that reason.
 
+## Expiry and retention
+
+Storage is reclaimed by the passage of time, so nothing in the run lifecycle
+triggers it. `domain/expiry.ts` holds the policy and is pure: given a run's
+status and finish time plus the project's two windows, it says which of
+`worktrees` and `artifacts` have been released and when the rest are due.
+`services/expiry.ts` acts on that, and the run screen calls the same
+`planExpiry` to say when a run's storage goes — so the screen and the sweep
+cannot disagree.
+
+Two windows rather than one, because the two costs differ by orders of
+magnitude: `worktree_retention_days` defaults to 7 and `artifact_retention_days`
+to 30. Zero on either keeps that target forever. Both are counted from
+`finishedAt`, falling back to `updatedAt` so a window can never quietly become
+infinite on an older row.
+
+Eligibility is `FINISHED_STATUSES` exactly — the same set the manual cleanup
+accepts. `FAILED` and `CANCELLED` are included even though both can be
+reworked; that is what distinguishes a window from the immediate
+`cleanUpWorktreeOnFinish` pass, which only fires on the two terminal statuses.
+
+Two invariants hold across every path:
+
+- **It never forces.** Worktree removal goes through `cleanUpRunWorktrees` with
+  `force: false`, so a dirty checkout and an unmerged branch survive and the
+  refusal is recorded as a `notice`.
+- **It never removes history.** Run rows, events, iterations, validation
+  results, findings and request attachments are untouched. Artifact rows are
+  *marked* — `expired_at` is set and the file deleted — rather than deleted,
+  because the row is the run's own account of what it produced. That is the one
+  difference between `expireRunArtifacts` and `purgeRunArtifacts`, which still
+  exists for the paths that discard a run outright.
+
+A swept run is skipped on every later pass: both windows stay elapsed for the
+rest of its life, so `expireOneRun` returns null when nothing is left rather
+than appending a `run.expired` event per sweep forever. A worktree that keeps
+being *refused* is the harder case — the refusal is correct every time, and the
+sweep does keep retrying it, because the user may commit the work later. So the
+event is written only when something was reclaimed, or when nothing has been
+recorded for that run before: one notice, then silence, then a second event on
+the sweep that finally succeeds.
+
+Scheduling is spread three ways because a local app's process lifetime is
+unpredictable: once from `bootstrap`, every six hours from an unref'd interval,
+and on demand from `/api/maintenance/expiry` — where `GET` always previews and
+`POST` acts. All callers pass the orchestrator's `isRunActive`, because a run
+can hold a finished status while its process is still winding down.
+`DEV_COCKPIT_DISABLE_EXPIRY` switches the sweep off.
+
 ## Startup
 
 `services/bootstrap.ts` runs once per process from the root layout. It ensures
@@ -402,3 +451,8 @@ when the process last stopped — marking them `FAILED` with an explicit
 "interrupted by a restart" message. Child processes do not survive a restart, so
 such a run really is dead; saying so is more useful than a spinner that never
 resolves, and the session id and worktree are preserved so it can be continued.
+
+It then starts the retention sweep. Reconciliation runs first on purpose: a run
+this restart has just marked `FAILED` needs its finish timestamp written before
+retention judges how long ago it finished. The sweep itself is never awaited —
+reclaiming disk must not delay the first page render.

@@ -1,9 +1,10 @@
 import { handle } from '@/app/api/_lib/handler';
+import { planExpiry } from '@/domain/expiry';
 import { activeRunPhase, isRunActive } from '@/orchestrator/orchestrator';
 import { listArtifacts } from '@/services/artifacts';
 import { canModifyAttachments } from '@/services/attachments';
 import { getRunPreview } from '@/services/previews';
-import { requireProject } from '@/services/projects';
+import { requireProject, retentionPolicy } from '@/services/projects';
 import { assessReadiness, requireRun } from '@/services/runs';
 import { runWorktrees } from '@/services/worktrees';
 
@@ -35,6 +36,10 @@ export function GET(_request: Request, { params }: Params) {
       // Which of this run's worktrees are still on disk, so the action bar can
       // offer to reclaim them without guessing from the status alone.
       worktrees: runWorktrees(run, project),
+      // When retention will reclaim this run's storage. Computed rather than
+      // stored: the answer changes when the project's windows change, and a
+      // cached one would be wrong the moment they did.
+      expiry: planExpiry(run, retentionPolicy(project)),
       attachmentsMutable: canModifyAttachments(runId) && !active,
       // Needed so the scorecard can distinguish a kind the project never
       // configured from one that is configured but has not run yet.
@@ -47,6 +52,8 @@ export function GET(_request: Request, { params }: Params) {
         reviewBlocksReady: project.reviewBlocksReady,
         allowAgentCommit: project.allowAgentCommit,
         protectedBranches: project.protectedBranches,
+        worktreeRetentionDays: project.worktreeRetentionDays,
+        artifactRetentionDays: project.artifactRetentionDays,
       },
     };
   });
