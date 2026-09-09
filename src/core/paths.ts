@@ -16,6 +16,16 @@ export const worktreesDir = () => path.join(dataDir(), 'worktrees');
 export const landingsDir = () => path.join(dataDir(), 'landings');
 export const artifactsDir = () => path.join(dataDir(), 'artifacts');
 
+/**
+ * Files the user attached to a request.
+ *
+ * Deliberately not under `artifacts/`. An artifact is something a run
+ * produced and retention may delete it; an attachment is something the
+ * developer supplied and deleting it would destroy an input nobody else has a
+ * copy of. Keeping the two roots apart means no cleanup path can confuse them.
+ */
+export const attachmentsDir = () => path.join(dataDir(), 'attachments');
+
 export const runWorktreeDir = (projectId: string, runId: string) =>
   path.join(worktreesDir(), projectId, runId);
 
@@ -23,6 +33,13 @@ export const runLandingDir = (projectId: string, runId: string) =>
   path.join(landingsDir(), projectId, runId);
 
 export const runArtifactDir = (runId: string) => path.join(artifactsDir(), runId);
+
+/**
+ * One directory per run, because it is handed to the agent whole with
+ * `--add-dir`. A shared directory would grant read access to every other
+ * run's attachments at the same time.
+ */
+export const runAttachmentDir = (runId: string) => path.join(attachmentsDir(), runId);
 
 export function ensureDir(dir: string): string {
   fs.mkdirSync(dir, { recursive: true });
@@ -34,6 +51,7 @@ export function ensureDataDirs(): void {
   ensureDir(worktreesDir());
   ensureDir(landingsDir());
   ensureDir(artifactsDir());
+  ensureDir(attachmentsDir());
 }
 
 /**

@@ -1,5 +1,6 @@
 import type { FindingSeverity, RunStatus, ValidationOutcome } from '@/domain/types';
 import {
+  formatBytes,
   formatDuration,
   OUTCOME_LABEL,
   OUTCOME_TONE,
@@ -52,13 +53,7 @@ export function SeverityBadge({ severity }: { severity: FindingSeverity }) {
   return <span className={`badge badge-${SEVERITY_TONE[severity]}`}>{severity}</span>;
 }
 
-export { formatDuration };
-
-export function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
+export { formatBytes, formatDuration };
 
 export function formatRelative(iso: string | null): string {
   if (!iso) return '—';

@@ -94,3 +94,16 @@ export function formatDuration(ms: number | null): string {
   const seconds = Math.round((ms % 60_000) / 1_000);
   return `${minutes}m ${seconds}s`;
 }
+
+/**
+ * A byte count for humans.
+ *
+ * Here rather than beside the DOM helpers because the same file size is
+ * rendered in three places that share no runtime: the artifact browser, the
+ * attachment list, and the prompt the agent reads.
+ */
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}

@@ -133,11 +133,12 @@ Nothing is mandatory except the repository path and a name.
 
 ## Start a task
 
-**Projects → New task**, describe what you want, pick a mode and a profile,
-press **Start**.
+**Projects → New task**, describe what you want, attach any files that explain
+it, pick a mode and a profile, press **Start**.
 
 Two independent choices. The **mode** decides what the run produces; the
-**profile** decides how much effort it spends producing it.
+**profile** decides how much effort it spends producing it. Attachments are
+optional and covered [below](#attachments).
 
 ### Working modes
 
@@ -290,6 +291,8 @@ data/
 ├── cockpit.db                    SQLite: projects, runs, events, results
 ├── worktrees/<projectId>/<runId>/    the isolated checkout
 ├── landings/<projectId>/<runId>/     the isolated merge checkout, when landing
+├── attachments/<runId>/
+│   └── <attachmentId>__<name>    files you attached, verbatim
 └── artifacts/<runId>/
     ├── specification.md          transformer output
     ├── changes.diff              git diff, verbatim
@@ -309,6 +312,48 @@ enough to open with any SQLite client, which is the point — this is your data.
 
 Artifacts are first-class records with their own browser in the UI. You should
 never need to read an agent transcript to find out what happened.
+
+Attachments sit under their own root, not inside `artifacts/`. The two look
+alike and travel in opposite directions: an artifact is evidence a run
+produced, and retention is allowed to delete it; an attachment is an input you
+supplied, and this is the only copy.
+
+## Attachments
+
+A request often needs a file: the screenshot of the broken page, the log from
+the crash, the design the change is meant to match. Attach them on the New task
+screen, or on the run screen afterwards.
+
+| | |
+| --- | --- |
+| Limits | 10 files per request, 25 MB each |
+| Types | any — nothing here executes them |
+| Stored | `data/attachments/<runId>/`, verbatim and unredacted |
+| Given to the agent | as absolute paths, with read access to that directory |
+
+**Attachments never enter the worktree.** The agent is handed the directory
+with `--add-dir` and the paths in its prompt, so it opens what it needs with
+its own tools. A file copied into the worktree would land in the diff, and an
+attached log is not a change you asked for.
+
+**The transformer never sees them.** That layer handles prose and nothing else
+by design, so a specification is built from your text alone. What the
+attachments inform is the implementation.
+
+**The list is fixed once a run starts working.** You can add and remove while a
+run is a draft, and again whenever it comes back — `NEEDS_CHANGES`, `READY`,
+`FAILED` or `CANCELLED` — which is what makes "here is a screenshot of what is
+still wrong" work before you press Request changes. A follow-up prompt marks
+which files arrived since the last pass. While a run is implementing, its
+prompt is already built, so the list is read-only rather than quietly
+ineffective.
+
+Both add and remove are recorded as run events, so a file that was attached and
+later withdrawn still shows in the log. What the agent was given stays
+readable.
+
+Why each of those went the way it did is in
+[ADR 0011](docs/adr/0011-request-attachments.md).
 
 ## The implementation map
 
@@ -435,7 +480,19 @@ Two honest caveats:
   the prompt body instead. The output schema does the constraining either way,
   but it is a smaller guarantee.
 - **Artifact retention is configurable but not enforced.** The field is stored;
-  no job prunes old artifacts yet.
+  no job prunes old artifacts yet. Attachments are outside retention by
+  design — they are your files, not the run's output — so nothing prunes those
+  either.
+- **Attachment delivery has not been exercised against a live CLI.** The
+  wiring is deliberate: the directory is passed with `--add-dir` and every
+  file is named by absolute path in the prompt, so the agent opens them with
+  its own tools. But no end-to-end run has confirmed Claude Code reads an
+  attached screenshot from an added directory. Verify it on a throwaway
+  request before it matters, and check the agent's tool calls in the Logs tab
+  for the read.
+- **The per-run attachment limit is checked read-then-write.** Two uploads
+  landing at the same instant could both pass a check that says nine are
+  stored and leave eleven. Single-user local app; not worth a transaction.
 - **The transformer can rename a run.** It sets the run title from its own
   suggestion, which is usually an improvement but does mean the title is not
   always your words. The request itself is never altered.

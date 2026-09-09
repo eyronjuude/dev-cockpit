@@ -1,6 +1,7 @@
 import { handle } from '@/app/api/_lib/handler';
 import { activeRunPhase, isRunActive } from '@/orchestrator/orchestrator';
 import { listArtifacts } from '@/services/artifacts';
+import { canModifyAttachments } from '@/services/attachments';
 import { requireProject } from '@/services/projects';
 import { assessReadiness, requireRun } from '@/services/runs';
 import { runWorktrees } from '@/services/worktrees';
@@ -22,15 +23,17 @@ export function GET(_request: Request, { params }: Params) {
     const run = requireRun(runId);
     const project = requireProject(run.projectId);
     const readiness = assessReadiness(run, project);
+    const active = isRunActive(runId);
 
     return {
       run,
       readiness,
       artifacts: listArtifacts(runId),
-      live: { active: isRunActive(runId), phase: activeRunPhase(runId) },
+      live: { active, phase: activeRunPhase(runId) },
       // Which of this run's worktrees are still on disk, so the action bar can
       // offer to reclaim them without guessing from the status alone.
       worktrees: runWorktrees(run, project),
+      attachmentsMutable: canModifyAttachments(runId) && !active,
       // Needed so the scorecard can distinguish a kind the project never
       // configured from one that is configured but has not run yet.
       configuredValidations: project.validationCommands

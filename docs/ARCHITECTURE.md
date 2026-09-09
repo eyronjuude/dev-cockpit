@@ -46,6 +46,7 @@ only the interfaces.
 | Reviewer | `ReviewerAgent` | `CodexCliReviewer`, `OpenAiReviewer`, `ClaudeCliReviewer`, `AnthropicApiReviewer` |
 | Validator | `Validator` | `CommandValidator` |
 | Artifact storage | `services/artifacts` | local filesystem + SQLite metadata |
+| Attachment storage | `services/attachments` | local filesystem + SQLite metadata |
 
 The two optional layers are optional in the strict sense: with neither
 configured, every other part of the application behaves identically. A
@@ -68,7 +69,7 @@ src/
 ├── validation/    Validator + the engine that sequences them
 ├── visualisation/ the implementation map: stored run state → one SVG
 ├── orchestrator/  the state machine, prompts, working modes, execution profiles
-├── services/      projects, runs, events, artifacts, event bus, bootstrap
+├── services/      projects, runs, events, artifacts, attachments, event bus, bootstrap
 ├── components/    client components: run view, scorecard, diff, feed, forms
 └── app/           routes and API handlers
 ```
@@ -315,6 +316,37 @@ dev-mode module reloading does not leak handles.
 
 Timestamps are ISO-8601 text. SQLite has no date type, and text keeps the
 database readable by hand.
+
+## Request attachments
+
+Files attached to a request are stored the same way artifacts are — metadata in
+SQLite, bytes on disk — but under `data/attachments/<runId>/` rather than
+inside `artifacts/`. The two are separated because they travel in opposite
+directions: an artifact is output that retention may delete, an attachment is
+input and the only copy the app holds. One table each keeps every cleanup path
+from having to remember the difference.
+
+They reach the agent as **paths, not contents, and from outside the worktree**.
+`readableAttachments` in `orchestrator/prompt.ts` is the single source for
+which files count, and two callers depend on agreeing: the prompt lists each
+one by absolute path, and `phaseImplement` grants `--add-dir` over the
+directory holding them. Outside the worktree because anything inside it lands
+in the diff, and an attached log is not a change the developer asked for; paths
+rather than contents because the agent should spend context on the part of a
+40,000-line log it actually wants.
+
+The transformer boundary is unchanged: it handles prose and never sees a file
+path, so a specification is still built from the request text alone.
+
+Mutability follows the run status. `ATTACHMENT_MUTABLE_STATUSES` in
+`domain/attachments.ts` is exactly the set that can re-enter implementation, so
+a file attached now is one some iteration will still read. The routes add a
+direct `isRunActive` check on top, because a run whose prompt is already built
+would accept a file that reaches nothing.
+
+Dependency direction: `services/runs` imports `services/attachments` to hydrate
+`RunView.attachments`, never the reverse. `services/attachments` reads run
+status straight off the `runs` table for that reason.
 
 ## Startup
 

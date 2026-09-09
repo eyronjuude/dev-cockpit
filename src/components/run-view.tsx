@@ -14,6 +14,7 @@ import { computeRunProgress } from '@/domain/progress';
 import type { ChangeType } from '@/domain/types';
 import { CHANGE_TYPE_TONE, type BadgeTone } from '@/domain/vocabulary';
 import { ArtifactPanel } from './artifact-panel';
+import { AttachmentList } from './attachments';
 import { DiffView } from './diff-view';
 import { EventFeed } from './event-feed';
 import { LogStream } from './log-stream';
@@ -219,6 +220,7 @@ export function RunView({ initial }: { initial: RunSnapshot }) {
                 snapshot={snapshot}
                 findings={currentFindings}
                 latestIteration={latestIteration}
+                onChanged={refresh}
               />
             ) : null}
 
@@ -348,10 +350,12 @@ function OverviewTab({
   snapshot,
   findings,
   latestIteration,
+  onChanged,
 }: {
   snapshot: RunSnapshot;
   findings: RunSnapshot['run']['findings'];
   latestIteration: RunSnapshot['run']['iterations'][number] | null;
+  onChanged: () => void;
 }) {
   const { run, policies } = snapshot;
   const claim = latestIteration?.finalText ?? null;
@@ -370,6 +374,14 @@ function OverviewTab({
           {run.request}
         </p>
       </div>
+
+      {/* Directly under the request, because that is what they are part of. */}
+      <AttachmentList
+        runId={run.id}
+        attachments={run.attachments}
+        mutable={snapshot.attachmentsMutable}
+        onChanged={onChanged}
+      />
 
       {run.spec && run.spec.trim() !== run.request.trim() ? (
         <div className="panel">

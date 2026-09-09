@@ -218,4 +218,22 @@ npm run db:generate
 ```
 
 That writes SQL into `src/db/migrations`, which is applied automatically on the
-next database open. Commit the generated SQL.
+next database open. Commit the generated SQL **and** the snapshot under
+`src/db/migrations/meta/` — drizzle-kit diffs against the latest snapshot, so a
+migration committed without one makes the next `db:generate` try to create the
+same table again.
+
+Renaming the generated file for readability is fine, as long as the `tag` in
+`meta/_journal.json` is renamed to match: the migrator locates each `.sql` by
+its tag.
+
+## Storing a new kind of file
+
+Two roots exist under the data directory and the difference matters.
+`services/artifacts` is for anything a run *produced* — retention is allowed to
+delete it, and text goes through secret redaction on the way in.
+`services/attachments` is for anything the developer *supplied* — it is the only
+copy the app holds, so it is stored verbatim and nothing prunes it.
+
+A new kind of file belongs to whichever of those two it is. If it is neither,
+that is a third root and a decision worth writing down.

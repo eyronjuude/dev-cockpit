@@ -1,9 +1,16 @@
 import { z } from 'zod';
 
 import { assertLocalRequest, handle, readJson } from '@/app/api/_lib/handler';
+import {
+  isMultipart,
+  readPayloadPart,
+  readUploadedFiles,
+  type UploadedFile,
+} from '@/app/api/_lib/uploads';
 import { DEFAULT_WORK_MODE, workModeSchema } from '@/domain/modes';
 import { executionProfileSchema, runStatusSchema } from '@/domain/types';
 import { startRun } from '@/orchestrator/orchestrator';
+import { addAttachments } from '@/services/attachments';
 import { tryRecordImplementationMap } from '@/services/implementation-map';
 import { createRun, listRuns } from '@/services/runs';
 
@@ -41,6 +48,27 @@ const createSchema = z.object({
 });
 
 /**
+ * The submitted fields, and any files that came with them.
+ *
+ * A request with no attachments stays a plain JSON body — that is what every
+ * existing caller sends, and multipart for the common case would be ceremony.
+ * With attachments the same fields travel as a JSON `payload` part beside the
+ * files, and are parsed by the same schema.
+ */
+async function readCreateRequest(
+  request: Request,
+): Promise<{ input: z.infer<typeof createSchema>; files: UploadedFile[] }> {
+  if (!isMultipart(request)) {
+    return { input: createSchema.parse(await readJson(request)), files: [] };
+  }
+
+  const form = await request.formData();
+  const input = createSchema.parse(readPayloadPart(form));
+  // No run exists yet, so nothing is already attached to count against.
+  return { input, files: await readUploadedFiles(form, 0) };
+}
+
+/**
  * Creates a run and, by default, starts it.
  *
  * The response returns as soon as the run is persisted and accepted. Actual
@@ -50,7 +78,7 @@ const createSchema = z.object({
 export function POST(request: Request) {
   return handle(async () => {
     assertLocalRequest(request);
-    const input = createSchema.parse(await readJson(request));
+    const { input, files } = await readCreateRequest(request);
 
     const run = createRun({
       projectId: input.projectId,
@@ -62,6 +90,11 @@ export function POST(request: Request) {
       reviewer: input.reviewer,
       baseRef: input.baseRef,
     });
+
+    // Before the run is started, not after. The prompt handed to the agent is
+    // built from the run as stored, so an attachment recorded a moment later
+    // would be one the first iteration never saw.
+    if (files.length > 0) await addAttachments(run.id, files);
 
     if (input.startImmediately !== false) {
       startRun(run.id);
@@ -79,6 +112,7 @@ export function POST(request: Request) {
         title: run.title,
         mode: run.mode,
         resolvedMode: run.resolvedMode,
+        attachmentCount: files.length,
       },
     };
   });

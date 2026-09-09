@@ -21,6 +21,14 @@ export interface RunSnapshot {
   live: { active: boolean; phase: string | null };
   /** This run's worktrees, and whether each is still on disk. */
   worktrees: RunWorktree[];
+  /**
+   * Whether the attachment list can still be added to or removed from.
+   *
+   * Server-decided rather than derived on the client from the status, because
+   * it also accounts for whether the orchestrator is mid-flight, which the
+   * status alone does not say.
+   */
+  attachmentsMutable: boolean;
   configuredValidations: ConfiguredValidation[];
   policies: {
     requireValidation: boolean;
