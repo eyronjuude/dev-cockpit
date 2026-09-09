@@ -2,12 +2,17 @@ import Link from 'next/link';
 
 import { VALIDATION_KIND_LABELS } from '@/domain/types';
 import { formatRelative } from '@/components/status';
+import { landingQueueCounts } from '@/services/landing-queue';
 import { listProjects, projectRunCounts } from '@/services/projects';
 
 export const dynamic = 'force-dynamic';
 
+const NO_LANDINGS = { live: 0, pending: 0, total: 0 };
+
 export default function ProjectsPage() {
   const projects = listProjects();
+  // One query for the whole list rather than one per card.
+  const landings = landingQueueCounts(projects);
 
   return (
     <div className="mx-auto max-w-6xl px-6 py-6">
@@ -38,6 +43,7 @@ export default function ProjectsPage() {
         <div className="grid gap-3 lg:grid-cols-2">
           {projects.map((project) => {
             const counts = projectRunCounts(project.id);
+            const landing = landings.get(project.id) ?? NO_LANDINGS;
             const configured = project.validationCommands.filter((c) => c.enabled);
 
             return (
@@ -84,6 +90,16 @@ export default function ProjectsPage() {
                   </Link>
                   <Link href={`/projects/${project.id}`} className="btn btn-sm">
                     Configure
+                  </Link>
+                  <Link href={`/projects/${project.id}/landing-queue`} className="btn btn-sm">
+                    Landing queue
+                    {landing.total > 0 ? (
+                      <span
+                        className={`badge ${landing.live > 0 ? 'badge-running' : 'badge-idle'}`}
+                      >
+                        {landing.total}
+                      </span>
+                    ) : null}
                   </Link>
                 </div>
               </div>

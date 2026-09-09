@@ -55,6 +55,19 @@ export function ensureDataDirs(): void {
 }
 
 /**
+ * A repository path reduced to a form two references to the same repository
+ * always agree on.
+ *
+ * Used as a map key wherever work is serialised per repository. Windows paths
+ * are case-insensitive, so `C:\Repo` and `c:\repo` are one repository and must
+ * not get one queue each.
+ */
+export function normaliseRepositoryPath(repositoryPath: string): string {
+  const resolved = path.resolve(repositoryPath);
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+/**
  * True when `child` is inside `parent`. Used to keep artifact reads and
  * worktree removals from escaping the data directory.
  */

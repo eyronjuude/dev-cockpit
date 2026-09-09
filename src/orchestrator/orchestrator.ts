@@ -7,7 +7,17 @@ import { summariseToolInput } from '@/agents/stream-parser';
 import type { AgentOutcome, AgentStreamEvent, ImplementationAgent } from '@/agents/types';
 import { landingBranchName, runAttemptBranchName } from '@/core/ids';
 import { AppError, errorMessage } from '@/core/errors';
-import { runAttachmentDir, runLandingDir, runWorktreeDir } from '@/core/paths';
+import {
+  normaliseRepositoryPath,
+  runAttachmentDir,
+  runLandingDir,
+  runWorktreeDir,
+} from '@/core/paths';
+import {
+  landingTargetBranch,
+  type LandingModeKind,
+  type LandingQueueState,
+} from '@/domain/landing';
 import {
   effectiveWorkMode,
   WORK_MODE_LABELS,
@@ -113,7 +123,14 @@ interface LandingQueueItem {
 }
 
 interface LandingQueue {
-  active: boolean;
+  /**
+   * The landing currently holding the branch, or null when none is.
+   *
+   * Holds the item rather than a flag because the item is removed from `items`
+   * the moment its turn starts, and something has to still know which run that
+   * was — the queue view says "this one is landing, these three are behind it".
+   */
+  active: LandingQueueItem | null;
   items: LandingQueueItem[];
 }
 
@@ -211,27 +228,76 @@ function begin(
   void work(slot.signal).finally(slot.release);
 }
 
-function normaliseRepositoryForQueue(repositoryPath: string): string {
-  const resolved = path.resolve(repositoryPath);
-  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
-}
-
 function landingTargetBranchForQueue(run: RunView, project: ProjectView): string {
-  return run.baseBranch?.trim() || project.defaultBranch;
+  return landingTargetBranch(run.baseBranch, project.defaultBranch);
 }
 
 function landingQueueKey(project: ProjectView, targetBranch: string): string {
-  return `${normaliseRepositoryForQueue(project.repositoryPath)}\0${targetBranch}`;
+  return `${normaliseRepositoryPath(project.repositoryPath)}\0${targetBranch}`;
+}
+
+/** The repository half of a queue key. Already normalised when it went in. */
+function repositoryFromQueueKey(key: string): string {
+  return key.slice(0, key.indexOf('\0'));
 }
 
 function getLandingQueue(key: string): LandingQueue {
   const queues = landingQueues();
   let queue = queues.get(key);
   if (!queue) {
-    queue = { active: false, items: [] };
+    queue = { active: null, items: [] };
     queues.set(key, queue);
   }
   return queue;
+}
+
+/** One run's place in the landing queue for its target branch. */
+export interface LandingQueueEntry {
+  runId: string;
+  targetBranch: string;
+  state: Extract<LandingQueueState, 'landing' | 'waiting'>;
+  /** 0 for the run currently landing, then 1 upwards for those behind it. */
+  position: number;
+  mode: LandingModeKind;
+}
+
+/**
+ * Every live landing for one repository, in the order each will run.
+ *
+ * Read-only on purpose: the queue prunes empty entries as landings finish, and
+ * a view that pruned them too would decide a branch was free while a landing
+ * was still holding it. Entries are keyed by repository, not by project, so the
+ * caller has to drop any run that is not its own.
+ */
+export function landingQueueSnapshot(repositoryPath: string): LandingQueueEntry[] {
+  const repository = normaliseRepositoryPath(repositoryPath);
+  const entries: LandingQueueEntry[] = [];
+
+  for (const [key, queue] of landingQueues()) {
+    if (repositoryFromQueueKey(key) !== repository) continue;
+
+    if (queue.active) {
+      entries.push({
+        runId: queue.active.runId,
+        targetBranch: queue.active.targetBranch,
+        state: 'landing',
+        position: 0,
+        mode: queue.active.mode.kind,
+      });
+    }
+
+    queue.items.forEach((item, index) => {
+      entries.push({
+        runId: item.runId,
+        targetBranch: item.targetBranch,
+        state: 'waiting',
+        position: (queue.active ? 1 : 0) + index,
+        mode: item.mode.kind,
+      });
+    });
+  }
+
+  return entries;
 }
 
 function removeQueuedLanding(runId: string, key: string): LandingQueueItem | null {
@@ -499,7 +565,7 @@ function drainLandingQueue(key: string): void {
       continue;
     }
 
-    queue.active = true;
+    queue.active = item;
     const active = activeRuns().get(item.runId);
     if (active) {
       active.phase =
@@ -523,7 +589,7 @@ function drainLandingQueue(key: string): void {
       item.release();
       const latestQueue = landingQueues().get(key);
       if (!latestQueue) return;
-      latestQueue.active = false;
+      latestQueue.active = null;
       if (latestQueue.items.length === 0) {
         landingQueues().delete(key);
       } else {
