@@ -71,7 +71,7 @@ src/
 ├── validation/    Validator + the engine that sequences them
 ├── visualisation/ the implementation map: stored run state → one SVG
 ├── orchestrator/  the state machine, prompts, working modes, execution profiles
-├── services/      projects, runs, events, artifacts, attachments, event bus, bootstrap
+├── services/      projects, runs, events, artifacts, previews, attachments, event bus, bootstrap
 ├── components/    client components: run view, scorecard, diff, feed, forms
 └── app/           routes and API handlers
 ```
@@ -270,6 +270,9 @@ Two channels, deliberately separate:
   being timed out.
 - **`GET /api/runs/:id/snapshot`** — the current state, in full. Polled every 5s
   while a run is active, because not every phase transition writes an event.
+- **`POST /api/runs/:id/preview/start` / `preview/stop`** — starts and stops the
+  project's development command in the run worktree, with an allocated local
+  port and a log artifact linked back to the preview URL.
 
 Events say *what happened*; the snapshot says *what is now true*. Keeping them
 apart means the client never rebuilds run state by folding events, which is

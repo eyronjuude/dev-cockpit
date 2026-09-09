@@ -124,6 +124,7 @@ A worked example, for a typical Node project:
 | Lint | `npm run lint` |
 | Unit | `npm test` |
 | Build | `npm run build` |
+| Development command | `npm run dev` |
 | Paths to link | `node_modules` |
 | Setup command | *(blank — linking `node_modules` is enough)* |
 | Open command | `code {path}` |
@@ -317,6 +318,15 @@ Specifically:
 Pushing remains a deliberate manual step. Dev Cockpit updates only the local
 target branch.
 
+## Worktree previews
+
+If a project has a **Development command**, a run with a prepared worktree can
+start it from the run screen. Dev Cockpit allocates a local `127.0.0.1` port,
+sets `PORT`, `HOST`, `HOSTNAME` and `DEV_COCKPIT_PREVIEW_URL` for the command,
+captures its output as a **Preview server log** artifact, and shows the URL in
+the **Preview** tab. The action bar can stop the server, and cleanup or force
+restart stops it before deleting the worktree.
+
 ## Validation configuration
 
 Six kinds are supported: `typecheck`, `lint`, `unit`, `integration`, `e2e`,
@@ -507,8 +517,9 @@ Two honest caveats:
   display correctly, but nothing in V1 drives a browser to produce them. A
   configured Playwright E2E command that writes into the worktree will have its
   stdout captured; its HTML report is not yet registered as an artifact.
-- **`developmentCommand` is recorded but never started.** There is no preview
-  server, so `previewUrl` on an artifact is always null in V1.
+- **Preview servers are live processes, not persisted jobs.** Their logs are
+  artifacts, but a Dev Cockpit server restart loses the in-memory process state;
+  start the preview again from the run screen if needed.
 - **The implementation map is a snapshot, not a live view.** It is drawn when a
   pass finishes, so a run you approve afterwards still shows the verdict the
   orchestrator reached — `Ready for review`, not `Approved`. The timestamp in

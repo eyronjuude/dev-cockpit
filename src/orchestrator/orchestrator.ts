@@ -50,6 +50,7 @@ import { getReviewer } from '@/reviewers/registry';
 import { register, writeTextArtifact } from '@/services/artifacts';
 import { appendEvent } from '@/services/events';
 import { tryRecordImplementationMap } from '@/services/implementation-map';
+import { stopRunPreview } from '@/services/previews';
 import { requireProject, type ProjectView } from '@/services/projects';
 import { cleanUpFinishedRunWorktrees, cleanUpRunWorktrees } from '@/services/worktrees';
 import {
@@ -749,6 +750,7 @@ export async function restartRun(runId: string): Promise<RestartResult> {
     runId,
     'Cancelled because the run was restarted',
   );
+  await stopRunPreview(runId, 'Stopped because the run was restarted');
 
   // Held across the cleanup, so nothing can start this run on a worktree that
   // is halfway through being deleted. Released before the pipeline claims it.

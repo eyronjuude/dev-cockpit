@@ -104,7 +104,7 @@ type Dialog =
 
 export function RunActions({ snapshot, onChanged }: ActionsProps) {
   const router = useRouter();
-  const { run, readiness, live, worktrees } = snapshot;
+  const { run, readiness, live, preview, worktrees } = snapshot;
 
   const [dialog, setDialog] = useState<Dialog>('none');
   const [busy, setBusy] = useState<string | null>(null);
@@ -178,6 +178,11 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
   const canCleanUp =
     !active && isFinished(run.status) && remainingWorktrees.length > 0;
   const canStart = !active && run.status === 'DRAFT';
+  const canStartPreview =
+    !active &&
+    !preview.running &&
+    preview.configured &&
+    run.worktreePath !== null;
 
   // Computed rather than hand-written per status, so the button cannot promise
   // one thing and the orchestrator do another.
@@ -324,6 +329,34 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
           >
             Open worktree
           </button>
+        ) : null}
+
+        {canStartPreview ? (
+          <button
+            type="button"
+            className="btn"
+            disabled={busy !== null}
+            onClick={() => void post(`/api/runs/${run.id}/preview/start`, {}, 'preview-start')}
+          >
+            {busy === 'preview-start' ? 'Starting…' : 'Start preview'}
+          </button>
+        ) : null}
+
+        {preview.running ? (
+          <button
+            type="button"
+            className="btn"
+            disabled={busy !== null}
+            onClick={() => void post(`/api/runs/${run.id}/preview/stop`, {}, 'preview-stop')}
+          >
+            {busy === 'preview-stop' ? 'Stopping…' : 'Stop preview'}
+          </button>
+        ) : null}
+
+        {preview.running && preview.url ? (
+          <a className="btn" href={preview.url} target="_blank" rel="noreferrer">
+            Open preview
+          </a>
         ) : null}
 
         {canOpenLanding ? (

@@ -8,6 +8,7 @@ import { landingsDir, runLandingDir, worktreesDir } from '@/core/paths';
 import { AUTO_CLEANUP_STATUSES, FINISHED_STATUSES } from '@/domain/types';
 import { pruneWorktrees, removeWorktree } from '@/git/worktree';
 import { appendEvent } from './events';
+import { stopRunPreview } from './previews';
 import { requireProject, type ProjectView } from './projects';
 import { requireRun, updateRunFields, type RunView } from './runs';
 
@@ -108,6 +109,8 @@ export async function cleanUpRunWorktrees(
       { code: 'run_not_finished' },
     );
   }
+
+  await stopRunPreview(runId, 'Stopped because the worktree was removed');
 
   const targets: WorktreeCleanupOutcome[] = [];
 

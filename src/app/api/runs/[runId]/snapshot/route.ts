@@ -2,6 +2,7 @@ import { handle } from '@/app/api/_lib/handler';
 import { activeRunPhase, isRunActive } from '@/orchestrator/orchestrator';
 import { listArtifacts } from '@/services/artifacts';
 import { canModifyAttachments } from '@/services/attachments';
+import { getRunPreview } from '@/services/previews';
 import { requireProject } from '@/services/projects';
 import { assessReadiness, requireRun } from '@/services/runs';
 import { runWorktrees } from '@/services/worktrees';
@@ -30,6 +31,7 @@ export function GET(_request: Request, { params }: Params) {
       readiness,
       artifacts: listArtifacts(runId),
       live: { active, phase: activeRunPhase(runId) },
+      preview: getRunPreview(runId),
       // Which of this run's worktrees are still on disk, so the action bar can
       // offer to reclaim them without guessing from the status alone.
       worktrees: runWorktrees(run, project),

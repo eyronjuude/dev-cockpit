@@ -4,6 +4,7 @@ import { RunView } from '@/components/run-view';
 import { activeRunPhase, isRunActive } from '@/orchestrator/orchestrator';
 import { listArtifacts } from '@/services/artifacts';
 import { canModifyAttachments } from '@/services/attachments';
+import { getRunPreview } from '@/services/previews';
 import { getProject } from '@/services/projects';
 import { assessReadiness, getRun } from '@/services/runs';
 import { runWorktrees } from '@/services/worktrees';
@@ -32,6 +33,7 @@ export default async function RunPage({ params }: { params: Promise<{ runId: str
     readiness: assessReadiness(run, project),
     artifacts: listArtifacts(runId),
     live: { active, phase: activeRunPhase(runId) },
+    preview: getRunPreview(runId),
     worktrees: runWorktrees(run, project),
     attachmentsMutable: canModifyAttachments(runId) && !active,
     configuredValidations: project.validationCommands

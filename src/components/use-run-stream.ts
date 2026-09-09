@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { RunEvent } from '@/domain/events';
+import type { PreviewView } from '@/domain/previews';
 import type { ValidationKind } from '@/domain/types';
 import type { ArtifactView } from '@/services/artifacts';
 import type { ReadinessAssessment, RunView } from '@/services/runs';
@@ -19,6 +20,7 @@ export interface RunSnapshot {
   readiness: ReadinessAssessment;
   artifacts: ArtifactView[];
   live: { active: boolean; phase: string | null };
+  preview: PreviewView;
   /** This run's worktrees, and whether each is still on disk. */
   worktrees: RunWorktree[];
   /**
@@ -145,6 +147,7 @@ export function useRunStream(runId: string, initial: RunSnapshot) {
           event.type.startsWith('validation.') ||
           event.type.startsWith('review.') ||
           event.type.startsWith('landing.') ||
+          event.type.startsWith('preview.') ||
           event.type === 'agent.completed' ||
           event.type === 'agent.failed' ||
           event.type === 'artifact.created' ||

@@ -206,6 +206,24 @@ export function getArtifact(id: string): ArtifactView | null {
   return row ? hydrate(row) : null;
 }
 
+/** Updates a recorded artifact's byte count after a long-running writer closes. */
+export async function refreshArtifactBytes(id: string): Promise<number | null> {
+  const artifact = getArtifact(id);
+  if (!artifact) return null;
+  if (!isInside(artifactsDir(), artifact.filePath)) return null;
+
+  let bytes = 0;
+  try {
+    bytes = (await fsp.stat(artifact.filePath)).size;
+  } catch {
+    bytes = 0;
+  }
+
+  const db = getDb();
+  db.update(artifacts).set({ bytes }).where(eq(artifacts.id, id)).run();
+  return bytes;
+}
+
 export interface ArtifactContent {
   kind: 'text' | 'binary';
   text: string | null;
