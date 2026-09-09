@@ -32,6 +32,9 @@ import type { RunSnapshot } from './use-run-stream';
  * The working mode changes the set: a read-only run has nothing to
  * re-validate, and gains the one action that makes Ask and Plan worth doing
  * separately — handing what they produced back to the same session to build.
+ * That action outlives approval. A plan has nothing to land, so APPROVED is
+ * not the end of a read-only run, and offering only a forced restart there
+ * would mean discarding the plan the user had just approved.
  *
  * Three actions pick a stopped run back up, and they are deliberately
  * different sizes. **Retry** resumes from wherever it stopped and keeps
@@ -153,8 +156,13 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
   const wording = WORK_MODE_WORDING[mode];
   const cancelSubject =
     run.status === 'LANDING' || live.phase?.includes('landing') ? 'landing' : wording.activity;
-  const canRequestChanges =
-    !active && REWORKABLE_STATUSES.includes(run.status) && run.worktreePath !== null;
+  // Approving a read-only run creates no commit and cannot land, so APPROVED
+  // is where its plan turns into work rather than where the run ends. Without
+  // this the only action left on an approved plan is a forced restart, which
+  // discards the plan that was just approved.
+  const approvedReadOnly = readOnly && run.status === 'APPROVED';
+  const reworkable = REWORKABLE_STATUSES.includes(run.status) || approvedReadOnly;
+  const canRequestChanges = !active && reworkable && run.worktreePath !== null;
   // A read-only run has no diff, so there is nothing for the checks to run
   // against.
   const canRevalidate =
@@ -198,13 +206,19 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
     retryPlan.stage === 'validate' && readOnly
       ? 'Retry the verdict'
       : RETRY_STAGE_LABELS[retryPlan.stage];
+  // Named once because the approve dialog promises these two by name, and a
+  // promise that drifts from the button it points at is worse than none.
+  const implementLabel = mode === 'plan' ? 'Implement this plan' : 'Switch to Build';
+  const changesLabel =
+    mode === 'ask' ? 'Ask a follow-up' : mode === 'plan' ? 'Revise the plan' : 'Request changes';
+
   // Only once there is something finished to build on. An iteration that
   // failed part-way can still hold text, and switching to Build on half a plan
   // is a build run started the long way round.
   const canSwitchToBuild =
     readOnly &&
     !active &&
-    REWORKABLE_STATUSES.includes(run.status) &&
+    reworkable &&
     run.worktreePath !== null &&
     run.iterations.some(
       (i) => i.status === 'completed' && i.finalText !== null && i.finalText.trim().length > 0,
@@ -242,7 +256,7 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
             disabled={busy !== null}
             onClick={() => setDialog(dialog === 'implement' ? 'none' : 'implement')}
           >
-            {mode === 'plan' ? 'Implement this plan' : 'Switch to Build'}
+            {implementLabel}
           </button>
         ) : null}
 
@@ -253,11 +267,7 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
             disabled={busy !== null}
             onClick={() => setDialog(dialog === 'changes' ? 'none' : 'changes')}
           >
-            {mode === 'ask'
-              ? 'Ask a follow-up'
-              : mode === 'plan'
-                ? 'Revise the plan'
-                : 'Request changes'}
+            {changesLabel}
           </button>
         ) : null}
 
@@ -610,6 +620,18 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
               </ul>
             </div>
           )}
+
+          {/* A plan has nothing to land, so approving it would look like the
+              end of the run. Saying what remains available is the difference
+              between a recorded decision and a dead end. */}
+          {readOnly ? (
+            <p className="mb-2.5 text-[12.5px] text-ink-muted">
+              Approving records the decision. It does not start any work and changes no files
+              &mdash; <span className="font-medium">{implementLabel}</span> and{' '}
+              <span className="font-medium">{changesLabel}</span> both stay available afterwards,
+              on this same worktree and agent session.
+            </p>
+          ) : null}
 
           <label className="label" htmlFor="approve-note">
             Note (optional)

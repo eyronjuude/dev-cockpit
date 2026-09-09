@@ -911,6 +911,17 @@ async function execute(runId: string, signal: AbortSignal, mode: ExecuteMode): P
         run = requireRun(runId);
       }
     }
+
+    // A recorded approval described the work that existed when it was made.
+    // The pass about to start is new work, so the decision does not carry
+    // over. Leaving it would let `isLandableStatus` read a cancelled build run
+    // as landable on the strength of an approval that was never about its
+    // code. The `run.approved` event stays as the record that it happened.
+    if (mode.kind === 'change_request' && run.disposition !== null) {
+      updateRunFields(runId, { disposition: null, dispositionNote: null });
+      run = requireRun(runId);
+    }
+
     const workMode = getWorkMode(effectiveWorkMode(run));
 
     if (mode.kind === 'initial') {

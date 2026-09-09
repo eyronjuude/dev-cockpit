@@ -94,6 +94,14 @@ session, told explicitly that the read-only rules are replaced. Without that,
 asking or planning separately would cost a whole second run and throw away
 everything the agent read.
 
+**Approving a plan does not end it.** A plan has nothing to commit and nothing
+to land, so `APPROVED` on a read-only run means "build this", not "this run is
+over" — the switch to Build stays available from there, and `APPROVED` can
+re-enter `IMPLEMENTING`. The recorded approval is dropped when that pass
+starts: it described the plan, and the code the build produces has not been
+approved by anyone yet. The `run.approved` event remains as the record that it
+happened.
+
 ## Why
 
 **Why default to Build.** Every run that existed before this defaulted to

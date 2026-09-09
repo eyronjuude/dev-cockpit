@@ -162,6 +162,12 @@ A finished Ask or Plan run offers a switch to Build — **Implement this plan**,
 or **Switch to Build** from an answer — which resumes the same Claude Code
 session, so the reading behind it is not thrown away.
 
+Approving a plan does not use that offer up. There is nothing to land, so
+**Approved** on an Ask or Plan run records the decision and leaves both
+**Implement this plan** and **Revise the plan** available on the same worktree
+and session. The approval itself is dropped once the build starts: it described
+the plan, not the code the build goes on to write.
+
 Auto decides in two steps. First, is this read-only? Yes if the request forbids
 code changes, or names a plan as its deliverable, or — with no change verb
 anywhere — asks a question or asks for a judgement. Then, which read-only mode:
