@@ -429,6 +429,9 @@ describe('landing worktrees', () => {
     const applied = await landing.applyLandingToTarget(repo, 'main', landingBranch);
     expect(applied).toBe(completed.commitSha);
     expect(fs.readFileSync(path.join(repo, 'feature.txt'), 'utf8')).toContain('landed feature');
+
+    const appliedAgain = await landing.applyLandingToTarget(repo, 'main', landingBranch);
+    expect(appliedAgain).toBe(applied);
   });
 
   it('keeps the target branch unchanged when the landing merge conflicts', async () => {

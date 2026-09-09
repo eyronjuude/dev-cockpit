@@ -577,12 +577,18 @@ export function setStatus(
   assertTransition(from, to);
 
   const nowIso = new Date().toISOString();
+  const nextError =
+    options.error !== undefined
+      ? options.error
+      : to === 'FAILED' || to === 'LANDING_FAILED'
+        ? undefined
+        : null;
   db.update(runs)
     .set({
       status: to,
       statusReason: options.reason ?? null,
       updatedAt: nowIso,
-      ...(options.error !== undefined ? { error: options.error } : {}),
+      ...(nextError !== undefined ? { error: nextError } : {}),
       ...(options.started ? { startedAt: nowIso } : {}),
       ...(ACTIVE_STATUSES.includes(to) ? { finishedAt: null } : {}),
       ...(options.finished ? { finishedAt: nowIso } : {}),

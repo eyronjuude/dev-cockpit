@@ -273,6 +273,15 @@ export async function applyLandingToTarget(
 ): Promise<string> {
   await assertTargetCheckoutReady(repositoryPath, targetBranch);
 
+  const alreadyApplied = await git(
+    repositoryPath,
+    ['merge-base', '--is-ancestor', landingBranch, targetBranch],
+    { allowFailure: true },
+  );
+  if (alreadyApplied.exitCode === 0) {
+    return resolveCommit(repositoryPath, targetBranch);
+  }
+
   const res = await git(repositoryPath, ['merge', '--ff-only', landingBranch], {
     allowFailure: true,
   });

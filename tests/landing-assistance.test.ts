@@ -265,6 +265,21 @@ describe('landing assistance', () => {
     expect(types).toContain('landing.applied');
   });
 
+  it('clears stale landing errors after a later successful landing', async () => {
+    const { run } = await makeApprovedRun('stale-landing-error', 'run branch edit\n');
+
+    runsService.updateRunFields(run.id, {
+      error: 'Could not fast-forward main: previous landing attempt failed.',
+    });
+
+    orchestrator.landRun(run.id);
+    await waitForIdle(run.id);
+
+    const landed = runsService.requireRun(run.id);
+    expect(landed.status).toBe('LANDED');
+    expect(landed.error).toBeNull();
+  });
+
   it('records manual instructions when the agent cannot resolve a landing conflict', async () => {
     const { repo, run } = await makeApprovedRun(
       'manual-fallback',
