@@ -108,7 +108,23 @@ const TRANSITIONS: Record<RunStatus, readonly RunStatus[]> = {
   ],
   FAILED: ['IMPLEMENTING', 'VALIDATING', 'LANDING', 'REJECTED', 'CANCELLED', 'DRAFT'],
   CANCELLED: ['IMPLEMENTING', 'VALIDATING', 'LANDING', 'REJECTED', 'DRAFT'],
-  APPROVED: ['LANDING', 'REJECTED', 'DRAFT'],
+  // An approved plan is a decision to build it, not the end of the run: the
+  // same session resumes into IMPLEMENTING, so the worktree and the plan that
+  // was approved both survive. VALIDATING is here because re-running the
+  // checks is offered on an approved build run too, and FAILED and CANCELLED
+  // because that follow-up pass can stop before the first phase writes a
+  // status. READY and NEEDS_CHANGES are deliberately absent: only the verdict
+  // writes those, and it is reached through IMPLEMENTING.
+  APPROVED: [
+    'IMPLEMENTING',
+    'VALIDATING',
+    'REVIEWING',
+    'LANDING',
+    'REJECTED',
+    'FAILED',
+    'CANCELLED',
+    'DRAFT',
+  ],
   LANDING: ['LANDED', 'MERGE_CONFLICT', 'LANDING_FAILED', 'FAILED', 'CANCELLED', 'DRAFT'],
   MERGE_CONFLICT: ['LANDING', 'REJECTED', 'CANCELLED', 'DRAFT'],
   LANDING_FAILED: ['LANDING', 'REJECTED', 'CANCELLED', 'DRAFT'],

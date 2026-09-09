@@ -66,6 +66,23 @@ describe('run lifecycle', () => {
     expect(isTerminal('READY')).toBe(false);
   });
 
+  it('lets an approved run be picked back up', () => {
+    // An approved plan has nothing to land, so approval is where it becomes
+    // work. Without this edge the only action left is a forced restart, which
+    // discards the plan that was approved.
+    expect(canTransition('APPROVED', 'IMPLEMENTING')).toBe(true);
+    // "Re-run validation" is offered on an approved build run, and it enters
+    // VALIDATING directly.
+    expect(canTransition('APPROVED', 'VALIDATING')).toBe(true);
+    // A follow-up pass can still stop before a phase writes a status.
+    expect(canTransition('APPROVED', 'FAILED')).toBe(true);
+    expect(canTransition('APPROVED', 'CANCELLED')).toBe(true);
+    // The verdict is still the only thing that writes a verdict, and it is
+    // reached through implementation.
+    expect(canTransition('APPROVED', 'READY')).toBe(false);
+    expect(canTransition('APPROVED', 'NEEDS_CHANGES')).toBe(false);
+  });
+
   it('models landing and conflict recovery after approval', () => {
     expect(canTransition('APPROVED', 'LANDING')).toBe(true);
     expect(canTransition('LANDING', 'MERGE_CONFLICT')).toBe(true);

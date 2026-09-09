@@ -111,7 +111,10 @@ passing through implementation and validation.
 
 Statuses are recoverable by design: `NEEDS_CHANGES`, `READY`, `FAILED` and
 `CANCELLED` can all re-enter `IMPLEMENTING`, which is what "request changes" on
-a failed run does. `APPROVED` can proceed to `LANDING`. Clean landings reach
+a failed run does. `APPROVED` can too, and that edge exists for the read-only
+modes: a plan has nothing to land, so approving one is a decision to build it
+rather than the end of the run, and "Implement this plan" resumes the same
+session from there. `APPROVED` can also proceed to `LANDING`. Clean landings reach
 `LANDED`; if another run is already landing to the same repository and branch,
 the run waits in that branch's landing queue. Stale landing branches are
 refreshed from the current target branch in the isolated landing worktree before
