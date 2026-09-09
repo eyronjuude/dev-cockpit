@@ -109,9 +109,11 @@ passing through implementation and validation.
 Statuses are recoverable by design: `NEEDS_CHANGES`, `READY`, `FAILED` and
 `CANCELLED` can all re-enter `IMPLEMENTING`, which is what "request changes" on
 a failed run does. `APPROVED` can proceed to `LANDING`. Clean landings reach
-`LANDED`; conflicted or failed landings get one AI repair attempt in the landing
-worktree before Dev Cockpit records manual repair instructions for an explicit
-retry. `LANDED` and `REJECTED` are terminal.
+`LANDED`; stale landing branches are refreshed from the current target branch in
+the isolated landing worktree before validation and fast-forward apply.
+Conflicted or failed landings get one AI repair attempt in the landing worktree
+before Dev Cockpit records manual repair instructions for an explicit retry.
+`LANDED` and `REJECTED` are terminal.
 
 ## Readiness
 

@@ -23,6 +23,8 @@ import {
   ensureLandingWorktree,
   mergeInProgress,
   mergeSourceIntoLanding,
+  mergeTargetIntoLanding,
+  refMergedIntoLanding,
   sourceMergedIntoLanding,
   stageResolvedConflictFiles,
   unmergedFiles,
@@ -438,6 +440,24 @@ async function executeLanding(
     });
     landingCommitSha = manualRepairCommit ?? landingCommitSha;
 
+    const refreshed = await refreshLandingFromTargetIfNeeded({
+      run,
+      project,
+      profile,
+      landingPath: landing.worktreePath,
+      landingBranch: landing.branch,
+      targetBranch,
+      signal,
+    });
+    if (refreshed.result === 'cancelled') {
+      await finishCancelled(run.id);
+      return;
+    }
+    if (refreshed.result === 'stopped') {
+      return;
+    }
+    landingCommitSha = refreshed.commitSha ?? landingCommitSha;
+
     appendEvent({
       runId: run.id,
       type: 'landing.merged',
@@ -450,7 +470,7 @@ async function executeLanding(
       },
     });
 
-    await collectLandingEvidence(run, landing.worktreePath, landing.targetCommit);
+    await collectLandingEvidence(run, landing.worktreePath, refreshed.targetCommit);
 
     let validation = await runValidation({
       runId: run.id,
@@ -491,7 +511,7 @@ async function executeLanding(
         landingBranch: landing.branch,
         reason: 'AI landing repair after validation failure.',
       });
-      await collectLandingEvidence(run, landing.worktreePath, landing.targetCommit);
+      await collectLandingEvidence(run, landing.worktreePath, refreshed.targetCommit);
 
       validation = await runValidation({
         runId: run.id,
@@ -1481,6 +1501,10 @@ async function resolveLandingTargetBranch(run: RunView, project: ProjectView): P
 
 type LandingAssistResult = 'ok' | 'stopped' | 'cancelled';
 
+type LandingConflictSource =
+  | { kind: 'source_merge' }
+  | { kind: 'target_refresh'; targetBranch: string };
+
 interface LandingManualInstructionsInput {
   run: RunView;
   project: ProjectView;
@@ -1517,6 +1541,7 @@ async function tryResolveLandingConflicts(input: {
   landingPath: string;
   targetBranch: string;
   signal: AbortSignal;
+  conflictSource?: LandingConflictSource;
 }): Promise<LandingAssistResult> {
   const conflicts = await unmergedFiles(input.landingPath);
   if (conflicts.length === 0) return 'ok';
@@ -1528,6 +1553,7 @@ async function tryResolveLandingConflicts(input: {
       input.profile,
       input.landingPath,
       input.signal,
+      input.conflictSource,
     );
     if (!resolved) return 'cancelled';
   } catch (err) {
@@ -1549,6 +1575,76 @@ async function tryResolveLandingConflicts(input: {
   }
 
   return 'ok';
+}
+
+async function refreshLandingFromTargetIfNeeded(input: {
+  run: RunView;
+  project: ProjectView;
+  profile: ExecutionProfile;
+  landingPath: string;
+  landingBranch: string;
+  targetBranch: string;
+  signal: AbortSignal;
+}): Promise<{ result: LandingAssistResult; targetCommit: string; commitSha: string | null }> {
+  const targetCommit = await resolveCommit(input.project.repositoryPath, input.targetBranch);
+  if (await refMergedIntoLanding(input.landingPath, input.targetBranch)) {
+    return { result: 'ok', targetCommit, commitSha: null };
+  }
+
+  setPhase(input.run.id, 'refreshing landing from target');
+  appendEvent({
+    runId: input.run.id,
+    type: 'landing.refresh_started',
+    message: `Refreshing landing worktree with latest ${input.targetBranch} before applying`,
+    payload: {
+      path: input.landingPath,
+      targetBranch: input.targetBranch,
+      targetCommit,
+    },
+  });
+
+  await mergeTargetIntoLanding(input.landingPath, input.targetBranch);
+  const conflictResolution = await tryResolveLandingConflicts({
+    run: input.run,
+    project: input.project,
+    profile: input.profile,
+    landingPath: input.landingPath,
+    targetBranch: input.targetBranch,
+    signal: input.signal,
+    conflictSource: { kind: 'target_refresh', targetBranch: input.targetBranch },
+  });
+  if (conflictResolution !== 'ok') {
+    return { result: conflictResolution, targetCommit, commitSha: null };
+  }
+
+  const completed = await completeMergeIfResolved(input.landingPath, {
+    name: 'Dev Cockpit',
+    email: 'dev-cockpit@localhost',
+  });
+  if (!completed.completed) {
+    await finishLandingConflict(input.run.id, completed.conflicts, {
+      run: input.run,
+      project: input.project,
+      landingPath: input.landingPath,
+      targetBranch: input.targetBranch,
+      reason: `Refreshing the landing branch from ${input.targetBranch} left merge conflicts.`,
+    });
+    return { result: 'stopped', targetCommit, commitSha: null };
+  }
+
+  const commitSha = completed.commitSha ?? (await resolveCommit(input.landingPath, 'HEAD'));
+  appendEvent({
+    runId: input.run.id,
+    type: 'landing.refresh_completed',
+    message: `Landing worktree includes latest ${input.targetBranch} at ${commitSha.slice(0, 7)}`,
+    payload: {
+      branch: input.landingBranch,
+      targetBranch: input.targetBranch,
+      commitSha,
+    },
+  });
+
+  return { result: 'ok', targetCommit, commitSha };
 }
 
 function appendLandingValidationFailed(
@@ -1709,6 +1805,7 @@ async function phaseResolveLandingConflicts(
   profile: ExecutionProfile,
   landingPath: string,
   signal: AbortSignal,
+  conflictSource: LandingConflictSource = { kind: 'source_merge' },
 ): Promise<boolean> {
   const conflicts = await unmergedFiles(landingPath);
   if (conflicts.length === 0) return true;
@@ -1721,7 +1818,7 @@ async function phaseResolveLandingConflicts(
     payload: { path: landingPath, files: conflicts },
   });
 
-  const prompt = buildMergeResolutionPrompt(run, project, conflicts);
+  const prompt = buildMergeResolutionPrompt(run, project, conflicts, conflictSource);
   const agentRun = await runLandingAgentIteration({
     run,
     project,
@@ -1959,8 +2056,16 @@ function buildMergeResolutionPrompt(
   run: RunView,
   project: ProjectView,
   conflicts: readonly string[],
+  conflictSource: LandingConflictSource = { kind: 'source_merge' },
 ): string {
   const summary = latestIteration(run.id)?.summary ?? latestIteration(run.id)?.finalText ?? null;
+  const situation =
+    conflictSource.kind === 'target_refresh'
+      ? `The landing worktree already contains conflict markers from refreshing the prepared landing branch with the latest ${conflictSource.targetBranch}.`
+      : `The landing worktree already contains conflict markers from merging ${run.branch} into ${
+          run.baseBranch ?? project.defaultBranch
+        }.`;
+
   return `You are resolving Git merge conflicts for Dev Cockpit.
 
 Project: ${project.name}
@@ -1970,9 +2075,7 @@ ${run.request}
 
 ${run.spec ? `Implementation specification:\n${run.spec}\n\n` : ''}${
     summary ? `Approved implementation summary:\n${summary}\n\n` : ''
-  }The landing worktree already contains conflict markers from merging ${run.branch} into ${
-    run.baseBranch ?? project.defaultBranch
-  }.
+  }${situation}
 
 Resolve the conflicts in these files:
 ${conflicts.map((file) => `- ${file}`).join('\n')}

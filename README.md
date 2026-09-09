@@ -169,9 +169,11 @@ Specifically:
 - Landing an approved run creates or reuses a separate landing worktree from the
   target branch, merges the run branch there, runs validation, then
   fast-forwards the target checkout only when the merge and validation are
-  clean. Merge conflicts and failed landing validation get one AI repair pass in
-  the landing worktree; if that cannot finish, Dev Cockpit records manual repair
-  instructions and leaves the landing worktree intact.
+  clean. If the target branch moved after the landing worktree was prepared, Dev
+  Cockpit refreshes the landing worktree from the current target branch before
+  validating and applying. Merge conflicts and failed landing validation get one
+  AI repair pass in the landing worktree; if that cannot finish, Dev Cockpit
+  records manual repair instructions and leaves the landing worktree intact.
 - Rejecting can remove the worktree. The branch is deleted with `git branch -d`,
   never `-D`, so work is never silently discarded.
 - Linked paths become junctions on Windows (no elevation needed) or symlinks

@@ -10,6 +10,7 @@ import type { ValidationKind } from '@/domain/types';
 let dataDir: string;
 let worktree: typeof import('@/git/worktree');
 let diff: typeof import('@/git/diff');
+let landing: typeof import('@/git/landing');
 let projectsService: typeof import('@/services/projects');
 let runsService: typeof import('@/services/runs');
 let eventsService: typeof import('@/services/events');
@@ -33,6 +34,7 @@ beforeAll(async () => {
 
   worktree = await import('@/git/worktree');
   diff = await import('@/git/diff');
+  landing = await import('@/git/landing');
   projectsService = await import('@/services/projects');
   runsService = await import('@/services/runs');
   eventsService = await import('@/services/events');
@@ -106,6 +108,26 @@ async function makeApprovedRun(
   await orchestrator.approveRun(run.id, { createCommit: false });
 
   return { repo, project, run: runsService.requireRun(run.id), runPath };
+}
+
+async function prepareStaleLanding(
+  repo: string,
+  projectId: string,
+  run: Awaited<ReturnType<typeof makeApprovedRun>>['run'],
+) {
+  const landingPath = path.join(dataDir, 'landings', projectId, run.id);
+  const landingBranch = `cockpit/landing/${run.id}`;
+
+  await landing.ensureLandingWorktree({
+    repositoryPath: repo,
+    worktreePath: landingPath,
+    branch: landingBranch,
+    targetBranch: 'main',
+  });
+  await landing.mergeSourceIntoLanding(landingPath, run.branch!);
+  await landing.completeMergeIfResolved(landingPath, author);
+
+  return { landingPath, landingBranch };
 }
 
 function successOutcome(finalText: string): AgentOutcome {
@@ -275,6 +297,74 @@ describe('landing assistance', () => {
           event.message.includes('Manual landing repair instructions'),
       ),
     ).toBe(true);
+  });
+
+  it('refreshes a stale landing branch from the current target before applying', async () => {
+    const { repo, project, run } = await makeApprovedRun(
+      'target-refresh-clean',
+      'run branch edit\n',
+    );
+    await prepareStaleLanding(repo, project.id, run);
+
+    fs.writeFileSync(path.join(repo, 'main-only.txt'), 'main moved\n');
+    await diff.commitAll(repo, 'chore: move main', author);
+
+    orchestrator.landRun(run.id);
+    await waitForIdle(run.id);
+
+    expect(runsService.requireRun(run.id).status).toBe('LANDED');
+    expect(normaliseLines(fs.readFileSync(path.join(repo, 'file.txt'), 'utf8'))).toBe(
+      'run branch edit\n',
+    );
+    expect(normaliseLines(fs.readFileSync(path.join(repo, 'main-only.txt'), 'utf8'))).toBe(
+      'main moved\n',
+    );
+
+    const types = eventsService.listEvents(run.id).map((event) => event.type);
+    expect(types).toContain('landing.refresh_started');
+    expect(types).toContain('landing.refresh_completed');
+    expect(types).toContain('landing.applied');
+  });
+
+  it('asks the agent to resolve conflicts while refreshing a stale landing branch', async () => {
+    const { repo, project, run } = await makeApprovedRun(
+      'target-refresh-conflict',
+      'run branch edit\n',
+    );
+    await prepareStaleLanding(repo, project.id, run);
+
+    fs.writeFileSync(path.join(repo, 'file.txt'), 'main branch edit\n');
+    await diff.commitAll(repo, 'chore: edit main after landing prepared', author);
+
+    const restore = orchestrator.registerAgent(
+      fakeAgent({
+        edit: (input) => {
+          expect(input.prompt).toContain('latest main');
+          fs.writeFileSync(
+            path.join(input.worktreePath, 'file.txt'),
+            'main branch edit\nrun branch edit\n',
+          );
+        },
+      }),
+    );
+
+    try {
+      orchestrator.landRun(run.id);
+      await waitForIdle(run.id);
+    } finally {
+      restore();
+    }
+
+    expect(runsService.requireRun(run.id).status).toBe('LANDED');
+    expect(normaliseLines(fs.readFileSync(path.join(repo, 'file.txt'), 'utf8'))).toBe(
+      'main branch edit\nrun branch edit\n',
+    );
+
+    const types = eventsService.listEvents(run.id).map((event) => event.type);
+    expect(types).toContain('landing.refresh_started');
+    expect(types).toContain('landing.resolution_started');
+    expect(types).toContain('landing.refresh_completed');
+    expect(types).toContain('landing.applied');
   });
 
   it('centres manual instructions on the target checkout when that checkout is dirty', async () => {
