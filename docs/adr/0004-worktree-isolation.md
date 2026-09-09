@@ -28,11 +28,24 @@ Windows (no elevation required) or symlinks elsewhere, files copied.
 - Files are copied rather than linked so an agent editing `.env.local` cannot
   reach the original.
 
+Once a run reaches LANDED or REJECTED, both of its worktrees are reclaimed if
+the project's `cleanUpWorktreeOnFinish` policy is on, which it is by default.
+That pass never forces: a worktree holding uncommitted changes stays, and a
+branch Git considers unmerged is kept. Every other finished status offers the
+same cleanup as an explicit action instead. APPROVED is deliberately excluded —
+landing still needs the run worktree.
+
 ## Consequences
 
-- Run and landing worktrees accumulate under the data directory and are removed
-  only on reject with cleanup, or by hand. Retention is recorded but not yet
-  enforced.
+- Worktrees no longer accumulate without bound. What survives a cleanup is what
+  would have been lost by it: uncommitted changes and unmerged branches, each
+  with its reason recorded in a `worktree.removed` event.
+- Removal is scoped by the run that owns it. Each target is re-checked against
+  the branch actually checked out there, so a stale recorded path cannot reach
+  another run's worktree.
+- Junctions are unlinked before the directory is deleted, so a delete cannot
+  reach through into the developer's own `node_modules`.
+- Artifact retention is recorded but still not enforced.
 - Junction creation can fail on unusual filesystems. Failures are reported per
   path in a `worktree.setup` event rather than failing the run.
 - Publishing the work is manual. Deliberate.

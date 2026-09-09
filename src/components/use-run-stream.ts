@@ -6,6 +6,7 @@ import type { RunEvent } from '@/domain/events';
 import type { ValidationKind } from '@/domain/types';
 import type { ArtifactView } from '@/services/artifacts';
 import type { ReadinessAssessment, RunView } from '@/services/runs';
+import type { RunWorktree } from '@/services/worktrees';
 
 export interface ConfiguredValidation {
   kind: ValidationKind;
@@ -18,6 +19,8 @@ export interface RunSnapshot {
   readiness: ReadinessAssessment;
   artifacts: ArtifactView[];
   live: { active: boolean; phase: string | null };
+  /** This run's worktrees, and whether each is still on disk. */
+  worktrees: RunWorktree[];
   configuredValidations: ConfiguredValidation[];
   policies: {
     requireValidation: boolean;

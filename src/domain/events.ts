@@ -29,6 +29,7 @@ export const EVENT_TYPES = [
 
   'worktree.prepared',
   'worktree.setup',
+  'worktree.removed',
 
   'agent.started',
   'agent.message',
@@ -122,6 +123,23 @@ export interface EventPayloads {
     linked: string[];
     setupCommand: string | null;
     setupExitCode: number | null;
+  };
+  /**
+   * A cleanup pass over the run's worktrees. One entry per worktree it looked
+   * at, kept whole so a refusal is as visible as a removal.
+   */
+  'worktree.removed': {
+    automatic: boolean;
+    removed: number;
+    kept: number;
+    targets: {
+      kind: 'run' | 'landing';
+      path: string;
+      branch: string | null;
+      removed: boolean;
+      branchDeleted: boolean;
+      reason: string | null;
+    }[];
   };
 
   'agent.started': {
@@ -264,6 +282,7 @@ export const PROGRESS_EVENT_TYPES: readonly EventType[] = [
   'summarise.completed',
   'worktree.prepared',
   'worktree.setup',
+  'worktree.removed',
   'agent.started',
   'agent.message',
   'agent.tool_started',

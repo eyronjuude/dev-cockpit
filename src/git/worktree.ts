@@ -133,24 +133,122 @@ export async function linkIntoWorktree(
 }
 
 /**
- * Removes a run's worktree and its branch.
+ * Unlinks the junctions and symlinks `linkIntoWorktree` created.
  *
- * Only ever called for a cockpit-created worktree inside the data directory,
- * and it refuses to delete a branch that still holds commits unless told to.
+ * Done before the worktree directory is deleted. A junction pointing at the
+ * main checkout's `node_modules` has to be unlinked rather than followed, and
+ * removing the link here rather than trusting a recursive deleter to recognise
+ * a reparse point keeps the developer's own dependencies out of reach.
+ *
+ * Copied files (`.env.local` and friends) are not symlinks, so they are left
+ * for the deletion itself.
+ */
+export async function unlinkWorktreeLinks(
+  worktreePath: string,
+  relativePaths: readonly string[],
+): Promise<string[]> {
+  const unlinked: string[] = [];
+
+  for (const rel of relativePaths) {
+    const clean = rel.trim().replace(/^[\\/]+/, '');
+    if (!clean) continue;
+
+    const target = path.resolve(worktreePath, clean);
+    if (!isInside(worktreePath, target)) continue;
+
+    try {
+      const stat = await fsp.lstat(target);
+      if (!stat.isSymbolicLink()) continue;
+      try {
+        await fsp.unlink(target);
+      } catch {
+        // Windows directory junctions report as symlinks but need rmdir.
+        await fsp.rmdir(target);
+      }
+      unlinked.push(clean);
+    } catch {
+      // Absent or unreadable: nothing to unlink.
+    }
+  }
+
+  return unlinked;
+}
+
+/** Drops Git's metadata for worktree directories that no longer exist. */
+export async function pruneWorktrees(repositoryPath: string): Promise<void> {
+  await git(repositoryPath, ['worktree', 'prune'], { allowFailure: true });
+}
+
+export interface RemoveWorktreeOptions {
+  /** Discards uncommitted changes. Off by default. */
+  force?: boolean;
+  /** Deletes the branch too, if Git agrees it holds nothing unmerged. */
+  deleteBranch?: boolean;
+  /**
+   * Directory the worktree must live under. Defaults to the run worktree root;
+   * a landing worktree passes `landingsDir()`.
+   */
+  root?: string;
+  /**
+   * Branch the worktree must have checked out. A recorded path now holding a
+   * different branch belongs to something else, so it is left alone.
+   */
+  expectBranch?: string | null;
+  /** Paths linked in by `linkIntoWorktree`, unlinked before deletion. */
+  linkedPaths?: readonly string[];
+}
+
+export interface RemoveWorktreeResult {
+  removed: boolean;
+  branchDeleted: boolean;
+  reason?: string;
+}
+
+/**
+ * Removes a cockpit worktree and, optionally, its branch.
+ *
+ * Four things it will not do: touch a path outside the data directory, remove
+ * a directory that has some other branch checked out, discard uncommitted
+ * changes unless forced, or delete a branch holding unmerged commits.
  */
 export async function removeWorktree(
   repositoryPath: string,
   worktreePath: string,
   branch: string | null,
-  opts: { force?: boolean; deleteBranch?: boolean } = {},
-): Promise<{ removed: boolean; branchDeleted: boolean; reason?: string }> {
-  const { force = false, deleteBranch = false } = opts;
+  opts: RemoveWorktreeOptions = {},
+): Promise<RemoveWorktreeResult> {
+  const {
+    force = false,
+    deleteBranch = false,
+    root = worktreesDir(),
+    expectBranch = null,
+    linkedPaths = [],
+  } = opts;
 
-  if (!isInside(worktreesDir(), worktreePath)) {
-    return { removed: false, branchDeleted: false, reason: 'path outside the data directory' };
+  if (!isInside(root, worktreePath)) {
+    return { removed: false, branchDeleted: false, reason: `path outside ${root}` };
   }
 
-  if (!force && fs.existsSync(worktreePath)) {
+  const exists = fs.existsSync(worktreePath);
+
+  if (exists && expectBranch) {
+    // A stale recorded path could now hold another run's worktree. Checking
+    // what is actually checked out is what keeps this run's cleanup from
+    // reaching anything that is not this run's.
+    const head = await git(worktreePath, ['rev-parse', '--abbrev-ref', 'HEAD'], {
+      allowFailure: true,
+    });
+    const checkedOut = head.stdout.trim();
+    if (head.exitCode === 0 && checkedOut && checkedOut !== expectBranch) {
+      return {
+        removed: false,
+        branchDeleted: false,
+        reason: `worktree is on ${checkedOut}, not ${expectBranch}`,
+      };
+    }
+  }
+
+  if (!force && exists) {
     // Refuse to discard work the user has not seen.
     try {
       if (await isDirty(worktreePath)) {
@@ -161,12 +259,14 @@ export async function removeWorktree(
     }
   }
 
+  if (exists) await unlinkWorktreeLinks(worktreePath, linkedPaths);
+
   const args = ['worktree', 'remove', worktreePath];
   if (force) args.push('--force');
   const res = await git(repositoryPath, args, { allowFailure: true });
 
   if (res.exitCode !== 0) {
-    await git(repositoryPath, ['worktree', 'prune'], { allowFailure: true });
+    await pruneWorktrees(repositoryPath);
     if (fs.existsSync(worktreePath)) {
       return { removed: false, branchDeleted: false, reason: res.stderr.trim() || 'git refused' };
     }

@@ -616,7 +616,8 @@ export function updateRunFields(
     baseBranch: string;
     baseCommit: string;
     branch: string;
-    worktreePath: string;
+    /** Cleared to null once the worktree has been reclaimed. */
+    worktreePath: string | null;
     agentSessionId: string | null;
     agentModel: string | null;
     commitSha: string | null;

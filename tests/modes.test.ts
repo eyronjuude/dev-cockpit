@@ -52,6 +52,7 @@ function makeProject(overrides: Partial<ProjectView> = {}): ProjectView {
     captureScreenshots: true,
     allowAgentCommit: false,
     reviewBlocksReady: false,
+    cleanUpWorktreeOnFinish: true,
     artifactRetentionDays: 30,
     agentModel: null,
     agentPermissionMode: stored,

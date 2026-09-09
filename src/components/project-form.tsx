@@ -71,6 +71,9 @@ export function ProjectForm({ existing }: { existing?: ProjectView }) {
     existing?.reviewBlocksReady ?? false,
   );
   const [allowAgentCommit, setAllowAgentCommit] = useState(existing?.allowAgentCommit ?? false);
+  const [cleanUpWorktreeOnFinish, setCleanUpWorktreeOnFinish] = useState(
+    existing?.cleanUpWorktreeOnFinish ?? true,
+  );
   const [agentModel, setAgentModel] = useState(existing?.agentModel ?? '');
   const [agentPermissionMode, setAgentPermissionMode] = useState<string>(
     existing?.agentPermissionMode ?? DEFAULT_AGENT_PERMISSION_MODE,
@@ -147,6 +150,7 @@ export function ProjectForm({ existing }: { existing?: ProjectView }) {
       requireE2eForUiChanges,
       reviewBlocksReady,
       allowAgentCommit,
+      cleanUpWorktreeOnFinish,
       agentModel: agentModel || null,
       agentPermissionMode,
       validationCommands: VALIDATION_KINDS.map((kind) => ({
@@ -430,6 +434,12 @@ export function ProjectForm({ existing }: { existing?: ProjectView }) {
             onChange={setAllowAgentCommit}
             label="Allow the implementation agent to create local commits"
             hint="Even when on, the agent is told never to push, merge, rebase or reset."
+          />
+          <Toggle
+            checked={cleanUpWorktreeOnFinish}
+            onChange={setCleanUpWorktreeOnFinish}
+            label="Remove a run's worktrees once it lands or is rejected"
+            hint="Never forces: a worktree with uncommitted changes, or a branch with unmerged commits, is kept and the reason recorded."
           />
 
           <div>
