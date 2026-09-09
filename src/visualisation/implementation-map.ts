@@ -205,8 +205,10 @@ const VERDICT_STATE: Record<RunStatus, StageState> = {
   CANCELLED: 'cancelled',
 };
 
-function plural(count: number, word: string): string {
-  return `${count} ${word}${count === 1 ? '' : 's'}`;
+/** `pluralForm` is for the words an `s` does not fit, such as "retries". */
+function plural(count: number, word: string, pluralForm?: string): string {
+  if (count === 1) return `${count} ${word}`;
+  return `${count} ${pluralForm ?? `${word}s`}`;
 }
 
 function shortSha(sha: string | null): string {
@@ -291,6 +293,9 @@ export function deriveStages(input: ImplementationMapInput): MapStage[] {
           ? 'cancelled'
           : 'active';
   const changeRequests = iterations.filter((it) => it.kind === 'change_request').length;
+  // Counted separately from change requests: a retry asked for the same thing
+  // again, which says something different about the run than a revision does.
+  const retries = iterations.filter((it) => it.kind === 'retry').length;
   const implementation = stage(
     'implementation',
     'Implementation',
@@ -299,6 +304,7 @@ export function deriveStages(input: ImplementationMapInput): MapStage[] {
       ? [
           plural(iterations.length, 'iteration'),
           changeRequests > 0 ? plural(changeRequests, 'change request') : null,
+          retries > 0 ? plural(retries, 'retry', 'retries') : null,
           turns > 0 ? plural(turns, 'turn') : null,
         ]
           .filter(Boolean)

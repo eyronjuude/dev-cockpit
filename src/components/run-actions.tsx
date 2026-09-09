@@ -9,7 +9,15 @@ import {
   WORK_MODE_WORDING,
   type ResolvedWorkMode,
 } from '@/domain/modes';
-import type { RunStatus } from '@/domain/types';
+import {
+  canForceRestart,
+  canRetry,
+  canRetryIteration,
+  lastImplementationIteration,
+  planRetry,
+  RETRY_STAGE_LABELS,
+} from '@/domain/retry';
+import { LANDABLE_STATUSES, type RunStatus } from '@/domain/types';
 import type { RunSnapshot } from './use-run-stream';
 
 /**
@@ -24,6 +32,14 @@ import type { RunSnapshot } from './use-run-stream';
  * The working mode changes the set: a read-only run has nothing to
  * re-validate, and gains the one action that makes Ask and Plan worth doing
  * separately — handing what they produced back to the same session to build.
+ *
+ * Three actions pick a stopped run back up, and they are deliberately
+ * different sizes. **Retry** resumes from wherever it stopped and keeps
+ * everything. **Retry iteration** re-issues the same prompt to the same
+ * session. **Force restart** throws the worktree away and starts over on a
+ * fresh branch, and is the only action offered while a run is still live —
+ * stopping the work is what makes it forceful. What each one will actually do
+ * is computed by `domain/retry.ts`, so the label is not a guess.
  */
 
 interface ActionsProps {
@@ -36,11 +52,6 @@ const APPROVABLE_STATUSES: readonly RunStatus[] = [
   'READY',
   'FAILED',
   'CANCELLED',
-];
-const LANDABLE_STATUSES: readonly RunStatus[] = [
-  'APPROVED',
-  'MERGE_CONFLICT',
-  'LANDING_FAILED',
 ];
 const REWORKABLE_STATUSES: readonly RunStatus[] = [
   'NEEDS_CHANGES',
@@ -81,7 +92,7 @@ function buildFeedbackFor(mode: ResolvedWorkMode, note: string): string {
     : 'Implement what your answer describes. If the answer did not describe a change, say what you would need to know instead of guessing.';
 }
 
-type Dialog = 'none' | 'changes' | 'approve' | 'reject' | 'land' | 'implement';
+type Dialog = 'none' | 'changes' | 'approve' | 'reject' | 'land' | 'implement' | 'restart';
 
 export function RunActions({ snapshot, onChanged }: ActionsProps) {
   const router = useRouter();
@@ -150,6 +161,21 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
   const canResolveMerge = !active && run.status === 'MERGE_CONFLICT';
   const canOpenLanding = !active && LANDING_WORKTREE_STATUSES.includes(run.status);
   const canStart = !active && run.status === 'DRAFT';
+
+  // Computed rather than hand-written per status, so the button cannot promise
+  // one thing and the orchestrator do another.
+  const retryPlan = planRetry(run);
+  const showRetry = canRetry(run, active);
+  const showRetryIteration = canRetryIteration(run, active);
+  const showRestart = canForceRestart(run);
+  const retriedIteration = lastImplementationIteration(run.iterations);
+  // A read-only run runs no checks, so "Retry the checks" would be a lie. What
+  // that stage actually does for one is re-read the worktree and reach the
+  // verdict again.
+  const retryLabel =
+    retryPlan.stage === 'validate' && readOnly
+      ? 'Retry the verdict'
+      : RETRY_STAGE_LABELS[retryPlan.stage];
   // Only once there is something finished to build on. An iteration that
   // failed part-way can still hold text, and switching to Build on half a plan
   // is a build run started the long way round.
@@ -213,6 +239,43 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
           </button>
         ) : null}
 
+        {showRetry ? (
+          <button
+            type="button"
+            // The leading action for a run that stopped, unless the run already
+            // has one: on a Plan run that produced its plan, building it is
+            // worth more than re-reaching the same verdict.
+            className={canSwitchToBuild ? 'btn' : 'btn btn-primary'}
+            disabled={busy !== null}
+            title={`Resumes this run where it stopped, because ${retryPlan.reason}.${
+              retryPlan.resumesSession ? ' The recorded agent session is resumed.' : ''
+            }`}
+            onClick={() => void post(`/api/runs/${run.id}/retry`, {}, 'retry')}
+          >
+            {busy === 'retry' ? 'Retrying…' : retryLabel}
+          </button>
+        ) : null}
+
+        {showRetryIteration && retriedIteration ? (
+          <button
+            type="button"
+            className="btn"
+            disabled={busy !== null}
+            title={
+              run.agentSessionId
+                ? `Sends iteration ${retriedIteration.ordinal}'s prompt again, continuing Claude Code session ${run.agentSessionId.slice(0, 8)}. Nothing about the instruction changes.`
+                : `Sends iteration ${retriedIteration.ordinal}'s prompt again. No agent session is recorded, so the ${wording.agentNoun} starts cold.`
+            }
+            onClick={() =>
+              void post(`/api/runs/${run.id}/retry-iteration`, {}, 'retry-iteration')
+            }
+          >
+            {busy === 'retry-iteration'
+              ? 'Starting…'
+              : `Retry iteration ${retriedIteration.ordinal}`}
+          </button>
+        ) : null}
+
         {canRevalidate ? (
           <button
             type="button"
@@ -221,6 +284,17 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
             onClick={() => void post(`/api/runs/${run.id}/revalidate`, {}, 'revalidate')}
           >
             {busy === 'revalidate' ? 'Starting…' : 'Re-run validation'}
+          </button>
+        ) : null}
+
+        {showRestart ? (
+          <button
+            type="button"
+            className="btn"
+            disabled={busy !== null}
+            onClick={() => setDialog(dialog === 'restart' ? 'none' : 'restart')}
+          >
+            Force restart
           </button>
         ) : null}
 
@@ -347,6 +421,59 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
               }
             >
               {busy === 'implement' ? 'Sending…' : 'Switch to Build and implement'}
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {dialog === 'restart' ? (
+        <div className="panel p-3">
+          <p className="text-[12.5px] text-ink-muted">
+            Starts this run over from <code className="mono">{run.baseBranch ?? 'the base'}</code>,
+            as if it had just been created. Dev Cockpit stops anything running, removes the
+            worktree, prepares a new one on a fresh branch, and hands the request to the{' '}
+            {wording.agentNoun} with no session and no specification carried over.
+          </p>
+          <ul className="mt-2 list-disc pl-4 text-[12px] text-ink-muted">
+            <li>
+              <span className="font-medium">Discarded:</span> the worktree and everything
+              uncommitted in it
+              {run.changedFiles.length > 0
+                ? ` (${run.changedFiles.length} changed file${
+                    run.changedFiles.length === 1 ? '' : 's'
+                  })`
+                : ''}
+              , the agent session, the recorded specification
+              {run.disposition ? ', and this run’s approval' : ''}.
+            </li>
+            <li>
+              <span className="font-medium">Kept:</span> the event log, every iteration, saved
+              artifacts, and the recorded cost — that money was already spent.
+            </li>
+            <li>
+              <span className="font-medium">Kept on its own branch:</span>{' '}
+              <code className="mono">{run.branch}</code>. It is never deleted, so any commits on it
+              survive; the restart takes the next free <code className="mono">-r2</code>-style name.
+            </li>
+          </ul>
+          {active ? (
+            <p className="mt-2 text-[12px] text-warn">
+              This run is live. Restarting cancels the {wording.activity} in progress and waits for
+              the agent to exit before touching the worktree.
+            </p>
+          ) : null}
+
+          <div className="mt-2.5 flex justify-end gap-1.5">
+            <button type="button" className="btn btn-ghost" onClick={() => setDialog('none')}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn-danger"
+              disabled={busy !== null}
+              onClick={() => void post(`/api/runs/${run.id}/restart`, {}, 'restart')}
+            >
+              {busy === 'restart' ? 'Restarting…' : 'Discard and restart'}
             </button>
           </div>
         </div>

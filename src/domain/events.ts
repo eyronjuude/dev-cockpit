@@ -1,4 +1,5 @@
 import type { ResolvedWorkMode, WorkMode } from './modes';
+import type { RetryStage } from './retry';
 import type {
   ArtifactKind,
   ChangeType,
@@ -19,6 +20,8 @@ export const EVENT_TYPES = [
   'run.status_changed',
   'run.mode_selected',
   'run.mode_switched',
+  'run.retried',
+  'run.restarted',
 
   'transform.started',
   'transform.completed',
@@ -104,6 +107,22 @@ export interface EventPayloads {
     reason: string;
   };
   'run.mode_switched': { from: ResolvedWorkMode; to: ResolvedWorkMode; reason: string };
+  /** A stopped run was picked back up. `stage` says where it resumed. */
+  'run.retried': {
+    stage: RetryStage;
+    reason: string;
+    resumedSession: boolean;
+    /** The iteration whose prompt was re-issued, when one was. */
+    iterationOrdinal: number | null;
+  };
+  /** The run was thrown away and started again on a fresh branch. */
+  'run.restarted': {
+    reason: string;
+    branch: string;
+    previousBranch: string | null;
+    worktreeRemoved: boolean;
+    stoppedActiveWork: boolean;
+  };
 
   'transform.started': { provider: string };
   'transform.completed': { provider: string; specLength: number; durationMs: number };
@@ -258,6 +277,8 @@ export const PROGRESS_EVENT_TYPES: readonly EventType[] = [
   'run.status_changed',
   'run.mode_selected',
   'run.mode_switched',
+  'run.retried',
+  'run.restarted',
   'transform.completed',
   'transform.skipped',
   'transform.failed',

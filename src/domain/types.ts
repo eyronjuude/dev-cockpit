@@ -41,13 +41,28 @@ export const TERMINAL_STATUSES: readonly RunStatus[] = ['LANDED', 'REJECTED'];
  * The orchestrator is the source of truth for run state; this table is the
  * whole of the permitted state space. Anything not listed is a bug rather than
  * a judgement call, so `assertTransition` throws on it.
+ *
+ * `DRAFT` appears as a target of every non-terminal status, and only because a
+ * forced restart puts a run back to the state it was created in. That is the
+ * one write path that produces it — `createRun` inserts `DRAFT` directly — so
+ * the entrance to `PREPARING` stays a single door whichever attempt walks
+ * through it. Nothing may re-enter `DRAFT` from `LANDED` or `REJECTED`: those
+ * are terminal, and a restart is not an undo.
  */
 const TRANSITIONS: Record<RunStatus, readonly RunStatus[]> = {
   DRAFT: ['PREPARING', 'FAILED', 'CANCELLED'],
-  PREPARING: ['IMPLEMENTING', 'FAILED', 'CANCELLED'],
-  IMPLEMENTING: ['VALIDATING', 'REVIEWING', 'NEEDS_CHANGES', 'READY', 'FAILED', 'CANCELLED'],
-  VALIDATING: ['REVIEWING', 'NEEDS_CHANGES', 'READY', 'FAILED', 'CANCELLED'],
-  REVIEWING: ['NEEDS_CHANGES', 'READY', 'FAILED', 'CANCELLED'],
+  PREPARING: ['IMPLEMENTING', 'FAILED', 'CANCELLED', 'DRAFT'],
+  IMPLEMENTING: [
+    'VALIDATING',
+    'REVIEWING',
+    'NEEDS_CHANGES',
+    'READY',
+    'FAILED',
+    'CANCELLED',
+    'DRAFT',
+  ],
+  VALIDATING: ['REVIEWING', 'NEEDS_CHANGES', 'READY', 'FAILED', 'CANCELLED', 'DRAFT'],
+  REVIEWING: ['NEEDS_CHANGES', 'READY', 'FAILED', 'CANCELLED', 'DRAFT'],
   NEEDS_CHANGES: [
     'IMPLEMENTING',
     'VALIDATING',
@@ -56,14 +71,23 @@ const TRANSITIONS: Record<RunStatus, readonly RunStatus[]> = {
     'REJECTED',
     'FAILED',
     'CANCELLED',
+    'DRAFT',
   ],
-  READY: ['IMPLEMENTING', 'VALIDATING', 'REVIEWING', 'APPROVED', 'REJECTED', 'CANCELLED'],
-  FAILED: ['IMPLEMENTING', 'VALIDATING', 'LANDING', 'REJECTED', 'CANCELLED'],
-  CANCELLED: ['IMPLEMENTING', 'VALIDATING', 'LANDING', 'REJECTED'],
-  APPROVED: ['LANDING', 'REJECTED'],
-  LANDING: ['LANDED', 'MERGE_CONFLICT', 'LANDING_FAILED', 'FAILED', 'CANCELLED'],
-  MERGE_CONFLICT: ['LANDING', 'REJECTED', 'CANCELLED'],
-  LANDING_FAILED: ['LANDING', 'REJECTED', 'CANCELLED'],
+  READY: [
+    'IMPLEMENTING',
+    'VALIDATING',
+    'REVIEWING',
+    'APPROVED',
+    'REJECTED',
+    'CANCELLED',
+    'DRAFT',
+  ],
+  FAILED: ['IMPLEMENTING', 'VALIDATING', 'LANDING', 'REJECTED', 'CANCELLED', 'DRAFT'],
+  CANCELLED: ['IMPLEMENTING', 'VALIDATING', 'LANDING', 'REJECTED', 'DRAFT'],
+  APPROVED: ['LANDING', 'REJECTED', 'DRAFT'],
+  LANDING: ['LANDED', 'MERGE_CONFLICT', 'LANDING_FAILED', 'FAILED', 'CANCELLED', 'DRAFT'],
+  MERGE_CONFLICT: ['LANDING', 'REJECTED', 'CANCELLED', 'DRAFT'],
+  LANDING_FAILED: ['LANDING', 'REJECTED', 'CANCELLED', 'DRAFT'],
   LANDED: [],
   REJECTED: [],
 };
@@ -81,6 +105,45 @@ export function assertTransition(from: RunStatus, to: RunStatus): void {
 
 export const isActive = (status: RunStatus): boolean => ACTIVE_STATUSES.includes(status);
 export const isTerminal = (status: RunStatus): boolean => TERMINAL_STATUSES.includes(status);
+
+/**
+ * Statuses the landing flow may start from.
+ *
+ * `MERGE_CONFLICT` and `LANDING_FAILED` are here because landing is retried
+ * from exactly where it stopped; both keep their landing worktree.
+ */
+export const LANDABLE_STATUSES: readonly RunStatus[] = [
+  'APPROVED',
+  'MERGE_CONFLICT',
+  'LANDING_FAILED',
+];
+
+/**
+ * Whether landing may run for a run in this state.
+ *
+ * A cancelled run counts when it was approved first: cancelling a landing
+ * leaves the approval standing, and the merge is still the outstanding step.
+ * The disposition is read rather than the status alone because that approval is
+ * what entitles the run to touch the target branch at all.
+ */
+export function isLandableStatus(
+  status: RunStatus,
+  disposition: Disposition | null,
+): boolean {
+  if (LANDABLE_STATUSES.includes(status)) return true;
+  return status === 'CANCELLED' && disposition === 'approved';
+}
+
+/**
+ * Whether a forced restart may throw this run's work away and begin again.
+ *
+ * Anything that has not reached a terminal state can be restarted, including a
+ * run that is mid-flight — stopping the work is what "forced" means. A landed
+ * run is not restartable: its commits are on the target branch, and undoing
+ * that is a git operation the user makes deliberately, not a side effect of a
+ * button here.
+ */
+export const canRestart = (status: RunStatus): boolean => !isTerminal(status);
 
 /* ------------------------------------------------------------------ *
  * Validation
@@ -250,10 +313,26 @@ export const BLOCKING_SEVERITIES: readonly FindingSeverity[] = ['high', 'critica
 export const ITERATION_KINDS = [
   'initial',
   'change_request',
+  /** The previous iteration's prompt, issued again unchanged. */
+  'retry',
   'merge_resolution',
   'landing_repair',
 ] as const;
 export type IterationKind = (typeof ITERATION_KINDS)[number];
+
+/**
+ * Iteration kinds that work in the run's own worktree.
+ *
+ * The landing kinds work in a separate landing worktree against a merge of the
+ * target branch, so their prompts are meaningless anywhere else. Retrying "the
+ * current iteration" has to mean the last implementation pass, not the last
+ * row in the table.
+ */
+export const IMPLEMENTATION_ITERATION_KINDS: readonly IterationKind[] = [
+  'initial',
+  'change_request',
+  'retry',
+];
 
 export const ITERATION_STATUSES = ['running', 'completed', 'failed', 'cancelled'] as const;
 export type IterationStatus = (typeof ITERATION_STATUSES)[number];

@@ -4,9 +4,13 @@ import {
   ACTIVE_STATUSES,
   assertTransition,
   BLOCKING_OUTCOMES,
+  canRestart,
   canTransition,
+  IMPLEMENTATION_ITERATION_KINDS,
   isActive,
+  isLandableStatus,
   isTerminal,
+  ITERATION_KINDS,
   RUN_STATUSES,
   VALIDATION_KINDS,
   type RunStatus,
@@ -92,6 +96,34 @@ describe('run lifecycle', () => {
     }
   });
 
+  it('lets a forced restart put any unfinished run back to DRAFT', () => {
+    // Restart is the universal escape hatch, so every non-terminal status has
+    // to be able to reach the state a run is created in.
+    for (const status of RUN_STATUSES) {
+      if (isTerminal(status)) continue;
+      expect(canTransition(status, 'DRAFT'), `${status} -> DRAFT`).toBe(true);
+      expect(canRestart(status), `canRestart(${status})`).toBe(true);
+    }
+  });
+
+  it('refuses to restart a run that already landed or was rejected', () => {
+    expect(canTransition('LANDED', 'DRAFT')).toBe(false);
+    expect(canTransition('REJECTED', 'DRAFT')).toBe(false);
+    expect(canRestart('LANDED')).toBe(false);
+    expect(canRestart('REJECTED')).toBe(false);
+    expect(() => assertTransition('LANDED', 'DRAFT')).toThrow(/Illegal run transition/);
+  });
+
+  it('keeps DRAFT as the only entrance to PREPARING', () => {
+    // A restarted run re-enters the pipeline through the same door a new one
+    // does. Anything else would give preparation two callers to satisfy.
+    for (const status of RUN_STATUSES) {
+      if (status === 'DRAFT' || status === 'PREPARING') continue;
+      expect(canTransition(status, 'PREPARING'), `${status} -> PREPARING`).toBe(false);
+    }
+    expect(canTransition('DRAFT', 'PREPARING')).toBe(true);
+  });
+
   it('marks exactly the working statuses as active', () => {
     expect(ACTIVE_STATUSES).toEqual([
       'PREPARING',
@@ -112,6 +144,43 @@ describe('run lifecycle', () => {
       const escapes = canTransition(status, 'REJECTED') || canTransition(status, 'CANCELLED');
       expect(escapes, `${status} has no exit`).toBe(true);
     }
+  });
+});
+
+describe('landability', () => {
+  it('allows landing from approval and from a stalled landing', () => {
+    expect(isLandableStatus('APPROVED', 'approved')).toBe(true);
+    expect(isLandableStatus('MERGE_CONFLICT', 'approved')).toBe(true);
+    expect(isLandableStatus('LANDING_FAILED', 'approved')).toBe(true);
+  });
+
+  it('allows landing a cancelled run that was approved first', () => {
+    // Cancelling a landing does not withdraw the approval, and the merge is
+    // still the outstanding step.
+    expect(isLandableStatus('CANCELLED', 'approved')).toBe(true);
+    expect(isLandableStatus('CANCELLED', null)).toBe(false);
+    expect(isLandableStatus('CANCELLED', 'rejected')).toBe(false);
+  });
+
+  it('refuses to land a run nobody approved', () => {
+    expect(isLandableStatus('READY', null)).toBe(false);
+    expect(isLandableStatus('NEEDS_CHANGES', null)).toBe(false);
+    // A failed run holds no approval to act on, even if one was recorded
+    // before the failure: the status is what the landing flow can act from.
+    expect(isLandableStatus('FAILED', 'approved')).toBe(false);
+  });
+});
+
+describe('iteration kinds', () => {
+  it('separates the kinds that run in the run worktree from the landing ones', () => {
+    expect(IMPLEMENTATION_ITERATION_KINDS).toEqual(['initial', 'change_request', 'retry']);
+    for (const kind of IMPLEMENTATION_ITERATION_KINDS) {
+      expect(ITERATION_KINDS).toContain(kind);
+    }
+    // The landing kinds work against a merge in a different worktree, so their
+    // prompts are meaningless to a retry of the run itself.
+    expect(IMPLEMENTATION_ITERATION_KINDS).not.toContain('merge_resolution');
+    expect(IMPLEMENTATION_ITERATION_KINDS).not.toContain('landing_repair');
   });
 });
 
