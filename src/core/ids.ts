@@ -32,3 +32,18 @@ export function runBranchName(runId: string): string {
 export function landingBranchName(runId: string): string {
   return `cockpit/landing/${runId.replace(/[^A-Za-z0-9_-]/g, '-')}`;
 }
+
+/**
+ * Branch for a restarted run's nth attempt. Attempt 1 is the plain name.
+ *
+ * A restart gets a fresh branch rather than reusing the old one. `git branch
+ * -d` refuses a branch that still holds commits — which is the behaviour this
+ * project wants everywhere else — so reusing the name would leave a run that
+ * could not be restarted at all once its agent had committed. The previous
+ * attempt's commits stay reachable on their own branch instead of being
+ * deleted with `-D`.
+ */
+export function runAttemptBranchName(runId: string, attempt: number): string {
+  const base = runBranchName(runId);
+  return attempt <= 1 ? base : `${base}-r${attempt}`;
+}

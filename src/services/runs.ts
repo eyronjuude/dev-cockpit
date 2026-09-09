@@ -624,9 +624,10 @@ export function updateRunFields(
     spec: string | null;
     specProvider: string | null;
     baseBranch: string;
-    baseCommit: string;
+    /** Nullable so a restart can clear it and have prepare resolve it again. */
+    baseCommit: string | null;
     branch: string;
-    /** Cleared to null once the worktree has been reclaimed. */
+    /** Cleared to null once the worktree is gone â€” reclaimed, or torn down by a restart. */
     worktreePath: string | null;
     agentSessionId: string | null;
     agentModel: string | null;
@@ -642,6 +643,83 @@ export function updateRunFields(
     .set({ ...fields, updatedAt: new Date().toISOString() })
     .where(eq(runs.id, runId))
     .run();
+}
+
+/**
+ * Puts a run back to the state it was created in, for a forced restart.
+ *
+ * What is cleared and what is kept follows one rule: **derived state resets,
+ * the record does not.** Anything the next pass will produce again — worktree,
+ * base commit, specification, agent session, commit, disposition, the changed
+ * file set — is cleared, so the run screen never shows evidence belonging to an
+ * attempt that no longer exists. Anything that is a record of what happened —
+ * events, iterations, artifacts, attempt-numbered validation results and
+ * review findings — is kept, because a restart is a new attempt at the request,
+ * not a way of erasing the last one.
+ *
+ * `costUsd` is deliberately kept. That money was spent. Zeroing it would make
+ * the run under-report what it cost, which is the one number a user cannot
+ * recover from anywhere else.
+ *
+ * The caller removes the worktree and settles on `branch` first: this only
+ * writes, and writing a cleared `worktreePath` while the directory still
+ * existed would lose the app's only handle on it.
+ */
+export function resetRunForRestart(
+  runId: string,
+  input: {
+    branch: string;
+    reason: string;
+    /** Whether a worktree directory was actually removed before this call. */
+    worktreeRemoved: boolean;
+    /** Whether in-flight work had to be stopped to get here. */
+    stoppedActiveWork: boolean;
+  },
+): RunView {
+  const run = requireRun(runId);
+
+  setStatus(runId, 'DRAFT', { reason: input.reason, error: null });
+
+  updateRunFields(runId, {
+    branch: input.branch,
+    worktreePath: null,
+    baseCommit: null,
+    spec: null,
+    specProvider: null,
+    agentSessionId: null,
+    commitSha: null,
+    disposition: null,
+    dispositionNote: null,
+    error: null,
+  });
+
+  // The run's start and finish times describe the attempt being discarded.
+  // `setStatus(..., { started: true })` writes `startedAt` again on the next
+  // pass, so clearing them here keeps the elapsed clock honest.
+  const db = getDb();
+  db.update(runs)
+    .set({ startedAt: null, finishedAt: null, updatedAt: new Date().toISOString() })
+    .where(eq(runs.id, runId))
+    .run();
+
+  // The recorded diff describes a worktree that no longer exists.
+  replaceChangedFiles(runId, []);
+
+  appendEvent({
+    runId,
+    type: 'run.restarted',
+    level: 'notice',
+    message: `Restarted from ${run.baseBranch ?? 'the base branch'} on ${input.branch}: ${input.reason}`,
+    payload: {
+      reason: input.reason,
+      branch: input.branch,
+      previousBranch: run.branch,
+      worktreeRemoved: input.worktreeRemoved,
+      stoppedActiveWork: input.stoppedActiveWork,
+    },
+  });
+
+  return requireRun(runId);
 }
 
 /* ------------------------------------------------------------------ *

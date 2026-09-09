@@ -5,7 +5,7 @@ import path from 'node:path';
 import { ClaudeCodeAgent } from '@/agents/claude-code';
 import { summariseToolInput } from '@/agents/stream-parser';
 import type { AgentOutcome, AgentStreamEvent, ImplementationAgent } from '@/agents/types';
-import { landingBranchName } from '@/core/ids';
+import { landingBranchName, runAttemptBranchName } from '@/core/ids';
 import { AppError, errorMessage } from '@/core/errors';
 import { runAttachmentDir, runLandingDir, runWorktreeDir } from '@/core/paths';
 import {
@@ -15,11 +15,20 @@ import {
   type ResolvedWorkMode,
 } from '@/domain/modes';
 import {
+  ITERATION_RETRYABLE_STATUSES,
+  lastImplementationIteration,
+  planRetry,
+  RETRYABLE_STATUSES,
+  type RetryPlan,
+} from '@/domain/retry';
+import {
   BLOCKING_OUTCOMES,
   BLOCKING_SEVERITIES,
+  canRestart,
+  isLandableStatus,
+  isTerminal,
   type Disposition,
   type IterationKind,
-  type RunStatus,
 } from '@/domain/types';
 import { collectRunDiff, commitAll } from '@/git/diff';
 import { commitInfo, isDirty, refExists, resolveCommit } from '@/git/git';
@@ -35,7 +44,7 @@ import {
   stageResolvedConflictFiles,
   unmergedFiles,
 } from '@/git/landing';
-import { linkIntoWorktree, prepareWorktree } from '@/git/worktree';
+import { linkIntoWorktree, prepareWorktree, removeWorktree } from '@/git/worktree';
 import { runCommand } from '@/process/spawn';
 import { getReviewer } from '@/reviewers/registry';
 import { register, writeTextArtifact } from '@/services/artifacts';
@@ -53,6 +62,7 @@ import {
   nextReviewAttempt,
   replaceChangedFiles,
   requireRun,
+  resetRunForRestart,
   setIterationSummary,
   runProviders,
   setStatus,
@@ -76,6 +86,15 @@ interface ActiveRun {
   phase: string;
   landingQueueKey?: string;
   queuedLanding?: boolean;
+  /**
+   * Resolves once the driving work has finished and released the slot.
+   *
+   * Aborting a controller only asks; it does not wait. A forced restart has to
+   * know the agent process and its validation commands are actually gone
+   * before it deletes the worktree they were running in, and this is what it
+   * waits on.
+   */
+  settled: Promise<void>;
 }
 
 const GLOBAL_KEY = '__devCockpitActiveRuns__' as const;
@@ -83,7 +102,9 @@ type GlobalWithRuns = typeof globalThis & { [GLOBAL_KEY]?: Map<string, ActiveRun
 
 interface LandingQueueItem {
   runId: string;
-  controller: AbortController;
+  signal: AbortSignal;
+  /** Releases the run's work slot. Idempotent, so whoever gets there first wins. */
+  release: () => void;
   mode: LandingMode;
   queued: boolean;
   repositoryPath: string;
@@ -118,6 +139,75 @@ export function isRunActive(runId: string): boolean {
 
 export function activeRunPhase(runId: string): string | null {
   return activeRuns().get(runId)?.phase ?? null;
+}
+
+interface Reservation {
+  signal: AbortSignal;
+  release: () => void;
+}
+
+/**
+ * Claims the single work slot a run has.
+ *
+ * One run, one slot: every entry point â€” start, change request, retry,
+ * revalidate, land, restart â€” claims it, so "is something already running for
+ * this run" is answered in one place rather than in seven.
+ *
+ * Exposed as a claim rather than only as `begin` because two callers need the
+ * slot without a pipeline attached to it. A forced restart has asynchronous
+ * work to do *before* the pipeline starts, and holding the slot across that
+ * stops a concurrent Start from claiming a run whose worktree is in the middle
+ * of being deleted. A landing claims the slot when it joins the queue, which
+ * may be well before its turn comes round.
+ */
+function reserve(
+  runId: string,
+  phase: string,
+  extra?: Pick<ActiveRun, 'landingQueueKey' | 'queuedLanding'>,
+): Reservation {
+  if (activeRuns().has(runId)) {
+    throw new AppError('This run is already in progress.', { code: 'already_running' });
+  }
+
+  const controller = new AbortController();
+  let settle: () => void = () => {};
+  const settled = new Promise<void>((resolve) => {
+    settle = resolve;
+  });
+
+  activeRuns().set(runId, {
+    controller,
+    startedAt: new Date().toISOString(),
+    phase,
+    settled,
+    ...extra,
+  });
+
+  let released = false;
+  return {
+    signal: controller.signal,
+    release: () => {
+      if (released) return;
+      released = true;
+      activeRuns().delete(runId);
+      settle();
+    },
+  };
+}
+
+/**
+ * Claims the slot and drives `work` in the background.
+ *
+ * The work is detached on purpose: the HTTP call returns as soon as the run is
+ * accepted and the UI follows along over SSE.
+ */
+function begin(
+  runId: string,
+  phase: string,
+  work: (signal: AbortSignal) => Promise<void>,
+): void {
+  const slot = reserve(runId, phase);
+  void work(slot.signal).finally(slot.release);
 }
 
 function normaliseRepositoryForQueue(repositoryPath: string): string {
@@ -170,7 +260,9 @@ function cancelQueuedLanding(
   if (!item) return false;
 
   active.controller.abort();
-  activeRuns().delete(runId);
+  // Releases the slot rather than deleting the map entry, so anything waiting
+  // on this run to stop â€” a forced restart, above all â€” is let go too.
+  item.release();
   appendEvent({
     runId,
     type: 'landing.cancelled',
@@ -203,6 +295,45 @@ export function cancelRun(runId: string, reason = 'Cancelled by the user'): bool
     payload: { reason },
   });
   active.controller.abort();
+  return true;
+}
+
+/** How long a forced restart waits for the work it cancelled to let go. */
+const STOP_TIMEOUT_MS = 60_000;
+
+/**
+ * Cancels a run's work and waits for it to actually stop.
+ *
+ * Returns whether anything had to be stopped. Throws rather than continuing if
+ * the work outlives the timeout: the caller's next move is to delete the
+ * worktree, and doing that under a live agent would corrupt a run instead of
+ * restarting it.
+ */
+async function stopActiveWork(runId: string, reason: string): Promise<boolean> {
+  const active = activeRuns().get(runId);
+  if (!active) return false;
+
+  cancelRun(runId, reason);
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      active.settled,
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, STOP_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+
+  if (activeRuns().has(runId)) {
+    throw new AppError(
+      `This run did not stop within ${Math.round(STOP_TIMEOUT_MS / 1000)}s. Its agent or a validation command is still running; wait for it to exit before restarting.`,
+      { code: 'stop_timeout' },
+    );
+  }
+
   return true;
 }
 
@@ -251,19 +382,7 @@ export function listAgents(): readonly ImplementationAgent[] {
  * explained rather than a blank one.
  */
 export function startRun(runId: string): void {
-  if (activeRuns().has(runId)) {
-    throw new AppError('This run is already in progress.', { code: 'already_running' });
-  }
-  const controller = new AbortController();
-  activeRuns().set(runId, {
-    controller,
-    startedAt: new Date().toISOString(),
-    phase: 'preparing',
-  });
-
-  void execute(runId, controller.signal, { kind: 'initial' }).finally(() => {
-    activeRuns().delete(runId);
-  });
+  begin(runId, 'preparing', (signal) => execute(runId, signal, { kind: 'initial' }));
 }
 
 export interface RequestChangesOptions {
@@ -283,63 +402,39 @@ export function requestChanges(
   feedback: string,
   options: RequestChangesOptions = {},
 ): void {
-  if (activeRuns().has(runId)) {
-    throw new AppError('This run is already in progress.', { code: 'already_running' });
-  }
   const trimmed = feedback.trim();
   if (!trimmed) throw new AppError('Describe what should change.');
 
-  const controller = new AbortController();
-  activeRuns().set(runId, {
-    controller,
-    startedAt: new Date().toISOString(),
-    phase: 'implementing',
-  });
-
-  void execute(runId, controller.signal, {
-    kind: 'change_request',
-    feedback: trimmed,
-    switchTo: options.mode ?? null,
-  }).finally(() => {
-    activeRuns().delete(runId);
-  });
+  begin(runId, 'implementing', (signal) =>
+    execute(runId, signal, {
+      kind: 'change_request',
+      feedback: trimmed,
+      switchTo: options.mode ?? null,
+    }),
+  );
 }
 
 /** Re-runs validation only, without touching the implementation. */
 export function revalidate(runId: string): void {
-  if (activeRuns().has(runId)) {
-    throw new AppError('This run is already in progress.', { code: 'already_running' });
-  }
-
-  // A read-only run has no diff, so there is nothing to validate. Saying so
-  // beats recording an attempt whose every outcome is "not configured".
-  const run = requireRun(runId);
-  const mode = effectiveWorkMode(run);
-  if (!getWorkMode(mode).runValidation) {
-    throw new AppError(
-      `${WORK_MODE_LABELS[mode]} mode changes nothing, so there is nothing to validate. Switch the run to Build mode first.`,
-      { code: 'wrong_mode' },
-    );
-  }
-
-  const controller = new AbortController();
-  activeRuns().set(runId, {
-    controller,
-    startedAt: new Date().toISOString(),
-    phase: 'validating',
-  });
-
-  void execute(runId, controller.signal, { kind: 'revalidate' }).finally(() => {
-    activeRuns().delete(runId);
-  });
+  assertValidatableMode(requireRun(runId));
+  begin(runId, 'validating', (signal) => execute(runId, signal, { kind: 'revalidate' }));
 }
 
-const LANDABLE_STATUSES: readonly RunStatus[] = ['APPROVED', 'MERGE_CONFLICT', 'LANDING_FAILED'];
+/**
+ * A read-only run has no diff, so there is nothing to validate. Saying so beats
+ * recording an attempt whose every outcome is "not configured".
+ */
+function assertValidatableMode(run: RunView): void {
+  const mode = effectiveWorkMode(run);
+  if (getWorkMode(mode).runValidation) return;
+  throw new AppError(
+    `${WORK_MODE_LABELS[mode]} mode changes nothing, so there is nothing to validate. Switch the run to Build mode first.`,
+    { code: 'wrong_mode' },
+  );
+}
 
 function isLandable(run: RunView): boolean {
-  return LANDABLE_STATUSES.includes(run.status) || (
-    run.status === 'CANCELLED' && run.disposition === 'approved'
-  );
+  return isLandableStatus(run.status, run.disposition);
 }
 
 function enqueueLanding(
@@ -353,19 +448,16 @@ function enqueueLanding(
   const queue = getLandingQueue(key);
   const ahead = (queue.active ? 1 : 0) + queue.items.length;
   const queued = ahead > 0;
-  const controller = new AbortController();
 
-  activeRuns().set(run.id, {
-    controller,
-    startedAt: new Date().toISOString(),
-    phase: queued ? 'queued for landing' : initialPhase,
+  const slot = reserve(run.id, queued ? 'queued for landing' : initialPhase, {
     landingQueueKey: key,
     queuedLanding: queued,
   });
 
   queue.items.push({
     runId: run.id,
-    controller,
+    signal: slot.signal,
+    release: slot.release,
     mode,
     queued,
     repositoryPath: project.repositoryPath,
@@ -401,7 +493,8 @@ function drainLandingQueue(key: string): void {
       landingQueues().delete(key);
       return;
     }
-    if (item.controller.signal.aborted || !activeRuns().has(item.runId)) {
+    if (item.signal.aborted || !activeRuns().has(item.runId)) {
+      item.release();
       continue;
     }
 
@@ -425,8 +518,8 @@ function drainLandingQueue(key: string): void {
       });
     }
 
-    void executeLanding(item.runId, item.controller.signal, item.mode).finally(() => {
-      activeRuns().delete(item.runId);
+    void executeLanding(item.runId, item.signal, item.mode).finally(() => {
+      item.release();
       const latestQueue = landingQueues().get(key);
       if (!latestQueue) return;
       latestQueue.active = false;
@@ -442,9 +535,6 @@ function drainLandingQueue(key: string): void {
 
 /** Starts the approved-run landing flow in an isolated landing worktree. */
 export function landRun(runId: string): void {
-  if (activeRuns().has(runId)) {
-    throw new AppError('This run is already in progress.', { code: 'already_running' });
-  }
   const run = requireRun(runId);
   if (!isLandable(run)) {
     throw new AppError(`Run ${run.id} is ${run.status}; approve it before landing.`);
@@ -456,9 +546,6 @@ export function landRun(runId: string): void {
 
 /** Lets the implementation agent try to resolve an existing landing conflict. */
 export function resolveLandingConflicts(runId: string): void {
-  if (activeRuns().has(runId)) {
-    throw new AppError('This run is already in progress.', { code: 'already_running' });
-  }
   const run = requireRun(runId);
   if (run.status !== 'MERGE_CONFLICT') {
     throw new AppError(`Run ${run.id} is ${run.status}; there is no recorded merge conflict.`);
@@ -468,9 +555,272 @@ export function resolveLandingConflicts(runId: string): void {
   enqueueLanding(run, project, { kind: 'resolve_conflicts' }, 'resolving merge conflicts');
 }
 
+/* ------------------------------------------------------------------ *
+ * Retry and restart
+ * ------------------------------------------------------------------ */
+
+/** Phase name each retry stage resumes at, for the event message. */
+const RETRY_STAGE_PHASES: Record<RetryPlan['stage'], string> = {
+  prepare: 'the worktree',
+  implement: 'the agent pass',
+  validate: 'validation',
+  land: 'landing',
+};
+
+/**
+ * Picks a stopped run back up from wherever it stopped.
+ *
+ * Resumes rather than restarts, which is the whole difference between this and
+ * `restartRun`: the worktree, the branch, the base commit and the agent
+ * session are all kept, and only the phases that never finished run again.
+ * `planRetry` decides where that is, from stored evidence alone â€” see
+ * `domain/retry.ts` for the ordering and why it is what it is.
+ *
+ * Returns the plan it acted on so the caller can say what it did.
+ */
+export function retryRun(runId: string): RetryPlan {
+  const run = requireRun(runId);
+
+  if (isRunActive(runId)) {
+    throw new AppError('This run is already in progress. Cancel it before retrying.', {
+      code: 'already_running',
+    });
+  }
+  if (!RETRYABLE_STATUSES.includes(run.status)) {
+    throw new AppError(
+      `Run ${run.id} is ${run.status}; there is nothing to retry. ${
+        isTerminal(run.status)
+          ? 'It has reached a final state.'
+          : 'Use "Request changes" or "Re-run validation" instead.'
+      }`,
+      { code: 'not_retryable' },
+    );
+  }
+
+  // No mode check, unlike `revalidate`. A read-only run resuming at the
+  // `validate` stage still has work to do â€” the diff is re-collected and the
+  // verdict re-reached â€” and refusing would leave an Ask or Plan run that
+  // stopped after its agent finished with no way forward but a full restart.
+  const plan = planRetry(run);
+
+  const iteration =
+    plan.stage === 'implement' ? lastImplementationIteration(run.iterations) : null;
+
+  appendEvent({
+    runId,
+    type: 'run.retried',
+    level: 'notice',
+    message: `Retrying from ${RETRY_STAGE_PHASES[plan.stage]}: ${plan.reason}`,
+    payload: {
+      stage: plan.stage,
+      reason: plan.reason,
+      resumedSession: plan.resumesSession,
+      iterationOrdinal: iteration?.ordinal ?? null,
+    },
+  });
+
+  switch (plan.stage) {
+    case 'land':
+      enqueueLanding(run, requireProject(run.projectId), { kind: 'land' }, 'landing');
+      break;
+    case 'prepare':
+      // `PREPARING` is only ever entered from `DRAFT`, so a run that stopped
+      // before it had a worktree goes back to a draft first. Nothing is
+      // cleared on the way: with no worktree there is nothing to clear, and a
+      // specification the transformer already produced is reused rather than
+      // paid for twice.
+      setStatus(runId, 'DRAFT', { reason: 'retrying from the start' });
+      startRun(runId);
+      break;
+    case 'implement':
+      begin(runId, 'implementing', (signal) =>
+        execute(runId, signal, { kind: 'retry_iteration' }),
+      );
+      break;
+    case 'validate':
+      begin(runId, 'validating', (signal) => execute(runId, signal, { kind: 'revalidate' }));
+      break;
+  }
+
+  return plan;
+}
+
+/**
+ * Runs the last implementation prompt again, unchanged.
+ *
+ * The narrow action of the three: same worktree, same instruction, one more
+ * attempt. It is for when the pass itself is what went wrong â€” a timeout, a
+ * crashed CLI, an agent that stopped halfway â€” rather than the request, which
+ * is what "Request changes" is for.
+ *
+ * The recorded agent session is resumed when there is one, matching what a
+ * change request does. So the second attempt starts knowing what the first one
+ * already wrote, and a truly cold retry is `restartRun`.
+ */
+export function retryIteration(runId: string): { ordinal: number; resuming: boolean } {
+  const run = requireRun(runId);
+
+  if (isRunActive(runId)) {
+    throw new AppError(
+      'This run is already in progress. Cancel it before retrying the iteration.',
+      { code: 'already_running' },
+    );
+  }
+  if (!ITERATION_RETRYABLE_STATUSES.includes(run.status)) {
+    throw new AppError(
+      `Run ${run.id} is ${run.status}; its current iteration cannot be re-run from here.`,
+      { code: 'not_retryable' },
+    );
+  }
+  if (!run.worktreePath) {
+    throw new AppError('This run has no worktree, so there is no iteration to re-run.', {
+      code: 'no_worktree',
+    });
+  }
+
+  const iteration = lastImplementationIteration(run.iterations);
+  if (!iteration || iteration.prompt.trim().length === 0) {
+    throw new AppError('This run has no recorded agent pass to re-run.', {
+      code: 'no_iteration',
+    });
+  }
+
+  const resuming = run.agentSessionId !== null;
+
+  appendEvent({
+    runId,
+    type: 'run.retried',
+    level: 'notice',
+    message: `Re-running iteration ${iteration.ordinal} with the same prompt`,
+    payload: {
+      stage: 'implement',
+      reason: `iteration ${iteration.ordinal} was re-run at the user's request`,
+      resumedSession: resuming,
+      iterationOrdinal: iteration.ordinal,
+    },
+  });
+
+  begin(runId, 'implementing', (signal) =>
+    execute(runId, signal, { kind: 'retry_iteration' }),
+  );
+
+  return { ordinal: iteration.ordinal, resuming };
+}
+
+export interface RestartResult {
+  branch: string;
+  previousBranch: string | null;
+  worktreeRemoved: boolean;
+  stoppedActiveWork: boolean;
+}
+
+/**
+ * Throws a run's work away and runs the whole pipeline again.
+ *
+ * The forceful one. It stops whatever is running and waits for it to exit,
+ * removes the run's worktree, moves the run onto a fresh branch and puts it
+ * back to `DRAFT` before starting it from the top. The agent starts cold: no
+ * session, no specification, no diff.
+ *
+ * Two decisions worth knowing about:
+ *
+ *  - **The previous branch is kept**, and the restart gets `-r2`, `-r3` and so
+ *    on. `git branch -d` refuses a branch holding commits, which is the
+ *    behaviour this project wants everywhere, so reusing the name would leave a
+ *    run that could not be restarted once its agent had committed. Nothing is
+ *    deleted with `-D` to work around that.
+ *  - **Cleanup happens before any state is written.** If the worktree cannot
+ *    be removed â€” a Windows file lock, an editor holding it open â€” the restart
+ *    fails with that reason and the run is left exactly as it was, rather than
+ *    reset to a draft that can never prepare.
+ */
+export async function restartRun(runId: string): Promise<RestartResult> {
+  const run = requireRun(runId);
+  const project = requireProject(run.projectId);
+
+  if (!canRestart(run.status)) {
+    throw new AppError(
+      `Run ${run.id} is ${run.status}, which is final; it cannot be restarted.`,
+      { code: 'not_restartable' },
+    );
+  }
+
+  const stoppedActiveWork = await stopActiveWork(
+    runId,
+    'Cancelled because the run was restarted',
+  );
+
+  // Held across the cleanup, so nothing can start this run on a worktree that
+  // is halfway through being deleted. Released before the pipeline claims it.
+  const slot = reserve(runId, 'restarting');
+  let branch: string;
+  let worktreeRemoved = false;
+  try {
+    if (run.worktreePath) {
+      const removal = await removeWorktree(
+        project.repositoryPath,
+        run.worktreePath,
+        run.branch,
+        {
+          // Force, because discarding the work is the request. The branch is
+          // kept: the restart moves to a new one instead of deleting commits.
+          force: true,
+          deleteBranch: false,
+          // Both guards the automatic cleanup uses, for the same reasons: a
+          // stale recorded path could hold another run's worktree by now, and
+          // linked paths are unlinked first so a forced remove cannot follow a
+          // junction out into the original checkout.
+          expectBranch: run.branch,
+          linkedPaths: project.linkPaths,
+        },
+      );
+      if (!removal.removed) {
+        throw new AppError(
+          `Could not remove the worktree at ${run.worktreePath}: ${
+            removal.reason ?? 'git refused'
+          }. Close anything using it and try again.`,
+          { code: 'worktree_busy' },
+        );
+      }
+      worktreeRemoved = true;
+    }
+
+    branch = await nextAttemptBranch(project.repositoryPath, run.id);
+
+    resetRunForRestart(runId, {
+      branch,
+      reason: 'restarted by the user',
+      worktreeRemoved,
+      stoppedActiveWork,
+    });
+  } finally {
+    slot.release();
+  }
+
+  startRun(runId);
+
+  return { branch, previousBranch: run.branch, worktreeRemoved, stoppedActiveWork };
+}
+
+/** How many attempts a single run may be restarted onto before giving up. */
+const MAX_RESTART_ATTEMPTS = 50;
+
+/** The first `cockpit/<runId>[-rN]` branch that git does not already hold. */
+async function nextAttemptBranch(repositoryPath: string, runId: string): Promise<string> {
+  for (let attempt = 1; attempt <= MAX_RESTART_ATTEMPTS; attempt += 1) {
+    const candidate = runAttemptBranchName(runId, attempt);
+    if (!(await refExists(repositoryPath, `refs/heads/${candidate}`))) return candidate;
+  }
+  throw new AppError(
+    `Run ${runId} has been restarted ${MAX_RESTART_ATTEMPTS} times. Delete some of its branches or start a new task.`,
+    { code: 'too_many_restarts' },
+  );
+}
+
 type ExecuteMode =
   | { kind: 'initial' }
   | { kind: 'change_request'; feedback: string; switchTo: ResolvedWorkMode | null }
+  | { kind: 'retry_iteration' }
   | { kind: 'revalidate' };
 
 type LandingMode = { kind: 'land' } | { kind: 'resolve_conflicts' };
@@ -505,6 +855,15 @@ async function execute(runId: string, signal: AbortSignal, mode: ExecuteMode): P
         feedback: mode.feedback,
         switched,
       });
+    } else if (mode.kind === 'retry_iteration') {
+      run = await phaseImplement(run, project, profile, workMode, signal, { kind: 'retry' });
+    } else if (mode.kind === 'revalidate') {
+      // Entered here rather than left to `phaseValidate`, which only sets it
+      // when there are checks to run. A read-only run skips that phase without
+      // touching the status, so a run resumed from FAILED or CANCELLED would
+      // arrive at the verdict still wearing a status no verdict can follow.
+      setStatus(run.id, 'VALIDATING', { reason: 'checking the run again' });
+      run = requireRun(run.id);
     }
 
     if (signal.aborted) {
@@ -842,6 +1201,21 @@ async function phaseTransform(
   const providers = runProviders(run.id);
   const transformer = getTransformer(providers.transformer);
 
+  // A retry that resumes from the worktree phase runs this again, and a
+  // specification the transformer already wrote is still the specification for
+  // the same request. Re-transforming would cost another provider call to
+  // produce a differently-worded copy of what is already on the run. A forced
+  // restart clears the spec, which is what makes it re-run here.
+  if (run.spec !== null) {
+    appendEvent({
+      runId: run.id,
+      type: 'transform.skipped',
+      message: 'A specification is already recorded for this run; reusing it',
+      payload: { provider: providers.transformer, reason: 'already recorded' },
+    });
+    return run;
+  }
+
   if (transformer.id === 'none') {
     appendEvent({
       runId: run.id,
@@ -1046,7 +1420,16 @@ async function phasePrepare(
 
 type ImplementMode =
   | { kind: 'initial' }
-  | { kind: 'change_request'; feedback: string; switched: boolean };
+  | { kind: 'change_request'; feedback: string; switched: boolean }
+  /** The last implementation prompt, issued again unchanged. */
+  | { kind: 'retry' };
+
+/** Recorded on the iteration row, so a retry is visible in the run's history. */
+const ITERATION_KIND_FOR_MODE: Record<ImplementMode['kind'], IterationKind> = {
+  initial: 'initial',
+  change_request: 'change_request',
+  retry: 'retry',
+};
 
 async function phaseImplement(
   run: RunView,
@@ -1075,27 +1458,40 @@ async function phaseImplement(
     );
   }
 
-  // Resume when a session exists, so a change request keeps context.
-  const resumeSessionId = mode.kind === 'change_request' ? run.agentSessionId : null;
+  // Resume when a session exists, so a change request or a retry keeps
+  // context. A first pass has no session to resume, and a forced restart
+  // cleared it, which is what makes that one genuinely cold.
+  const resumeSessionId = mode.kind === 'initial' ? null : run.agentSessionId;
+
+  // A retry re-issues the last implementation prompt verbatim: the instruction
+  // is not the thing being changed, the attempt at it is. Falling back to the
+  // initial prompt covers the run that prepared a worktree and then failed
+  // before the agent ever ran.
+  const retriedPrompt =
+    mode.kind === 'retry'
+      ? (lastImplementationIteration(run.iterations)?.prompt.trim() || null)
+      : null;
 
   const prompt =
-    mode.kind === 'initial'
+    mode.kind === 'initial' || (mode.kind === 'retry' && retriedPrompt === null)
       ? buildInitialPrompt({ run, project, profile, mode: workMode })
-      : buildChangeRequestPrompt({
-          run,
-          project,
-          feedback: mode.feedback,
-          validations: latestValidationAttempt(run.id),
-          findings: latestFindings(run),
-          mode: workMode,
-          modeSwitched: mode.switched,
-          resumed: resumeSessionId !== null,
-          // A resumed session already holds what it wrote. Without one the
-          // agent starts cold, so the previous iteration's output has to travel
-          // in the prompt or the follow-up asks for work from nothing.
-          priorOutput:
-            resumeSessionId === null ? (latestIteration(run.id)?.finalText ?? null) : null,
-        });
+      : mode.kind === 'retry'
+        ? (retriedPrompt as string)
+        : buildChangeRequestPrompt({
+            run,
+            project,
+            feedback: mode.feedback,
+            validations: latestValidationAttempt(run.id),
+            findings: latestFindings(run),
+            mode: workMode,
+            modeSwitched: mode.switched,
+            resumed: resumeSessionId !== null,
+            // A resumed session already holds what it wrote. Without one the
+            // agent starts cold, so the previous iteration's output has to
+            // travel in the prompt or the follow-up asks for work from nothing.
+            priorOutput:
+              resumeSessionId === null ? (latestIteration(run.id)?.finalText ?? null) : null,
+          });
 
   // A mode can only take capability away, never add it: the read-only modes
   // force Claude Code's own `plan` permission mode over whatever the project
@@ -1104,7 +1500,7 @@ async function phaseImplement(
 
   const iteration = createIteration({
     runId: run.id,
-    kind: mode.kind === 'initial' ? 'initial' : 'change_request',
+    kind: ITERATION_KIND_FOR_MODE[mode.kind],
     prompt,
     sessionId: resumeSessionId,
     resumed: resumeSessionId !== null,

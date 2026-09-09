@@ -204,6 +204,65 @@ In Ask and Plan mode a profile sets effort and the time cap only.
 The **What will run** panel on that page states exactly what is about to happen
 before you commit to it.
 
+## When a run stops short
+
+A run that failed, was cancelled, or stalled on a landing can be picked back up
+three ways. They are deliberately different sizes, and the run screen only
+offers the ones its stored state supports.
+
+| Action | Worktree | Branch | Agent session | Prompt |
+| --- | --- | --- | --- | --- |
+| **Retry** | kept | kept | resumed if recorded | resumes at the phase that stopped |
+| **Retry iteration** | kept | kept | resumed if recorded | the last one again, unchanged |
+| **Force restart** | rebuilt | fresh `-r2` | cleared | the initial prompt, cold |
+
+**Retry** resumes rather than starting over, and where it resumes comes from the
+run's own record rather than from anything the agent said:
+
+- No worktree — nothing was done, so it runs from the top. A specification the
+  transformer already wrote is reused rather than paid for twice.
+- A worktree but no finished agent pass — it re-issues that pass.
+- A finished agent pass — the failure was downstream, so it re-collects the
+  diff and runs validation and review. The agent is not called at all.
+- `MERGE_CONFLICT` or `LANDING_FAILED` — it retries landing, which keeps its own
+  separate worktree.
+
+The button says which of those it will do, so pressing it holds no surprise.
+
+**Retry iteration** sends the last implementation prompt again, unchanged. It is
+for when the pass is what went wrong — a timeout, a CLI that died, an agent that
+stopped halfway — rather than the request, which is what *Request changes* is
+for. The recorded Claude Code session is resumed when there is one, so the second
+attempt knows what the first already wrote.
+
+Neither retry is offered while a run is live. The honest action there is
+**Cancel**, which already says what it does; a retry that quietly killed a
+working agent would be a cancel wearing a friendlier label.
+
+**Force restart** is the exception, and the only action available mid-run,
+because stopping the work is the request. It cancels whatever is running and
+waits for the process to actually exit, removes the worktree, and starts the
+whole pipeline again with nothing carried over.
+
+- **Discarded:** the worktree and everything uncommitted in it, the agent
+  session, the recorded specification, and the run's approval if it had one.
+- **Kept:** the event log, every iteration row, saved artifacts, the
+  attempt-numbered validation results and review findings, and the recorded
+  cost — that money was spent, and zeroing it would make the run under-report
+  what it actually cost. The next pass writes a new attempt number; the old
+  rows stay as the record of the one before it.
+- **Kept on its own branch:** the previous attempt. It is never deleted. The
+  restart takes the next free `cockpit/<runId>-r2`, `-r3` and so on, because
+  `git branch -d` refuses a branch holding commits and this project never
+  reaches for `-D`. Any commits the discarded attempt made stay reachable.
+
+If the worktree cannot be removed — an editor holding a file open, a Windows
+lock — the restart fails with that reason and the run is left exactly as it was,
+rather than reset to a draft that could never prepare.
+
+A landed or rejected run cannot be restarted. Its commits are on the target
+branch, and undoing that is a git operation you make deliberately.
+
 ## How run isolation works
 
 Each run gets its own worktree and its own branch. Nothing else is touched.
@@ -244,6 +303,9 @@ Specifically:
 - A run that failed or was cancelled keeps its worktree until you ask for it
   back, with **Remove worktrees** on the run screen. Rejecting offers the same
   thing with the option to discard uncommitted work as well.
+- Force restarting removes the worktree but keeps the branch, and prepares the
+  new attempt on `cockpit/<runId>-r2`. Same reason: nothing is deleted with
+  `-D`, so an attempt that committed stays reachable.
 - Linked paths become junctions on Windows (no elevation needed) or symlinks
   elsewhere. Files are *copied* rather than linked, so the agent editing
   `.env.local` cannot reach your original.
@@ -433,10 +495,10 @@ Two honest caveats:
 - **One agent per run.** Concurrent runs across different projects are fine;
   two agents editing one run is not supported. Landing is serialized per
   repository and target branch.
-- **A restart kills in-flight runs.** Child processes do not survive the server
-  stopping. Such runs are marked `FAILED` with "interrupted by a restart" rather
-  than left showing a spinner forever. The worktree and agent session id are
-  both preserved, so the run can be continued.
+- **A server restart kills in-flight runs.** Child processes do not survive the
+  server stopping. Such runs are marked `FAILED` with "interrupted by a restart"
+  rather than left showing a spinner forever. The worktree and agent session id
+  are both preserved, so **Retry** picks the run up at the phase it died in.
 - **No automatic push.** Intentional. Landing can update the local target
   branch after an isolated merge and validation pass, but publishing remains
   yours to do deliberately.

@@ -120,6 +120,40 @@ repair attempt in the landing worktree before Dev Cockpit records manual repair
 instructions for an explicit retry.
 `LANDED` and `REJECTED` are terminal.
 
+Every non-terminal status can also reach `DRAFT`, and that edge exists for one
+caller: a forced restart. `PREPARING` is entered only from `DRAFT`, so a
+restarted run walks through the same door a new one does rather than giving the
+prepare phase a second set of preconditions to satisfy. Nothing else writes
+`DRAFT` — `createRun` inserts it.
+
+## Retry, restart, and the single work slot
+
+Three actions pick a stopped run back up, and they differ in what they keep.
+Where a retry resumes is *computed*, in `src/domain/retry.ts`, from the same
+stored evidence readiness and the progress bar read — a worktree, an iteration
+row, a disposition. Nothing the agent said is consulted, and the run screen
+calls the same function to label the button, so the label cannot promise one
+thing while the orchestrator does another.
+
+```
+planRetry(run) ─► land       when the run is landable (landing keeps its own worktree)
+               ─► prepare    when there is no worktree — nothing was done yet
+               ─► implement  when no implementation iteration finished
+               ─► validate   when one did, so the failure was downstream
+```
+
+`retryIteration` is narrower: it re-issues the last implementation iteration's
+prompt verbatim, resuming the recorded agent session. `restartRun` is the
+forceful one — it stops in-flight work, waits for the process to exit, removes
+the worktree, moves the run to the next free `-rN` branch and re-runs the
+pipeline cold.
+
+One run gets one work slot, claimed through `begin` in the orchestrator. Every
+entry point goes through it, so "is something already running for this run" is
+answered in one place. Each slot carries a `settled` promise: aborting a
+controller only *asks* the agent to stop, and a restart has to know the process
+is genuinely gone before it deletes the worktree that process was running in.
+
 ## Working modes
 
 A run executes in one of three modes, chosen per run. The mode decides *what
