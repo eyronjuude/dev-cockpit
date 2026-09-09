@@ -241,20 +241,25 @@ and a typed payload.
 
 The UI derives its progress display from these rows rather than from a terminal
 transcript, which is why payloads are structured rather than pre-rendered
-strings, and why the feed can offer a "useful progress only" filter at all.
+strings, and why the log can offer filters at all.
 
 `events.seq` is a monotonic integer and doubles as the SSE resume cursor.
 
-The same rows feed two views, ordered opposite ways because they answer
-different questions. `components/event-feed.tsx` is the right-rail progress
-panel: filtered, newest first, so the current state of the run needs no
-scrolling. `components/log-stream.tsx` is the Logs tab: unfiltered by default,
-oldest first, appended at the bottom and following the tail — a log, read the
-way logs are read. Event *messages* are redacted when stored; the stream also
-prints payload prose, so it runs the same patterns client-side through
-`core/redact-patterns.ts`.
+The same rows feed two views that answer different questions.
+`components/log-stream.tsx` is the Logs tab: every line, oldest first, appended
+at the bottom and following the tail — a log, read the way logs are read.
+`components/progress-panel.tsx` is the right rail: the phase bar and the newest
+line alone, because "what is happening right now" is one line, not a list.
 
-Above the feed, `domain/progress.ts` turns a run's status, the orchestrator's
+Both draw their lines with `components/log-line.tsx`, which renders a row per
+event — a glyph chosen by event type, and the event's own message coloured by
+what it means. That row started life in the progress feed and the Logs tab now
+uses it too, so a line reads the same in either place; the event type itself is
+on hover, not in the row. Event *messages* are redacted when stored; the row
+also prints payload prose under the line, so it runs the same patterns
+client-side through `core/redact-patterns.ts`.
+
+Above that line, `domain/progress.ts` turns a run's status, the orchestrator's
 live phase and the run's own output into a phase bar. It is pure and folds no
 events: a bar reconstructed from a replay would disagree with the run record the
 moment the replay was truncated.

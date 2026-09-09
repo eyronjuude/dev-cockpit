@@ -46,12 +46,10 @@ function segmentClass(state: PhaseState, tone: ProgressTone): string {
 export function RunProgressBar({
   progress,
   label,
-  detail,
 }: {
   progress: RunProgress;
   /** What to call the current state — the phase, or the run's status. */
   label: string;
-  detail?: string | null;
 }) {
   const { steps, percent, tone, activeIndex, completed, total } = progress;
   const position = activeIndex === null ? completed : activeIndex + 1;
@@ -84,12 +82,6 @@ export function RunProgressBar({
           />
         ))}
       </div>
-
-      {detail ? (
-        <p className="mt-1 truncate text-[10.5px] text-ink-faint" title={detail}>
-          {detail}
-        </p>
-      ) : null}
     </div>
   );
 }
