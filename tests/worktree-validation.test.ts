@@ -260,6 +260,34 @@ describe('worktree isolation', () => {
     expect(forced.removed).toBe(true);
     expect(fs.existsSync(wtPath)).toBe(false);
   });
+
+  it('force-removes an orphaned run directory nested under the source repository', async () => {
+    const runId = 'run_wt_orphan';
+    const root = path.join(repoDir, 'data', 'worktrees');
+    const wtPath = path.join(root, 'prj', runId);
+    fs.mkdirSync(wtPath, { recursive: true });
+    fs.writeFileSync(path.join(wtPath, 'README.md'), 'left behind\n');
+
+    // Without the registered-worktree check, git walks up to repoDir from this
+    // plain directory and reports main, which made cleanup refuse the orphan.
+    expect(git(['rev-parse', '--abbrev-ref', 'HEAD'], wtPath).trim()).toBe('main');
+
+    const kept = await worktree.removeWorktree(repoDir, wtPath, `cockpit/${runId}`, {
+      root,
+      expectBranch: `cockpit/${runId}`,
+    });
+    expect(kept.removed).toBe(false);
+    expect(kept.reason).toMatch(/not a Git worktree/);
+    expect(fs.existsSync(wtPath)).toBe(true);
+
+    const forced = await worktree.removeWorktree(repoDir, wtPath, `cockpit/${runId}`, {
+      force: true,
+      root,
+      expectBranch: `cockpit/${runId}`,
+    });
+    expect(forced.removed).toBe(true);
+    expect(fs.existsSync(wtPath)).toBe(false);
+  });
 });
 
 describe('diff collection', () => {
