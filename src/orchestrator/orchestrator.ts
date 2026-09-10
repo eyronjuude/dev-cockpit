@@ -32,6 +32,7 @@ import {
   WORK_MODE_WORDING,
   type ResolvedWorkMode,
 } from '@/domain/modes';
+import { modelForProvider, resolveAgentEffort } from '@/domain/models';
 import {
   ITERATION_RETRYABLE_STATUSES,
   lastImplementationIteration,
@@ -94,7 +95,7 @@ import { getTransformer } from '@/transformers/registry';
 import { formatDuration, runValidation, type ValidationRunSummary } from '@/validation/engine';
 import { effectivePermissionMode, getWorkMode, type WorkModeBehaviour } from './modes';
 import { buildChangeRequestPrompt, buildInitialPrompt, readableAttachments } from './prompt';
-import { getProfile, type ExecutionProfile } from './profiles';
+import { getProfile, recommendedModelFor, type ExecutionProfile } from './profiles';
 
 /* ------------------------------------------------------------------ *
  * Cancellation registry
@@ -471,13 +472,26 @@ function implementationFallbackOrder(preferredId: string): ImplementationAgent[]
   return ordered;
 }
 
-function modelForAgent(agentId: string, run: RunView, project: ProjectView): string | null {
-  const runModel = run.agentModel?.trim() || null;
-  const projectModel = project.agentModel?.trim() || null;
-
-  if (agentId === 'claude-code') return runModel ?? projectModel;
-  if (agentId === run.agentProvider) return runModel;
-  return null;
+/**
+ * The model to give one provider in the fallback chain.
+ *
+ * A model id belongs to the provider that named it, so a fallback provider
+ * never inherits the run's: it gets the profile's recommendation for itself, or
+ * its own CLI default. Passing `claude-opus-5` to the Codex CLI would fail the
+ * launch, and a capacity fallback exists precisely to keep a run moving.
+ */
+function modelForAgent(
+  agentId: string,
+  run: RunView,
+  project: ProjectView,
+  profile: ExecutionProfile,
+): string | null {
+  return modelForProvider({
+    provider: agentId,
+    runProvider: run.agentProvider,
+    stored: run.agentModel?.trim() || project.agentModel,
+    recommended: recommendedModelFor(profile, agentId),
+  });
 }
 
 /* ------------------------------------------------------------------ *
@@ -1651,7 +1665,11 @@ async function phaseImplement(
     const agent = agents[index]!;
     const resumeSessionId =
       agent.id === run.agentProvider ? preferredResumeSessionId : null;
-    const model = modelForAgent(agent.id, run, project);
+    const model = modelForAgent(agent.id, run, project, profile);
+    // The model decides the effort it will accept, not the other way round: a
+    // profile's level is clamped to what this model takes rather than the model
+    // being swapped back to suit the profile.
+    const effort = resolveAgentEffort(model, profile.agentEffort);
     const availability: AgentAvailability = await agent.checkAvailability();
 
     if (!availability.available) {
@@ -1690,6 +1708,7 @@ async function phaseImplement(
         sessionId: resumeSessionId,
         resumed: resumeSessionId !== null,
         model,
+        effort: effort.effort,
       },
     });
 
@@ -1706,7 +1725,7 @@ async function phaseImplement(
       additionalDirs,
       model,
       permissionMode,
-      effort: profile.agentEffort,
+      effort: effort.effort,
       timeoutMs: profile.agentTimeoutMs,
       signal,
       onEvent,
@@ -2872,6 +2891,11 @@ async function runLandingAgentIteration(input: {
     resumed: false,
   });
 
+  // Same resolution as an implementation iteration: this runs on the run's own
+  // provider, so it gets the run's model and whatever effort that model takes.
+  const model = modelForAgent(agent.id, run, project, profile);
+  const effort = resolveAgentEffort(model, profile.agentEffort);
+
   appendEvent({
     runId: run.id,
     type: 'agent.started',
@@ -2881,7 +2905,8 @@ async function runLandingAgentIteration(input: {
       provider: agent.id,
       sessionId: null,
       resumed: false,
-      model: run.agentModel ?? project.agentModel,
+      model,
+      effort: effort.effort,
     },
   });
 
@@ -2891,9 +2916,9 @@ async function runLandingAgentIteration(input: {
     prompt,
     worktreePath: landingPath,
     additionalDirs: project.agentAddDirs,
-    model: run.agentModel ?? project.agentModel,
+    model,
     permissionMode: project.effectivePermissionMode,
-    effort: profile.agentEffort,
+    effort: effort.effort,
     timeoutMs: profile.agentTimeoutMs,
     signal,
     onEvent: (event) => handleAgentEvent(run.id, iteration.id, event),

@@ -171,9 +171,9 @@ is genuinely gone before it deletes the worktree that process was running in.
 ## Working modes
 
 A run executes in one of three modes, chosen per run. The mode decides *what
-the run produces*; the execution profile decides *how much effort it spends*.
-They compose, and neither is a separate code path — both are tables the
-orchestrator reads.
+the run produces*; the execution profile decides *how much effort it spends*,
+and recommends the model that spends it. They compose, and none of the three is
+a separate code path — all are tables the orchestrator reads.
 
 ```
                      Ask                Plan               Build
@@ -322,6 +322,15 @@ claude --print
        --permission-prompts none
        --model <model> --effort <level>
 ```
+
+`--model` and `--effort` are resolved together, not independently. The model
+comes from the run, the project or the execution profile in that order
+(`resolveAgentModel`), and the effort is then clamped to what that model
+accepts (`resolveAgentEffort`) — both in `src/domain/models.ts`, both pure, both
+run in the browser by the New Task form so its preview cannot disagree with the
+run. A model that takes no effort setting gets no flag rather than a clamped
+one: sending it is an error, not a no-op. Neither flag is passed to a capacity
+fallback on another vendor's CLI, which would reject the id outright.
 
 Key decisions, each of which was verified against Claude Code 2.1.263 rather
 than assumed:

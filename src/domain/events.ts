@@ -1,5 +1,6 @@
 import type { ExpiryTarget } from './expiry';
 import type { ResolvedWorkMode, WorkMode } from './modes';
+import type { ModelSource } from './models';
 import type { RetryStage } from './retry';
 import type {
   ArtifactKind,
@@ -114,6 +115,10 @@ export interface EventPayloads {
     profile: string;
     mode: WorkMode;
     resolvedMode: ResolvedWorkMode;
+    /** Resolved at creation. Null means the provider's own default. */
+    model: string | null;
+    /** Which of the run, the project or the profile decided that model. */
+    modelSource: ModelSource;
   };
   'run.status_changed': { from: RunStatus; to: RunStatus; reason?: string };
   /** Recorded when Auto chose the mode, so the choice and its reason survive. */
@@ -216,6 +221,15 @@ export interface EventPayloads {
     sessionId: string | null;
     resumed: boolean;
     model: string | null;
+    /**
+     * The effort actually sent, which is not always the profile's.
+     *
+     * Null means none was sent — either the profile named none, or the model
+     * takes none. Recorded because "Deep" on the run no longer implies `xhigh`
+     * reached the CLI, and a log that only stated the profile would be lying by
+     * omission. See `resolveAgentEffort`.
+     */
+    effort?: string | null;
   };
   'agent.message': { iterationId: string; text: string };
   'agent.thinking': { iterationId: string; text: string };

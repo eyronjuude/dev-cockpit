@@ -15,11 +15,20 @@ import {
   type WorkMode,
 } from '@/domain/modes';
 import {
+  agentModelLabel,
+  CLAUDE_CODE_PROVIDER,
+  findAgentModel,
+  listAgentModels,
+  resolveAgentEffort,
+  resolveAgentModel,
+  type EffortResolution,
+} from '@/domain/models';
+import {
   permissionModeAllowsCommands,
   VALIDATION_KIND_LABELS,
   type ExecutionProfileName,
 } from '@/domain/types';
-import type { ExecutionProfile } from '@/orchestrator/profiles';
+import { recommendedModelFor, type ExecutionProfile } from '@/orchestrator/profiles';
 import type { ProjectView, RepositoryState } from '@/services/projects';
 import { AttachmentPicker } from './attachments';
 
@@ -29,6 +38,22 @@ export interface ProviderOption {
   requirement: string;
   available: boolean;
   detail: string;
+}
+
+/**
+ * The effort line under a model tile.
+ *
+ * Says what the model will actually be sent, not what the profile asked for:
+ * the two differ exactly when the choice is interesting, and a tile that
+ * printed the profile's level would hide the one thing worth knowing.
+ */
+function effortFootnote(effort: EffortResolution): string {
+  if (effort.effort === null) {
+    return effort.clamped ? 'takes no effort setting' : 'no effort set';
+  }
+  return effort.clamped
+    ? `effort ${effort.effort} · profile asks ${effort.requested}`
+    : `effort ${effort.effort}`;
 }
 
 /** The one-line consequence of each mode, under its description. */
@@ -46,11 +71,17 @@ const MODE_FOOTNOTES: Record<WorkMode, string> = {
  * actually available on this machine, and an unavailable provider is shown
  * with the reason rather than hidden, so nothing silently does nothing.
  *
- * Two independent choices sit under it, and keeping them separate is the
+ * Three independent choices sit under it, and keeping them separate is the
  * point: the working mode decides *what* the run produces, the execution
- * profile decides *how much effort* it spends. Auto shows the mode it would
- * pick, and why, before anything is created — a guess the user can see is a
- * guess the user can correct.
+ * profile decides *how much effort* it spends, and the model decides *what
+ * spends it*. The profile suggests a model to go with its effort, and the
+ * suggestion is only that — the last panel overrides it without the profile or
+ * its effort changing.
+ *
+ * Auto shows the mode it would pick, and why, before anything is created — a
+ * guess the user can see is a guess the user can correct. The model panel does
+ * the same for effort: where the chosen model will not take the profile's
+ * level, it says which level is actually sent.
  */
 export function NewTaskForm({
   project,
@@ -80,6 +111,16 @@ export function NewTaskForm({
   const [attachments, setAttachments] = useState<File[]>([]);
   const [mode, setMode] = useState<WorkMode>(DEFAULT_WORK_MODE);
   const [profile, setProfile] = useState<ExecutionProfileName>('standard');
+  /**
+   * The model chosen for this run, or null to follow the profile.
+   *
+   * Null is not "no model": it is "whichever this profile recommends", which is
+   * why changing the profile moves it and an explicit pick stays put. Held as
+   * the id rather than a catalogue index so a model typed by hand is the same
+   * kind of value as one clicked.
+   */
+  const [model, setModel] = useState<string | null>(null);
+  const [showCustomModel, setShowCustomModel] = useState(false);
   const [transformer, setTransformer] = useState(defaultTransformer);
   const [reviewer, setReviewer] = useState(defaultReviewer);
   // Prefilled with the checked-out branch when it differs from the project
@@ -103,6 +144,23 @@ export function NewTaskForm({
   const readOnly = isReadOnlyMode(resolution.mode);
   const wording = WORK_MODE_WORDING[resolution.mode];
 
+  // Same three functions the orchestrator calls, so what this panel says is
+  // what the run gets rather than a second description of it.
+  const models = listAgentModels(CLAUDE_CODE_PROVIDER);
+  const recommendedModel = recommendedModelFor(selectedProfile, CLAUDE_CODE_PROVIDER);
+  const modelChoice = resolveAgentModel({
+    requested: model,
+    projectDefault: project.agentModel,
+    recommended: recommendedModel,
+  });
+  const effort = resolveAgentEffort(modelChoice.model, selectedProfile.agentEffort);
+  // What "Follow the profile" would land on, which is the project's default
+  // when one is set — a recommendation is the weakest of the three.
+  const inheritedChoice = resolveAgentModel({
+    projectDefault: project.agentModel,
+    recommended: recommendedModel,
+  });
+
   const submit = async () => {
     setSubmitting(true);
     setError(null);
@@ -112,6 +170,9 @@ export function NewTaskForm({
         request,
         mode,
         profile,
+        // Only when it was chosen here. Omitted, the server applies the same
+        // project-then-profile precedence this form previewed.
+        model: model?.trim() || undefined,
         transformer,
         reviewer,
         baseRef: baseRef.trim() || undefined,
@@ -305,6 +366,7 @@ export function NewTaskForm({
         <div className="grid gap-2 p-3.5 sm:grid-cols-3">
           {profiles.map((option) => {
             const active = option.id === profile;
+            const suggested = recommendedModelFor(option, CLAUDE_CODE_PROVIDER);
             return (
               <button
                 key={option.id}
@@ -323,6 +385,9 @@ export function NewTaskForm({
                 </span>
                 <span className="mt-1.5 block text-[10.5px] text-ink-faint">
                   effort {option.agentEffort}
+                  {/* The model it suggests, so switching profile does not move
+                      the model out from under the user unannounced. */}
+                  {suggested ? ` · ${agentModelLabel(suggested)}` : ''}
                   {readOnly ? '' : ` · reviewer ${option.runReviewer ? 'on' : 'off'}`}
                 </span>
               </button>
@@ -331,8 +396,121 @@ export function NewTaskForm({
         </div>
         {readOnly ? (
           <p className="border-t border-line px-3.5 py-2 text-[12px] text-ink-muted">
-            In {WORK_MODE_LABELS[resolution.mode]} mode the profile sets effort and the time cap
-            only. No checks and no review run either way.
+            In {WORK_MODE_LABELS[resolution.mode]} mode the profile sets the model, the effort
+            and the time cap only. No checks and no review run either way.
+          </p>
+        ) : null}
+      </div>
+
+      <div className="panel">
+        <div className="panel-head">
+          <h2 className="panel-title">Model</h2>
+          <span className="text-[11px] text-ink-faint">what does the work</span>
+        </div>
+        <div className="grid gap-2 p-3.5 sm:grid-cols-2 lg:grid-cols-4">
+          <button
+            type="button"
+            onClick={() => setModel(null)}
+            aria-pressed={model === null}
+            className={`rounded border p-2.5 text-left transition-colors ${
+              model === null
+                ? 'border-accent bg-accent-soft'
+                : 'border-line-strong bg-surface-raised hover:bg-surface-hover'
+            }`}
+          >
+            <span className="block text-[12.5px] font-semibold">Follow the profile</span>
+            <span className="mt-0.5 block text-[11.5px] leading-snug text-ink-muted">
+              {inheritedChoice.source === 'project'
+                ? 'The model saved on this project, whichever profile is selected.'
+                : inheritedChoice.source === 'profile'
+                  ? 'Changes with the profile. Pick one below to hold it steady instead.'
+                  : 'Nothing configured, so Claude Code picks for itself.'}
+            </span>
+            <span className="mt-1.5 block text-[10.5px] text-ink-faint">
+              {inheritedChoice.model === null
+                ? 'provider default'
+                : `${agentModelLabel(inheritedChoice.model)} · ${
+                    inheritedChoice.source === 'project' ? 'project default' : 'recommended'
+                  }`}
+            </span>
+          </button>
+
+          {models.map((option) => {
+            const active = model === option.id;
+            const optionEffort = resolveAgentEffort(option, selectedProfile.agentEffort);
+            return (
+              <button
+                key={option.id}
+                type="button"
+                onClick={() => setModel(option.id)}
+                aria-pressed={active}
+                className={`rounded border p-2.5 text-left transition-colors ${
+                  active
+                    ? 'border-accent bg-accent-soft'
+                    : 'border-line-strong bg-surface-raised hover:bg-surface-hover'
+                }`}
+              >
+                <span className="flex items-center gap-1.5">
+                  <span className="text-[12.5px] font-semibold">{option.label}</span>
+                  {option.id === recommendedModel ? (
+                    <span className="badge badge-accent">{selectedProfile.label}</span>
+                  ) : null}
+                </span>
+                <span className="mt-0.5 block text-[11.5px] leading-snug text-ink-muted">
+                  {option.description}
+                </span>
+                <span className="mt-1.5 block text-[10.5px] text-ink-faint">
+                  {effortFootnote(optionEffort)}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="border-t border-line px-3.5 py-2">
+          <button
+            type="button"
+            className="btn btn-ghost text-[12px]"
+            onClick={() => setShowCustomModel(!showCustomModel)}
+            aria-expanded={showCustomModel}
+          >
+            {showCustomModel ? '▾' : '▸'} Another model
+          </button>
+          {showCustomModel ? (
+            <div className="mt-2">
+              <label className="label" htmlFor="run-model">
+                Model id or alias
+              </label>
+              <input
+                id="run-model"
+                className="input input-mono"
+                list="agent-model-options"
+                value={model ?? ''}
+                placeholder={inheritedChoice.model ?? 'leave blank to follow the profile'}
+                onChange={(e) => setModel(e.target.value || null)}
+              />
+              <datalist id="agent-model-options">
+                {models.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.label}
+                  </option>
+                ))}
+              </datalist>
+              <p className="hint">
+                Passed to Claude Code as <code className="mono">--model</code>, verbatim. Use this
+                for a model newer than this build knows about.
+                {model !== null && findAgentModel(model) === null
+                  ? ' Effort is left at the profile’s level, because there is nothing here that says what this model accepts.'
+                  : ''}
+              </p>
+            </div>
+          ) : null}
+        </div>
+
+        {effort.clamped ? (
+          <p className="border-t border-line px-3.5 py-2 text-[12px] text-ink-muted">
+            <span className="font-semibold text-accent">Effort adjusted</span> — {effort.reason}.
+            The model you picked is kept; the profile’s dial moves to fit it.
           </p>
         ) : null}
       </div>
@@ -379,6 +557,27 @@ export function NewTaskForm({
                 {permissionModeAllowsCommands(project.effectivePermissionMode)
                   ? ' — it can run your checks itself.'
                   : ' — shell commands are refused, so it works blind.'}
+              </>
+            )}
+          </Row>
+          <Row label="Model">
+            {modelChoice.model === null ? (
+              <>Claude Code&rsquo;s own default — nothing here pins one.</>
+            ) : (
+              <>
+                {agentModelLabel(modelChoice.model)}{' '}
+                <code className="mono">{modelChoice.model}</code>
+                {modelChoice.source === 'run'
+                  ? ', chosen for this run'
+                  : modelChoice.source === 'project'
+                    ? ', this project’s saved default'
+                    : `, recommended by the ${selectedProfile.label} profile`}
+                .{' '}
+                {effort.clamped
+                  ? `${effort.reason}.`
+                  : effort.effort === null
+                    ? 'No effort setting is sent.'
+                    : `Effort ${effort.effort}.`}
               </>
             )}
           </Row>

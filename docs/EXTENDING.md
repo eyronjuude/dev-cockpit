@@ -171,6 +171,29 @@ One entry in `PROFILES` in `src/orchestrator/profiles.ts`. A profile is a bundle
 of defaults, not a code path, so nothing else changes. Add the profile name to a
 validation command's `profiles` list to include that command.
 
+Set `recommendedModels` alongside `agentEffort`: the two are one statement about
+how much to spend, and a profile that raised effort while leaving the model to
+chance would only be saying half of it. A provider left out of that map keeps
+its own CLI default, which is the right answer for a provider whose lineup this
+app does not track.
+
+## Adding an implementation model
+
+One entry in `AGENT_MODELS` in `src/domain/models.ts`, and it appears in the New
+Task picker, the project's model field and the settings summary.
+
+**Contract notes.** `id` is passed to the provider CLI verbatim, so it is the
+provider's string and not a display name. `efforts` lists the levels the model
+accepts, weakest first, and an **empty list means the model takes no effort
+setting at all** — the difference matters, because `resolveAgentEffort` drops the
+flag for an empty list and clamps to the nearest member of a non-empty one. Get
+it wrong in the permissive direction and every run on that model fails at
+launch. `provider` is what stops a model id reaching a CLI that would reject it,
+so it must match the `ImplementationAgent.id` that accepts it.
+
+A model already in use needs no entry: an unrecognised id is passed through to
+the provider the run selected, and only its effort range is unknown.
+
 ## Adding a working mode
 
 Five places, in this order. The type checker will find most of them for you:
