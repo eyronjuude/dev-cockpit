@@ -13,8 +13,10 @@ import {
   DEFAULT_ARTIFACT_RETENTION_DAYS,
   DEFAULT_WORKTREE_RETENTION_DAYS,
 } from '@/domain/expiry';
+import type { SuggestedSetup } from '@/advisors/suggest';
 import type { ProjectView } from '@/services/projects';
 import type { RepositoryProbe } from '@/services/projects';
+import type { ProviderOption } from './new-task-form';
 
 /**
  * Project registration and configuration.
@@ -63,7 +65,14 @@ function retentionOr(value: string, fallback: number): number {
   return Math.min(parsed, 3_650);
 }
 
-export function ProjectForm({ existing }: { existing?: ProjectView }) {
+export function ProjectForm({
+  existing,
+  advisors = [],
+}: {
+  existing?: ProjectView;
+  /** Setup advisors that can draft the fields. Empty hides the control. */
+  advisors?: ProviderOption[];
+}) {
   const router = useRouter();
   const editing = existing !== undefined;
 
@@ -132,6 +141,77 @@ export function ProjectForm({ existing }: { existing?: ProjectView }) {
   const [probing, setProbing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const [advisor, setAdvisor] = useState('none');
+  const [suggesting, setSuggesting] = useState(false);
+  const [suggestion, setSuggestion] = useState<SuggestedSetup | null>(null);
+  const [suggestError, setSuggestError] = useState<string | null>(null);
+
+  /**
+   * Asks the server to draft the setup fields from the repository.
+   *
+   * Nothing is applied here. The draft is rendered for review and the user
+   * chooses what to take, because every command proposed is a command that
+   * will later run against their code.
+   */
+  const runSuggest = async () => {
+    if (!repositoryPath.trim()) return;
+    setSuggesting(true);
+    setSuggestError(null);
+    try {
+      const response = await fetch('/api/projects/suggest-setup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repositoryPath, provider: advisor }),
+      });
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as { error?: string } | null;
+        setSuggestError(body?.error ?? `Could not draft a setup (${response.status})`);
+        return;
+      }
+      setSuggestion((await response.json()) as SuggestedSetup);
+    } catch (err) {
+      setSuggestError(err instanceof Error ? err.message : 'Could not draft a setup.');
+    } finally {
+      setSuggesting(false);
+    }
+  };
+
+  const applyValidationCommand = (kind: ValidationKind, command: string) => {
+    setCommands((prev) => ({ ...prev, [kind]: { ...prev[kind], command } }));
+  };
+
+  /**
+   * Takes the whole draft, but only where the form is still blank.
+   *
+   * Matches what `runProbe` already does with the name and default branch:
+   * a suggestion never overwrites something the user typed. Per-field
+   * **Apply** is the deliberate override.
+   */
+  const applyWholeSuggestion = () => {
+    if (!suggestion) return;
+    const { proposal } = suggestion;
+
+    if (!setupCommand.trim() && proposal.setupCommand) setSetupCommand(proposal.setupCommand);
+    if (!developmentCommand.trim() && proposal.developmentCommand) {
+      setDevelopmentCommand(proposal.developmentCommand);
+    }
+    if (!linkPaths.trim() && proposal.linkPaths.length > 0) {
+      setLinkPaths(proposal.linkPaths.join('\n'));
+    }
+    setCommands((prev) => {
+      const next = { ...prev };
+      for (const proposed of proposal.validationCommands) {
+        if (next[proposed.kind].command.trim()) continue;
+        next[proposed.kind] = {
+          ...next[proposed.kind],
+          command: proposed.command,
+          workingDir: proposed.workingDir ?? next[proposed.kind].workingDir,
+        };
+      }
+      return next;
+    });
+  };
 
   const runProbe = async () => {
     if (!repositoryPath.trim()) return;
@@ -295,6 +375,128 @@ export function ProjectForm({ existing }: { existing?: ProjectView }) {
           </div>
         </div>
       </section>
+
+      {/* Draft the setup */}
+      {advisors.length > 0 ? (
+        <section className="panel">
+          <div className="panel-head">
+            <h2 className="panel-title">Draft the setup</h2>
+            <span className="text-[11px] text-ink-faint">nothing is saved until you save</span>
+          </div>
+          <div className="space-y-3 px-3.5 py-3">
+            <div className="flex flex-wrap items-end gap-2">
+              <div className="min-w-52 flex-1">
+                <label className="label" htmlFor="advisor">
+                  Draft using
+                </label>
+                <select
+                  id="advisor"
+                  className="input"
+                  value={advisor}
+                  onChange={(e) => setAdvisor(e.target.value)}
+                >
+                  {advisors.map((option) => (
+                    <option key={option.id} value={option.id} disabled={!option.available}>
+                      {option.label}
+                      {option.available ? '' : ' — unavailable'}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <button
+                type="button"
+                className="btn"
+                disabled={suggesting || !repositoryPath.trim()}
+                onClick={() => void runSuggest()}
+              >
+                {suggesting ? 'Reading the repository…' : 'Suggest setup'}
+              </button>
+            </div>
+
+            <p className="hint">
+              Reads this project&rsquo;s manifests — <code className="mono">package.json</code>,{' '}
+              <code className="mono">pyproject.toml</code>, lockfiles, tool configs — and drafts the
+              commands they imply. Detection alone needs no model; a provider above only refines
+              what the files already say.
+            </p>
+
+            {suggestError ? <p className="hint text-fail">{suggestError}</p> : null}
+
+            {suggestion ? (
+              <div className="space-y-2.5 rounded border border-line px-3 py-2.5">
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <p className="text-[12.5px] text-ink-muted">{suggestion.evidenceSummary}</p>
+                  <span
+                    className={`text-[11px] ${
+                      suggestion.proposal.confidence === 'high' ? 'text-pass' : 'text-ink-faint'
+                    }`}
+                  >
+                    {suggestion.proposal.confidence} confidence
+                  </span>
+                </div>
+
+                {suggestion.fellBackTo ? (
+                  <p className="hint text-warn">
+                    {suggestion.provider} could not be used ({suggestion.fallbackReason}), so this
+                    draft comes from the repository alone.
+                  </p>
+                ) : null}
+
+                {suggestion.proposal.notes ? (
+                  <p className="text-[12px] text-ink-muted">{suggestion.proposal.notes}</p>
+                ) : null}
+
+                <div className="divide-y divide-line">
+                  {suggestion.proposal.validationCommands.map((proposed) => (
+                    <SuggestionRow
+                      key={proposed.kind}
+                      label={VALIDATION_KIND_LABELS[proposed.kind]}
+                      value={proposed.command}
+                      onApply={() => applyValidationCommand(proposed.kind, proposed.command)}
+                    />
+                  ))}
+                  {suggestion.proposal.setupCommand ? (
+                    <SuggestionRow
+                      label="Setup"
+                      value={suggestion.proposal.setupCommand}
+                      onApply={() => setSetupCommand(suggestion.proposal.setupCommand ?? '')}
+                    />
+                  ) : null}
+                  {suggestion.proposal.developmentCommand ? (
+                    <SuggestionRow
+                      label="Development"
+                      value={suggestion.proposal.developmentCommand}
+                      onApply={() =>
+                        setDevelopmentCommand(suggestion.proposal.developmentCommand ?? '')
+                      }
+                    />
+                  ) : null}
+                  {suggestion.proposal.linkPaths.length > 0 ? (
+                    <SuggestionRow
+                      label="Paths to link"
+                      value={suggestion.proposal.linkPaths.join(', ')}
+                      onApply={() => setLinkPaths(suggestion.proposal.linkPaths.join('\n'))}
+                    />
+                  ) : null}
+                </div>
+
+                {suggestion.proposal.validationCommands.length === 0 &&
+                !suggestion.proposal.setupCommand &&
+                !suggestion.proposal.developmentCommand ? (
+                  <p className="hint">
+                    Nothing in the repository supported a command, so there is nothing to apply.
+                    Fill the fields below by hand.
+                  </p>
+                ) : (
+                  <button type="button" className="btn btn-sm" onClick={applyWholeSuggestion}>
+                    Apply all to empty fields
+                  </button>
+                )}
+              </div>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
 
       {/* Validation */}
       <section className="panel">
@@ -645,4 +847,33 @@ function splitLines(value: string): string[] {
     .split('\n')
     .map((line) => line.trim())
     .filter(Boolean);
+}
+
+/**
+ * One proposed value, with the button that takes it.
+ *
+ * The value is shown in full before it can be applied. These strings become
+ * shell commands that later run against the user's code, so reading one is the
+ * point of the step rather than a formality.
+ */
+function SuggestionRow({
+  label,
+  value,
+  onApply,
+}: {
+  label: string;
+  value: string;
+  onApply: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-2.5 py-1.5">
+      <span className="w-24 shrink-0 text-[11.5px] text-ink-muted">{label}</span>
+      <code className="mono flex-1 truncate text-[12px]" title={value}>
+        {value}
+      </code>
+      <button type="button" className="btn btn-sm btn-ghost" onClick={onApply}>
+        Apply
+      </button>
+    </div>
+  );
 }

@@ -218,10 +218,29 @@ function fakeAgent(options: {
   };
 }
 
+/**
+ * Waits for a run to stop being active.
+ *
+ * The deadline is generous because a landing here drives real git, a real
+ * agent stub and real validation subprocesses, and the whole suite competes
+ * for the same CPU and disk. It is here to produce a readable failure rather
+ * than to enforce a performance budget — vitest's own `testTimeout` is the
+ * real bound, and a genuinely stuck run still fails, just later.
+ */
 async function waitForIdle(runId: string): Promise<void> {
-  const deadline = Date.now() + 15_000;
+  const deadline = Date.now() + 90_000;
   while (orchestrator.isRunActive(runId)) {
-    if (Date.now() > deadline) throw new Error(`Timed out waiting for ${runId}`);
+    if (Date.now() > deadline) {
+      const stuck = runsService.requireRun(runId);
+      const tail = eventsService
+        .listEvents(runId)
+        .slice(-8)
+        .map((e) => `${e.type}[${e.level}] ${e.message}`)
+        .join(' | ');
+      throw new Error(
+        `Timed out waiting for ${runId} status=${stuck.status} error=${stuck.error} tail=${tail}`,
+      );
+    }
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
 }

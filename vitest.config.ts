@@ -11,8 +11,13 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['tests/**/*.test.ts'],
-    testTimeout: 30_000,
-    hookTimeout: 30_000,
+    // These are integration tests: real git, real worktrees, real validation
+    // subprocesses, running in parallel forks that compete for the same CPU
+    // and disk. 30s was enough until it wasn't, and a timeout here reports as
+    // a failure of whatever the test was asserting rather than as "the
+    // machine was busy", which is an expensive thing to debug twice.
+    testTimeout: 120_000,
+    hookTimeout: 60_000,
     pool: 'forks',
   },
 });

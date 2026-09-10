@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
+import { advisorStatuses } from '@/advisors/registry';
 import { ProjectForm } from '@/components/project-form';
 import { formatRelative, RunStatusBadge } from '@/components/status';
 import { landingQueueCounts } from '@/services/landing-queue';
@@ -22,6 +23,7 @@ export default async function ProjectPage({
 
   const runs = recentRunSummaries(projectId, 12);
   const landing = landingQueueCounts([project]).get(project.id) ?? NO_LANDINGS;
+  const advisors = await advisorStatuses();
 
   return (
     <div className="mx-auto max-w-5xl px-6 py-6">
@@ -89,7 +91,7 @@ export default async function ProjectPage({
       </section>
 
       <h2 className="mb-2.5 text-[14px] font-semibold">Configuration</h2>
-      <ProjectForm existing={project} />
+      <ProjectForm existing={project} advisors={advisors} />
     </div>
   );
 }

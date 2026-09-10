@@ -213,6 +213,86 @@ describe('worktree isolation', () => {
     expect(fs.readFileSync(path.join(wtPath, '.env.local'), 'utf8')).toContain('PUBLIC_FLAG=1');
   });
 
+  it('replaces a cache-only stub directory rather than letting it block the link', async () => {
+    const runId = 'run_wt_stub';
+    const wtPath = path.join(dataDir, 'worktrees', 'prj', runId);
+    await worktree.prepareWorktree({
+      repositoryPath: repoDir,
+      worktreePath: wtPath,
+      branch: `cockpit/${runId}`,
+      baseRef: 'main',
+      protectedBranches: ['main'],
+    });
+
+    // What a test runner leaves behind when it runs before the link exists.
+    fs.mkdirSync(path.join(wtPath, 'node_modules', '.vite'), { recursive: true });
+
+    const result = await worktree.linkIntoWorktree(repoDir, wtPath, ['node_modules']);
+
+    expect(result.linked).toContain('node_modules');
+    expect(
+      fs.existsSync(path.join(wtPath, 'node_modules', 'left-pad', 'package.json')),
+    ).toBe(true);
+  });
+
+  it('leaves a non-empty directory alone rather than clobbering checked-out work', async () => {
+    const runId = 'run_wt_real_dir';
+    const wtPath = path.join(dataDir, 'worktrees', 'prj', runId);
+    await worktree.prepareWorktree({
+      repositoryPath: repoDir,
+      worktreePath: wtPath,
+      branch: `cockpit/${runId}`,
+      baseRef: 'main',
+      protectedBranches: ['main'],
+    });
+
+    // A real dependency tree already in place: an install, not a stub.
+    fs.mkdirSync(path.join(wtPath, 'node_modules', 'right-pad'), { recursive: true });
+    fs.writeFileSync(path.join(wtPath, 'node_modules', 'right-pad', 'package.json'), '{}');
+
+    const result = await worktree.linkIntoWorktree(repoDir, wtPath, ['node_modules']);
+
+    expect(result.linked).not.toContain('node_modules');
+    // Still the local install, not the repository's.
+    expect(fs.existsSync(path.join(wtPath, 'node_modules', 'right-pad'))).toBe(true);
+    expect(fs.existsSync(path.join(wtPath, 'node_modules', 'left-pad'))).toBe(false);
+  });
+
+  it('provisions a landing worktree with the same linked paths as a run worktree', async () => {
+    const runId = 'run_wt_landing_link';
+    const landingPath = path.join(dataDir, 'landings', 'prj', runId);
+
+    const prepared = await landing.ensureLandingWorktree({
+      repositoryPath: repoDir,
+      worktreePath: landingPath,
+      branch: `cockpit/landing/${runId}`,
+      targetBranch: 'main',
+    });
+    expect(prepared.reused).toBe(false);
+
+    // A landing worktree is as bare as a run worktree; validation runs here
+    // too, so it needs the same provisioning.
+    expect(fs.existsSync(path.join(landingPath, 'node_modules'))).toBe(false);
+
+    const result = await worktree.linkIntoWorktree(repoDir, landingPath, [
+      'node_modules',
+      '.env.local',
+    ]);
+
+    expect(result.linked).toContain('node_modules');
+    expect(
+      fs.existsSync(path.join(landingPath, 'node_modules', 'left-pad', 'package.json')),
+    ).toBe(true);
+
+    // Idempotent: re-provisioning a reused landing worktree changes nothing.
+    const again = await worktree.linkIntoWorktree(repoDir, landingPath, ['node_modules']);
+    expect(again.linked).toEqual([]);
+    expect(again.failed).toEqual([]);
+    expect(
+      fs.existsSync(path.join(landingPath, 'node_modules', 'left-pad', 'package.json')),
+    ).toBe(true);
+  });
+
   it('refuses to link a path that escapes the repository', async () => {
     const runId = 'run_wt_escape_link';
     const wtPath = path.join(dataDir, 'worktrees', 'prj', runId);
