@@ -249,6 +249,15 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+async function removeDirectoryFallback(worktreePath: string): Promise<string | null> {
+  try {
+    await fsp.rm(worktreePath, { recursive: true, force: true });
+    return null;
+  } catch (err) {
+    return errorMessage(err);
+  }
+}
+
 export interface RemoveWorktreeOptions {
   /** Discards uncommitted changes. Off by default. */
   force?: boolean;
@@ -369,6 +378,25 @@ export async function removeWorktree(
   if (res.exitCode !== 0) {
     await pruneWorktrees(repositoryPath);
     if (fs.existsSync(worktreePath)) {
+      const stillRegistered = await registeredWorktreeForPath(repositoryPath, worktreePath);
+      if (force && !stillRegistered && !(await isOwnGitRepository(worktreePath))) {
+        const fallbackError = await removeDirectoryFallback(worktreePath);
+        if (!fallbackError && !fs.existsSync(worktreePath)) {
+          let branchDeleted = false;
+          if (deleteBranch && branch) {
+            const del = await git(repositoryPath, ['branch', '-d', branch], {
+              allowFailure: true,
+            });
+            branchDeleted = del.exitCode === 0;
+          }
+          return { removed: true, branchDeleted };
+        }
+        return {
+          removed: false,
+          branchDeleted: false,
+          reason: fallbackError ?? res.stderr.trim() ?? 'git refused',
+        };
+      }
       return { removed: false, branchDeleted: false, reason: res.stderr.trim() || 'git refused' };
     }
   }
