@@ -16,6 +16,11 @@ export interface ConfiguredValidation {
   blocking: boolean;
 }
 
+export interface ImplementationAgentOption {
+  id: string;
+  label: string;
+}
+
 export interface RunSnapshot {
   run: RunView;
   readiness: ReadinessAssessment;
@@ -29,6 +34,8 @@ export interface RunSnapshot {
    * the project's windows, so the screen and the sweep can never disagree.
    */
   expiry: ExpiryPlan;
+  /** Implementation providers the user may choose for the next agent pass. */
+  implementationAgents: ImplementationAgentOption[];
   /**
    * Whether the attachment list can still be added to or removed from.
    *

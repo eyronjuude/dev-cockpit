@@ -23,7 +23,11 @@ import {
   type ResolvedWorkMode,
   type WorkMode,
 } from '@/domain/modes';
-import { CLAUDE_CODE_PROVIDER, resolveAgentModel } from '@/domain/models';
+import {
+  CLAUDE_CODE_PROVIDER,
+  resolveAgentModel,
+  type ModelResolution,
+} from '@/domain/models';
 import { getProfile, recommendedModelFor } from '@/orchestrator/profiles';
 import {
   ACTIVE_STATUSES,
@@ -63,6 +67,14 @@ export const createRunSchema = z.object({
   model: z.string().trim().max(120).optional(),
   /** Working mode: `plan`, `build`, or `auto` to decide from the request. */
   mode: workModeSchema.default('build'),
+  /** Implementation agent provider id. */
+  agentProvider: z.string().trim().max(60).optional(),
+  /**
+   * The same choice as `model`, under the name the start, retry and restart
+   * endpoints use. Null or blank says it outright: send no model and let the
+   * provider choose, which the precedence chain has no way to state.
+   */
+  agentModel: z.string().trim().max(120).nullable().optional(),
   /** Transformer provider id, or 'none'. */
   transformer: z.string().trim().max(60).optional(),
   /** Reviewer provider id, or 'none'. */
@@ -467,6 +479,7 @@ export function createRun(input: CreateRunInput): RunView {
   // choice between the other two modes, not a third behaviour, so nothing
   // downstream ever has to handle it.
   const resolution = resolveWorkMode(parsed.mode, parsed.request);
+  const agentProvider = parsed.agentProvider?.trim() || CLAUDE_CODE_PROVIDER;
 
   /**
    * Resolved at creation and written down, rather than derived at each phase.
@@ -475,12 +488,20 @@ export function createRun(input: CreateRunInput): RunView {
    * default, or the recommendation attached to a profile, must not retroactively
    * change what an existing run reports having used. It also means the model the
    * New Task form showed is the model on the row.
+   *
+   * A blank `agentModel` is the one case that skips the chain: given explicitly
+   * it means "no model", which is a decision rather than an absence.
    */
-  const model = resolveAgentModel({
-    requested: parsed.model,
-    projectDefault: project.agentModel,
-    recommended: recommendedModelFor(getProfile(parsed.profile), CLAUDE_CODE_PROVIDER),
-  });
+  const model: ModelResolution =
+    parsed.agentModel !== undefined && !parsed.agentModel?.trim()
+      ? { model: null, source: 'run' }
+      : resolveAgentModel({
+          requested: parsed.model ?? parsed.agentModel,
+          // The project default is a Claude Code setting, so it does not follow
+          // a run onto another provider's CLI.
+          projectDefault: agentProvider === CLAUDE_CODE_PROVIDER ? project.agentModel : null,
+          recommended: recommendedModelFor(getProfile(parsed.profile), agentProvider),
+        });
 
   db.insert(runs)
     .values({
@@ -494,7 +515,7 @@ export function createRun(input: CreateRunInput): RunView {
       resolvedMode: resolution.mode,
       baseBranch: parsed.baseRef?.trim() || project.defaultBranch,
       branch: runBranchName(id),
-      agentProvider: CLAUDE_CODE_PROVIDER,
+      agentProvider,
       agentModel: model.model,
       transformerProvider: parsed.transformer ?? 'none',
       reviewerProvider: parsed.reviewer ?? 'none',
@@ -511,6 +532,7 @@ export function createRun(input: CreateRunInput): RunView {
       profile: parsed.profile,
       mode: parsed.mode,
       resolvedMode: resolution.mode,
+      agentProvider,
       model: model.model,
       modelSource: model.source,
     },

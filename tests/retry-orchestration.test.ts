@@ -5,6 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 
 import type { AgentOutcome, AgentStartInput, ImplementationAgent } from '@/agents/types';
+import { CLAUDE_CODE_PROVIDER } from '@/domain/models';
+import { PROFILES, recommendedModelFor } from '@/orchestrator/profiles';
 
 /**
  * Retry and restart driven through the real orchestrator.
@@ -25,6 +27,14 @@ let orchestrator: typeof import('@/orchestrator/orchestrator');
 let closeDb: typeof import('@/db/client').closeDb;
 
 const author = { name: 'Test', email: 'test@example.com' };
+
+/**
+ * What a run created without a model of its own ends up with.
+ *
+ * Resolved at creation from the default profile, so an agent change on such a
+ * run reports moving away from that rather than from nothing.
+ */
+const defaultModel = recommendedModelFor(PROFILES.standard, CLAUDE_CODE_PROVIDER);
 
 function git(args: string[], cwd: string): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true });
@@ -111,6 +121,7 @@ interface AgentCall {
   method: 'startRun' | 'continueRun';
   prompt: string;
   sessionId: string | null;
+  model: string | null;
 }
 
 /**
@@ -137,7 +148,12 @@ function recordingAgent(options: {
         : { available: true, detail: 'fake agent', version: 'test' };
     },
     async startRun(input) {
-      options.calls.push({ method: 'startRun', prompt: input.prompt, sessionId: null });
+      options.calls.push({
+        method: 'startRun',
+        prompt: input.prompt,
+        sessionId: null,
+        model: input.model ?? null,
+      });
       await options.edit?.(input);
       return options.result?.(options.calls.length) ?? outcome();
     },
@@ -146,6 +162,7 @@ function recordingAgent(options: {
         method: 'continueRun',
         prompt: input.prompt,
         sessionId: input.sessionId,
+        model: input.model ?? null,
       });
       await options.edit?.(input);
       return options.result?.(options.calls.length) ?? outcome();
@@ -196,6 +213,132 @@ async function runToCompletion(name: string) {
 
   return { project, runId: run.id, calls };
 }
+
+describe('selecting implementation agents', () => {
+  it('uses the selected implementation agent and model for a new run', async () => {
+    const project = await makeProject('selected-agent-new-run');
+    const created = runsService.createRun({
+      projectId: project.id,
+      request: 'Add a marker file.',
+      agentProvider: 'codex-code',
+      agentModel: 'gpt-5-codex',
+    });
+    const calls: AgentCall[] = [];
+    const restore = orchestrator.registerAgent(
+      recordingAgent({
+        id: 'codex-code',
+        label: 'Codex CLI',
+        calls,
+        edit: writeAgentFile,
+        result: () => outcome({ sessionId: 'sess-codex-selected' }),
+      }),
+    );
+
+    try {
+      orchestrator.startRun(created.id);
+      await waitForIdle(created.id);
+    } finally {
+      restore();
+    }
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.method).toBe('startRun');
+    expect(calls[0]?.model).toBe('gpt-5-codex');
+
+    const completed = runsService.requireRun(created.id);
+    expect(completed.status).toBe('READY');
+    expect(completed.agentProvider).toBe('codex-code');
+    expect(completed.agentModel).toBe('gpt-5-codex');
+    expect(completed.agentSessionId).toBe('sess-codex-selected');
+  });
+
+  it('keeps the session when only the model changes on the same provider', async () => {
+    const { runId } = await runToCompletion('selected-agent-same-provider');
+    const calls: AgentCall[] = [];
+    const restore = orchestrator.registerAgent(
+      recordingAgent({ calls, edit: writeAgentFile }),
+    );
+
+    try {
+      orchestrator.requestChanges(runId, 'Try the follow-up with the stronger model.', {
+        agentModel: 'claude-opus-4.1',
+      });
+      await waitForIdle(runId);
+    } finally {
+      restore();
+    }
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.method).toBe('continueRun');
+    expect(calls[0]?.sessionId).toBe('sess-fake');
+    expect(calls[0]?.model).toBe('claude-opus-4.1');
+
+    const completed = runsService.requireRun(runId);
+    expect(completed.status).toBe('READY');
+    expect(completed.agentProvider).toBe('claude-code');
+    expect(completed.agentModel).toBe('claude-opus-4.1');
+    expect(completed.agentSessionId).toBe('sess-fake');
+
+    const change = eventsService
+      .listEvents(runId)
+      .filter((event) => event.type === 'run.agent_changed')
+      .at(-1);
+    expect(change?.payload).toMatchObject({
+      fromProvider: 'claude-code',
+      toProvider: 'claude-code',
+      fromModel: defaultModel,
+      toModel: 'claude-opus-4.1',
+      sessionCleared: false,
+    });
+  });
+
+  it('starts cold when the next pass switches implementation provider', async () => {
+    const { runId } = await runToCompletion('selected-agent-new-provider');
+    const calls: AgentCall[] = [];
+    const restore = orchestrator.registerAgent(
+      recordingAgent({
+        id: 'codex-code',
+        label: 'Codex CLI',
+        calls,
+        edit: writeAgentFile,
+        result: () => outcome({ sessionId: 'sess-codex-switch' }),
+      }),
+    );
+
+    try {
+      orchestrator.requestChanges(runId, 'Try this follow-up with Codex.', {
+        agentProvider: 'codex-code',
+        agentModel: 'gpt-5-codex',
+      });
+      await waitForIdle(runId);
+    } finally {
+      restore();
+    }
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.method).toBe('startRun');
+    expect(calls[0]?.sessionId).toBeNull();
+    expect(calls[0]?.model).toBe('gpt-5-codex');
+
+    const completed = runsService.requireRun(runId);
+    expect(completed.status).toBe('READY');
+    expect(completed.agentProvider).toBe('codex-code');
+    expect(completed.agentModel).toBe('gpt-5-codex');
+    expect(completed.agentSessionId).toBe('sess-codex-switch');
+
+    const change = eventsService
+      .listEvents(runId)
+      .filter((event) => event.type === 'run.agent_changed')
+      .at(-1);
+    expect(change?.payload).toMatchObject({
+      fromProvider: 'claude-code',
+      toProvider: 'codex-code',
+      fromModel: defaultModel,
+      toModel: 'gpt-5-codex',
+      sessionCleared: true,
+    });
+  });
+});
 
 describe('retrying a failed run', () => {
   it('resumes at the agent pass when the agent never ran', async () => {
@@ -590,6 +733,43 @@ describe('retrying the current iteration', () => {
     expect(after.iterations[1]?.prompt).toBe(originalPrompt);
     // The original row is untouched: a retry appends to the record.
     expect(after.iterations[0]?.kind).toBe('initial');
+  });
+
+  it('can re-issue the prompt with a different provider and model', async () => {
+    const { runId } = await runToCompletion('retry-iteration-agent-switch');
+    const retryCalls: AgentCall[] = [];
+    const restore = orchestrator.registerAgent(
+      recordingAgent({
+        id: 'codex-code',
+        label: 'Codex CLI',
+        calls: retryCalls,
+        edit: writeAgentFile,
+        result: () => outcome({ sessionId: 'sess-codex-retry-iteration' }),
+      }),
+    );
+    let result: ReturnType<typeof orchestrator.retryIteration>;
+
+    try {
+      result = orchestrator.retryIteration(runId, {
+        agentProvider: 'codex-code',
+        agentModel: 'gpt-5-codex',
+      });
+      await waitForIdle(runId);
+    } finally {
+      restore();
+    }
+
+    expect(result).toEqual({ ordinal: 1, resuming: false });
+    expect(retryCalls).toHaveLength(1);
+    expect(retryCalls[0]?.method).toBe('startRun');
+    expect(retryCalls[0]?.sessionId).toBeNull();
+    expect(retryCalls[0]?.model).toBe('gpt-5-codex');
+
+    const after = runsService.requireRun(runId);
+    expect(after.status).toBe('READY');
+    expect(after.agentProvider).toBe('codex-code');
+    expect(after.agentModel).toBe('gpt-5-codex');
+    expect(after.agentSessionId).toBe('sess-codex-retry-iteration');
   });
 
   it('rolls the cost of the retry into the run rather than replacing it', async () => {

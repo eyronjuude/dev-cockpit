@@ -22,6 +22,7 @@ export const EVENT_TYPES = [
   'run.status_changed',
   'run.mode_selected',
   'run.mode_switched',
+  'run.agent_changed',
   'run.retried',
   'run.restarted',
   'run.paused',
@@ -115,6 +116,7 @@ export interface EventPayloads {
     profile: string;
     mode: WorkMode;
     resolvedMode: ResolvedWorkMode;
+    agentProvider: string;
     /** Resolved at creation. Null means the provider's own default. */
     model: string | null;
     /** Which of the run, the project or the profile decided that model. */
@@ -128,6 +130,14 @@ export interface EventPayloads {
     reason: string;
   };
   'run.mode_switched': { from: ResolvedWorkMode; to: ResolvedWorkMode; reason: string };
+  'run.agent_changed': {
+    fromProvider: string;
+    toProvider: string;
+    fromModel: string | null;
+    toModel: string | null;
+    sessionCleared: boolean;
+    reason: string;
+  };
   /** A stopped run was picked back up. `stage` says where it resumed. */
   'run.retried': {
     stage: RetryStage;

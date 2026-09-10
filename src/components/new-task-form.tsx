@@ -87,8 +87,10 @@ export function NewTaskForm({
   project,
   projects,
   profiles,
+  implementers,
   transformers,
   reviewers,
+  defaultImplementer,
   defaultTransformer,
   defaultReviewer,
   repoState,
@@ -96,8 +98,10 @@ export function NewTaskForm({
   project: ProjectView;
   projects: { id: string; name: string }[];
   profiles: ExecutionProfile[];
+  implementers: ProviderOption[];
   transformers: ProviderOption[];
   reviewers: ProviderOption[];
+  defaultImplementer: string;
   defaultTransformer: string;
   defaultReviewer: string;
   repoState: RepositoryState;
@@ -111,6 +115,7 @@ export function NewTaskForm({
   const [attachments, setAttachments] = useState<File[]>([]);
   const [mode, setMode] = useState<WorkMode>(DEFAULT_WORK_MODE);
   const [profile, setProfile] = useState<ExecutionProfileName>('standard');
+  const [implementer, setImplementer] = useState(defaultImplementer);
   /**
    * The model chosen for this run, or null to follow the profile.
    *
@@ -136,6 +141,7 @@ export function NewTaskForm({
     (c) => c.enabled && c.command.trim().length > 0,
   );
   const selectedProfile = profiles.find((p) => p.id === profile) ?? profiles[1] ?? profiles[0]!;
+  const selectedImplementer = implementers.find((p) => p.id === implementer);
 
   // Recomputed as the request is typed, using the same pure function the
   // server uses when the run is created, so the preview cannot disagree with
@@ -145,19 +151,25 @@ export function NewTaskForm({
   const wording = WORK_MODE_WORDING[resolution.mode];
 
   // Same three functions the orchestrator calls, so what this panel says is
-  // what the run gets rather than a second description of it.
-  const models = listAgentModels(CLAUDE_CODE_PROVIDER);
-  const recommendedModel = recommendedModelFor(selectedProfile, CLAUDE_CODE_PROVIDER);
+  // what the run gets rather than a second description of it. Every one of
+  // them is asked about the selected implementer: a model belongs to the
+  // provider that named it, and only Claude Code has a catalogue here.
+  const implementerLabel = selectedImplementer?.label ?? implementer;
+  const models = listAgentModels(implementer);
+  const recommendedModel = recommendedModelFor(selectedProfile, implementer);
+  // The saved default is a Claude Code setting, matching what the server does
+  // with it, so switching implementer does not carry it onto another CLI.
+  const projectModel = implementer === CLAUDE_CODE_PROVIDER ? project.agentModel : null;
   const modelChoice = resolveAgentModel({
     requested: model,
-    projectDefault: project.agentModel,
+    projectDefault: projectModel,
     recommended: recommendedModel,
   });
   const effort = resolveAgentEffort(modelChoice.model, selectedProfile.agentEffort);
   // What "Follow the profile" would land on, which is the project's default
   // when one is set — a recommendation is the weakest of the three.
   const inheritedChoice = resolveAgentModel({
-    projectDefault: project.agentModel,
+    projectDefault: projectModel,
     recommended: recommendedModel,
   });
 
@@ -170,6 +182,7 @@ export function NewTaskForm({
         request,
         mode,
         profile,
+        agentProvider: implementer,
         // Only when it was chosen here. Omitted, the server applies the same
         // project-then-profile precedence this form previewed.
         model: model?.trim() || undefined,
@@ -366,7 +379,7 @@ export function NewTaskForm({
         <div className="grid gap-2 p-3.5 sm:grid-cols-3">
           {profiles.map((option) => {
             const active = option.id === profile;
-            const suggested = recommendedModelFor(option, CLAUDE_CODE_PROVIDER);
+            const suggested = recommendedModelFor(option, implementer);
             return (
               <button
                 key={option.id}
@@ -424,7 +437,7 @@ export function NewTaskForm({
                 ? 'The model saved on this project, whichever profile is selected.'
                 : inheritedChoice.source === 'profile'
                   ? 'Changes with the profile. Pick one below to hold it steady instead.'
-                  : 'Nothing configured, so Claude Code picks for itself.'}
+                  : `Nothing configured, so ${implementerLabel} picks for itself.`}
             </span>
             <span className="mt-1.5 block text-[10.5px] text-ink-faint">
               {inheritedChoice.model === null
@@ -497,8 +510,8 @@ export function NewTaskForm({
                 ))}
               </datalist>
               <p className="hint">
-                Passed to Claude Code as <code className="mono">--model</code>, verbatim. Use this
-                for a model newer than this build knows about.
+                Passed to {implementerLabel} as <code className="mono">--model</code>, verbatim.
+                Use this for a model newer than this build knows about.
                 {model !== null && findAgentModel(model) === null
                   ? ' Effort is left at the profile’s level, because there is nothing here that says what this model accepts.'
                   : ''}
@@ -545,8 +558,8 @@ export function NewTaskForm({
             {repoState.dirty ? ' Uncommitted work there is left alone.' : ''}
           </Row>
           <Row label={readOnly ? 'Agent' : 'Implementer'}>
-            Claude Code, in that worktree. If it is out of provider capacity, Dev Cockpit tries
-            the next implementation fallback. Permission mode:{' '}
+            {implementerLabel}, in that worktree. If it is out of provider capacity, Dev Cockpit
+            tries the next implementation fallback on its own model. Permission mode:{' '}
             {readOnly ? (
               <>
                 <code className="mono">plan</code>, which refuses every edit.
@@ -562,7 +575,7 @@ export function NewTaskForm({
           </Row>
           <Row label="Model">
             {modelChoice.model === null ? (
-              <>Claude Code&rsquo;s own default — nothing here pins one.</>
+              <>{implementerLabel}&rsquo;s own default — nothing here pins one.</>
             ) : (
               <>
                 {agentModelLabel(modelChoice.model)}{' '}
@@ -634,6 +647,20 @@ export function NewTaskForm({
       {showAdvanced ? (
         <div className="panel">
           <div className="space-y-3 px-3.5 py-3">
+            <ProviderSelect
+              id="implementer"
+              label="Implementation agent"
+              hint="Runs the task in the isolated worktree. If it runs out of provider capacity, the configured fallback is tried."
+              options={implementers}
+              value={implementer}
+              onChange={(value) => {
+                setImplementer(value);
+                // A model id belongs to the provider that named it, so a pick
+                // made for the old one is dropped rather than carried over.
+                setModel(null);
+              }}
+            />
+
             <ProviderSelect
               id="transformer"
               label="Request transformer"

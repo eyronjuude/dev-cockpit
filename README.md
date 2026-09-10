@@ -17,10 +17,10 @@ codes and a decision.
 **Implementer ≠ approver.**
 
 Claude Code is the default implementer, with Codex CLI available as the built-in
-fallback when the default provider is out of capacity. Neither is treated as
-authoritative about whether the work is done. Readiness is computed from stored
-run state and deterministic validation results — the agent's own summary is
-recorded as a claim and shown as one.
+fallback when the default provider is out of capacity or as an explicit per-run
+choice. Neither is treated as authoritative about whether the work is done.
+Readiness is computed from stored run state and deterministic validation results
+— the agent's own summary is recorded as a claim and shown as one.
 
 Here is that rule doing its job on a real run:
 
@@ -274,8 +274,8 @@ The button says which of those it will do, so pressing it holds no surprise.
 **Retry iteration** sends the last implementation prompt again, unchanged. It is
 for when the pass is what went wrong — a timeout, a CLI that died, an agent that
 stopped halfway — rather than the request, which is what *Request changes* is
-for. The recorded agent session is resumed when there is one, so the second
-attempt knows what the first already wrote.
+for. The recorded agent session is resumed when there is one and the provider is
+unchanged, so the second attempt knows what the first already wrote.
 
 If the implementation provider reports a quota, credit or rate-limit exhaustion,
 Dev Cockpit tries the next configured implementation fallback. The default order
@@ -285,6 +285,12 @@ fallbacks. If every implementation option is exhausted or unavailable after one
 has exhausted, the run moves to **Paused**. Its worktree, branch, prompt history
 and artifacts stay intact, and **Retry** picks it up at the agent pass after the
 provider limits refresh.
+
+You can also choose the implementation agent and model manually when starting a
+new run, starting a draft, retrying an agent pass, retrying an iteration,
+requesting changes, switching a plan to Build, or force restarting. A provider
+switch starts a fresh session so one CLI is never asked to resume another
+provider's conversation; changing only the model keeps the recorded session.
 
 Neither retry is offered while a run is live. The honest action there is
 **Cancel**, which already says what it does; a retry that quietly killed a
@@ -574,7 +580,7 @@ picture taken before the request survives next to the one taken after it.
 
 | Role | Providers | Credential |
 | --- | --- | --- |
-| Implementer | `claude-code` default, `codex-code` fallback | CLI login |
+| Implementer | `claude-code` default, `codex-code` fallback, selectable per run or follow-up | CLI login |
 | Transformer — request → specification, and the implementer's closing message → plain language | `none` (default), `codex-cli`, `claude-cli`, `openai-api`, `anthropic-api` | CLI login, or an API key |
 | Reviewer — read-only opinion on the diff | `codex-cli`, `openai-api`, `claude-cli`, `anthropic-api` | CLI login, or an API key |
 

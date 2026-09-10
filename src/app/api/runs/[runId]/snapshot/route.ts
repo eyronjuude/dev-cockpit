@@ -1,6 +1,10 @@
 import { handle } from '@/app/api/_lib/handler';
 import { planExpiry } from '@/domain/expiry';
-import { activeRunPhase, isRunActive } from '@/orchestrator/orchestrator';
+import {
+  activeRunPhase,
+  implementationAgentOptions,
+  isRunActive,
+} from '@/orchestrator/orchestrator';
 import { listArtifacts } from '@/services/artifacts';
 import { canModifyAttachments } from '@/services/attachments';
 import { getRunPreview } from '@/services/previews';
@@ -40,6 +44,7 @@ export function GET(_request: Request, { params }: Params) {
       // stored: the answer changes when the project's windows change, and a
       // cached one would be wrong the moment they did.
       expiry: planExpiry(run, retentionPolicy(project)),
+      implementationAgents: implementationAgentOptions(),
       attachmentsMutable: canModifyAttachments(runId) && !active,
       // Needed so the scorecard can distinguish a kind the project never
       // configured from one that is configured but has not run yet.
