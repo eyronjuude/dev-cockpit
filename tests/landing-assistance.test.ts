@@ -340,6 +340,52 @@ describe('landing assistance', () => {
     expect(landed.error).toBeNull();
   });
 
+  it('runs setup for a reused landing worktree when dependencies are still missing', async () => {
+    const repo = makeRepo('reused-landing-setup');
+    fs.writeFileSync(
+      path.join(repo, 'package.json'),
+      JSON.stringify({ name: 'reused-landing-setup', version: '1.0.0' }, null, 2),
+    );
+    await diff.commitAll(repo, 'chore: add package manifest', author);
+
+    const setupCommand =
+      'node -e "const fs=require(\'fs\'); fs.mkdirSync(\'node_modules\',{recursive:true}); fs.writeFileSync(\'node_modules/setup.txt\',\'ready\')"';
+    const validationCommand =
+      'node -e "const fs=require(\'fs\'); if (!fs.existsSync(\'node_modules/setup.txt\')) process.exit(1)"';
+    const project = await projectsService.createProject({
+      name: 'reused-landing-setup',
+      repositoryPath: repo,
+      setupCommand,
+      cleanUpWorktreeOnFinish: false,
+      validationCommands: [{ kind: 'unit', command: validationCommand }],
+    });
+    const { run } = await makeApprovedProjectRun(project, 'file.txt', 'run branch edit\n');
+    const { landingPath } = await prepareStaleLanding(repo, project.id, run);
+
+    expect(fs.existsSync(path.join(landingPath, 'node_modules'))).toBe(false);
+
+    orchestrator.landRun(run.id);
+    await waitForIdle(run.id);
+
+    expect(runsService.requireRun(run.id).status).toBe('LANDED');
+    expect(fs.readFileSync(path.join(landingPath, 'node_modules', 'setup.txt'), 'utf8')).toBe(
+      'ready',
+    );
+
+    const setupEvent = eventsService
+      .listEvents(run.id)
+      .find(
+        (event) =>
+          event.type === 'worktree.setup' &&
+          event.message.includes('setup command exited 0') &&
+          event.payload &&
+          typeof event.payload === 'object' &&
+          'worktreeKind' in event.payload &&
+          event.payload.worktreeKind === 'landing',
+      );
+    expect(setupEvent).toBeTruthy();
+  });
+
   it('records manual instructions when the agent cannot resolve a landing conflict', async () => {
     const { repo, run } = await makeApprovedRun(
       'manual-fallback',

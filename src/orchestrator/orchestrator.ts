@@ -1243,8 +1243,10 @@ async function executeLanding(
 
     // A landing worktree is as bare as a run worktree, and validation runs
     // here too. Linking is idempotent, so a reused landing costs nothing; the
-    // setup command is held back because it is documented as running once in a
-    // fresh worktree.
+    // setup command is normally held back because it is documented as running
+    // once in a fresh worktree. If a reused landing is still missing its
+    // dependency tree, though, run setup as a repair step so updating project
+    // setup can fix an already-created landing worktree.
     const landingProvision = await provisionWorktree({
       run,
       project,
@@ -1703,7 +1705,7 @@ async function provisionWorktree(input: {
   project: ProjectView;
   worktreePath: string;
   kind: 'run' | 'landing';
-  /** Off for a reused landing worktree: setup is documented as running once. */
+  /** Off for a reused landing worktree unless dependencies are still missing. */
   runSetupCommand: boolean;
   signal: AbortSignal;
 }): Promise<WorktreeProvisionResult> {
@@ -1716,10 +1718,16 @@ async function provisionWorktree(input: {
   );
 
   let setupExitCode: number | null = null;
-  if (runSetupCommand && project.setupCommand?.trim()) {
+  const readinessBeforeSetup = checkDependencyReadiness(project.repositoryPath, worktreePath);
+  const setupCommand = project.setupCommand?.trim() ?? '';
+  const shouldRunSetup = Boolean(
+    setupCommand && (runSetupCommand || !readinessBeforeSetup.ready),
+  );
+
+  if (shouldRunSetup) {
     if (kind === 'run') setPhase(run.id, 'setup');
     const result = await runCommand({
-      command: project.setupCommand,
+      command: setupCommand,
       cwd: worktreePath,
       timeoutMs: 20 * 60 * 1000,
       signal,
@@ -1731,7 +1739,7 @@ async function provisionWorktree(input: {
       kind: 'stdout_log',
       label: kind === 'landing' ? 'Landing worktree setup output' : 'Worktree setup output',
       fileName: path.join('setup', kind === 'landing' ? 'landing-setup.log' : 'setup.log'),
-      content: `Command: ${project.setupCommand}\nExit code: ${result.exitCode}\n\n--- stdout ---\n${result.stdout}\n\n--- stderr ---\n${result.stderr}`,
+      content: `Command: ${setupCommand}\nExit code: ${result.exitCode}\n\n--- stdout ---\n${result.stdout}\n\n--- stderr ---\n${result.stderr}`,
       meta: { exitCode: result.exitCode, durationMs: result.durationMs, worktreeKind: kind },
     });
 
@@ -1744,7 +1752,7 @@ async function provisionWorktree(input: {
         message: `Setup command exited ${result.exitCode}. Validation may fail as a result.`,
         payload: {
           linked: linkResult.linked,
-          setupCommand: project.setupCommand,
+          setupCommand,
           setupExitCode: result.exitCode,
           worktreeKind: kind,
         },
@@ -1752,7 +1760,10 @@ async function provisionWorktree(input: {
     }
   }
 
-  const readiness = checkDependencyReadiness(project.repositoryPath, worktreePath);
+  const readiness =
+    setupExitCode === null
+      ? readinessBeforeSetup
+      : checkDependencyReadiness(project.repositoryPath, worktreePath);
 
   const linkedNote =
     linkResult.linked.length > 0 ? `linked ${linkResult.linked.join(', ')}` : 'nothing linked';
