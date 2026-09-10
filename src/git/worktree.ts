@@ -179,6 +179,38 @@ export async function pruneWorktrees(repositoryPath: string): Promise<void> {
   await git(repositoryPath, ['worktree', 'prune'], { allowFailure: true });
 }
 
+function samePath(left: string, right: string): boolean {
+  const resolvedLeft = path.resolve(left);
+  const resolvedRight = path.resolve(right);
+  return process.platform === 'win32'
+    ? resolvedLeft.toLowerCase() === resolvedRight.toLowerCase()
+    : resolvedLeft === resolvedRight;
+}
+
+async function registeredWorktreeForPath(
+  repositoryPath: string,
+  worktreePath: string,
+): Promise<WorktreeEntry | null> {
+  const expected = path.resolve(worktreePath);
+  const entries = await listWorktrees(repositoryPath);
+  return entries.find((entry) => samePath(entry.path, expected)) ?? null;
+}
+
+async function isOwnGitRepository(worktreePath: string): Promise<boolean> {
+  const res = await git(worktreePath, ['rev-parse', '--show-toplevel'], {
+    allowFailure: true,
+  });
+  return res.exitCode === 0 && samePath(res.stdout.trim(), worktreePath);
+}
+
+function branchDescription(branch: string | null): string {
+  return branch ?? 'detached HEAD';
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 export interface RemoveWorktreeOptions {
   /** Discards uncommitted changes. Off by default. */
   force?: boolean;
@@ -230,22 +262,53 @@ export async function removeWorktree(
   }
 
   const exists = fs.existsSync(worktreePath);
+  const registered = exists ? await registeredWorktreeForPath(repositoryPath, worktreePath) : null;
 
-  if (exists && expectBranch) {
+  if (exists && registered && expectBranch) {
     // A stale recorded path could now hold another run's worktree. Checking
-    // what is actually checked out is what keeps this run's cleanup from
-    // reaching anything that is not this run's.
-    const head = await git(worktreePath, ['rev-parse', '--abbrev-ref', 'HEAD'], {
-      allowFailure: true,
-    });
-    const checkedOut = head.stdout.trim();
-    if (head.exitCode === 0 && checkedOut && checkedOut !== expectBranch) {
+    // the repository's registered worktree entry, rather than running git
+    // inside the directory, avoids mistaking an orphaned directory nested under
+    // the main checkout for the main checkout itself.
+    if (registered.branch !== expectBranch) {
       return {
         removed: false,
         branchDeleted: false,
-        reason: `worktree is on ${checkedOut}, not ${expectBranch}`,
+        reason: `worktree is on ${branchDescription(registered.branch)}, not ${expectBranch}`,
       };
     }
+  }
+
+  if (exists && !registered) {
+    if (await isOwnGitRepository(worktreePath)) {
+      return {
+        removed: false,
+        branchDeleted: false,
+        reason: 'path is a Git repository, not a registered worktree',
+      };
+    }
+
+    if (!force) {
+      return {
+        removed: false,
+        branchDeleted: false,
+        reason: 'path is not a Git worktree; force cleanup is required',
+      };
+    }
+
+    await unlinkWorktreeLinks(worktreePath, linkedPaths);
+    try {
+      await fsp.rm(worktreePath, { recursive: true, force: true });
+    } catch (err) {
+      return { removed: false, branchDeleted: false, reason: errorMessage(err) };
+    }
+
+    let branchDeleted = false;
+    if (deleteBranch && branch) {
+      const del = await git(repositoryPath, ['branch', '-d', branch], { allowFailure: true });
+      branchDeleted = del.exitCode === 0;
+    }
+
+    return { removed: true, branchDeleted };
   }
 
   if (!force && exists) {
