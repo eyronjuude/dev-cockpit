@@ -49,7 +49,11 @@ export async function GET(request: Request, { params }: Params) {
       attachment.fileName,
     )}"`,
     // An attachment is never rewritten: removing it is the only edit.
-    'Cache-Control': 'private, max-age=31536000, immutable',
+    // `no-transform` also keeps Next's response-compression middleware from
+    // piping large files through gzip: a big file written faster than the
+    // client drains it can pile up concurrent 'drain' listeners on that one
+    // Gzip stream and trip MaxListenersExceededWarning.
+    'Cache-Control': 'private, max-age=31536000, immutable, no-transform',
     'X-Content-Type-Options': 'nosniff',
   };
 

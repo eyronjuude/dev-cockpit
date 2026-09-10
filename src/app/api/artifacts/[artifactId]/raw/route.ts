@@ -41,8 +41,12 @@ export async function GET(request: Request, { params }: Params) {
     'Content-Disposition': `${inline && !download ? 'inline' : 'attachment'}; filename="${encodeURIComponent(
       artifact.fileName,
     )}"`,
-    // Artifacts are immutable once written.
-    'Cache-Control': 'private, max-age=31536000, immutable',
+    // Artifacts are immutable once written. `no-transform` keeps Next's
+    // response-compression middleware from piping large files through gzip:
+    // a big file written faster than the client drains it can pile up
+    // concurrent 'drain' listeners on that one Gzip stream and trip
+    // MaxListenersExceededWarning.
+    'Cache-Control': 'private, max-age=31536000, immutable, no-transform',
     'X-Content-Type-Options': 'nosniff',
   };
 
