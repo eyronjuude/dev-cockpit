@@ -107,10 +107,23 @@ async function makeApprovedRun(
   return runsService.requireRun(run.id);
 }
 
+/**
+ * Waits for a run to stop being active.
+ *
+ * Generous for the same reason as in `landing-assistance.test.ts`: a landing
+ * drives real git and real subprocesses while the rest of the suite competes
+ * for the machine. The deadline exists to give a readable failure, not to
+ * police duration.
+ */
 async function waitForIdle(runId: string): Promise<void> {
-  const deadline = Date.now() + 15_000;
+  const deadline = Date.now() + 90_000;
   while (orchestrator.isRunActive(runId)) {
-    if (Date.now() > deadline) throw new Error(`Timed out waiting for ${runId}`);
+    if (Date.now() > deadline) {
+      const stuck = runsService.requireRun(runId);
+      throw new Error(
+        `Timed out waiting for ${runId} status=${stuck.status} error=${stuck.error}`,
+      );
+    }
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
 }

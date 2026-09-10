@@ -1,10 +1,13 @@
 import Link from 'next/link';
 
+import { advisorStatuses } from '@/advisors/registry';
 import { ProjectForm } from '@/components/project-form';
 
 export const dynamic = 'force-dynamic';
 
-export default function NewProjectPage() {
+export default async function NewProjectPage() {
+  const advisors = await advisorStatuses();
+
   return (
     <div className="mx-auto max-w-3xl px-6 py-6">
       <header className="mb-5">
@@ -22,7 +25,7 @@ export default function NewProjectPage() {
         </p>
       </header>
 
-      <ProjectForm />
+      <ProjectForm advisors={advisors} />
     </div>
   );
 }

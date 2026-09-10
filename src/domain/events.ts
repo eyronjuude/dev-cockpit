@@ -177,6 +177,14 @@ export interface EventPayloads {
     linked: string[];
     setupCommand: string | null;
     setupExitCode: number | null;
+    /**
+     * Which worktree this was. Both kinds are provisioned, and a landing
+     * failure reads very differently from a run failure, so the log says so.
+     */
+    worktreeKind?: 'run' | 'landing';
+    /** Set when the checks were about to run without their dependencies. */
+    missingDependencyDirs?: string[];
+    expectedDependencyDirs?: string[];
   };
   /**
    * A cleanup pass over the run's worktrees. One entry per worktree it looked

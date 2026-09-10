@@ -71,6 +71,7 @@ import { appendEvent } from '@/services/events';
 import { tryRecordImplementationMap } from '@/services/implementation-map';
 import { stopRunPreview } from '@/services/previews';
 import { requireProject, type ProjectView } from '@/services/projects';
+import { checkDependencyReadiness } from '@/services/repo-evidence';
 import { cleanUpFinishedRunWorktrees, cleanUpRunWorktrees } from '@/services/worktrees';
 import {
   assessReadiness,
@@ -1240,6 +1241,19 @@ async function executeLanding(
       },
     });
 
+    // A landing worktree is as bare as a run worktree, and validation runs
+    // here too. Linking is idempotent, so a reused landing costs nothing; the
+    // setup command is held back because it is documented as running once in a
+    // fresh worktree.
+    const landingProvision = await provisionWorktree({
+      run,
+      project,
+      worktreePath: landing.worktreePath,
+      kind: 'landing',
+      runSetupCommand: !landing.reused,
+      signal,
+    });
+
     if (mode.kind === 'resolve_conflicts') {
       const conflictResolution = await tryResolveLandingConflicts({
         run,
@@ -1359,6 +1373,23 @@ async function executeLanding(
 
     if (validation.blocking) {
       appendLandingValidationFailed(run.id, validation, targetBranch);
+
+      if (!landingProvision.dependenciesReady) {
+        // An agent cannot edit its way out of a missing dependency tree. The
+        // repair pass would burn a full iteration and fail identically, so
+        // stop and say what actually needs doing.
+        await finishLandingFailureWithInstructions({
+          run,
+          project,
+          landingPath: landing.worktreePath,
+          targetBranch,
+          validation,
+          reason: `The landing worktree has no dependencies (${landingProvision.missingDependencyDirs.join(
+            ', ',
+          )} absent), so the checks could not have passed. Set "Paths to link" or a setup command on the project and land again.`,
+        });
+        return;
+      }
 
       const repair = await tryRepairLandingValidation({
         run,
@@ -1632,19 +1663,64 @@ async function phasePrepare(
     },
   });
 
-  // Link what the checks need but a fresh worktree does not have.
+  await provisionWorktree({
+    run,
+    project,
+    worktreePath: prepared.worktreePath,
+    kind: 'run',
+    runSetupCommand: true,
+    signal,
+  });
+
+  return requireRun(run.id);
+}
+
+export interface WorktreeProvisionResult {
+  linked: string[];
+  failed: { path: string; error: string }[];
+  setupExitCode: number | null;
+  /** False only when the checks clearly cannot have their dependencies. */
+  dependenciesReady: boolean;
+  missingDependencyDirs: string[];
+}
+
+/**
+ * Gives a freshly created worktree what the checks need and it does not have.
+ *
+ * Both worktree kinds go through here. A run worktree and a landing worktree
+ * are both `git worktree add` output — neither has `node_modules`, neither has
+ * an untracked env file — so provisioning only one of them meant landing
+ * validation failed on projects whose runs validated perfectly well.
+ *
+ * Nothing here is fatal. A junction that cannot be created and a setup command
+ * that exits non-zero are both reported and stepped over, because the checks
+ * may still work and guessing otherwise would fail runs that would have
+ * passed. What the caller gets back is an honest account, including whether
+ * the dependencies ended up present at all.
+ */
+async function provisionWorktree(input: {
+  run: RunView;
+  project: ProjectView;
+  worktreePath: string;
+  kind: 'run' | 'landing';
+  /** Off for a reused landing worktree: setup is documented as running once. */
+  runSetupCommand: boolean;
+  signal: AbortSignal;
+}): Promise<WorktreeProvisionResult> {
+  const { run, project, worktreePath, kind, runSetupCommand, signal } = input;
+
   const linkResult = await linkIntoWorktree(
     project.repositoryPath,
-    prepared.worktreePath,
+    worktreePath,
     project.linkPaths,
   );
 
   let setupExitCode: number | null = null;
-  if (project.setupCommand?.trim()) {
-    setPhase(run.id, 'setup');
+  if (runSetupCommand && project.setupCommand?.trim()) {
+    if (kind === 'run') setPhase(run.id, 'setup');
     const result = await runCommand({
       command: project.setupCommand,
-      cwd: prepared.worktreePath,
+      cwd: worktreePath,
       timeoutMs: 20 * 60 * 1000,
       signal,
     });
@@ -1653,10 +1729,10 @@ async function phasePrepare(
     await writeTextArtifact({
       runId: run.id,
       kind: 'stdout_log',
-      label: 'Worktree setup output',
-      fileName: path.join('setup', 'setup.log'),
+      label: kind === 'landing' ? 'Landing worktree setup output' : 'Worktree setup output',
+      fileName: path.join('setup', kind === 'landing' ? 'landing-setup.log' : 'setup.log'),
       content: `Command: ${project.setupCommand}\nExit code: ${result.exitCode}\n\n--- stdout ---\n${result.stdout}\n\n--- stderr ---\n${result.stderr}`,
-      meta: { exitCode: result.exitCode, durationMs: result.durationMs },
+      meta: { exitCode: result.exitCode, durationMs: result.durationMs, worktreeKind: kind },
     });
 
     if (result.exitCode !== 0 && !result.aborted) {
@@ -1670,10 +1746,13 @@ async function phasePrepare(
           linked: linkResult.linked,
           setupCommand: project.setupCommand,
           setupExitCode: result.exitCode,
+          worktreeKind: kind,
         },
       });
     }
   }
+
+  const readiness = checkDependencyReadiness(project.repositoryPath, worktreePath);
 
   const linkedNote =
     linkResult.linked.length > 0 ? `linked ${linkResult.linked.join(', ')}` : 'nothing linked';
@@ -1686,17 +1765,48 @@ async function phasePrepare(
     runId: run.id,
     type: 'worktree.setup',
     level: linkResult.failed.length > 0 ? 'notice' : 'info',
-    message: `Worktree setup: ${linkedNote}${failedNote}${
+    message: `${kind === 'landing' ? 'Landing worktree' : 'Worktree'} setup: ${linkedNote}${failedNote}${
       setupExitCode === null ? '' : `; setup command exited ${setupExitCode}`
     }`,
     payload: {
       linked: linkResult.linked,
       setupCommand: project.setupCommand ?? null,
       setupExitCode,
+      worktreeKind: kind,
     },
   });
 
-  return requireRun(run.id);
+  if (!readiness.ready) {
+    // The difference between a check that failed and a check that never had a
+    // chance. Saying so here is what stops the repair loop treating a missing
+    // dependency tree as a code defect.
+    appendEvent({
+      runId: run.id,
+      type: 'worktree.setup',
+      level: 'notice',
+      message: `No dependencies in the ${
+        kind === 'landing' ? 'landing worktree' : 'worktree'
+      }: ${readiness.missing.join(', ')} ${
+        readiness.missing.length === 1 ? 'is' : 'are'
+      } absent. Checks that need them will fail for that reason alone. Set "Paths to link" or a setup command on the project.`,
+      payload: {
+        linked: linkResult.linked,
+        setupCommand: project.setupCommand ?? null,
+        setupExitCode,
+        worktreeKind: kind,
+        missingDependencyDirs: readiness.missing,
+        expectedDependencyDirs: readiness.expected,
+      },
+    });
+  }
+
+  return {
+    linked: linkResult.linked,
+    failed: linkResult.failed,
+    setupExitCode,
+    dependenciesReady: readiness.ready,
+    missingDependencyDirs: readiness.missing,
+  };
 }
 
 /* ------------------------------------------------------------------ *

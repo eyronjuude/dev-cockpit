@@ -76,6 +76,30 @@ export interface LinkResult {
 }
 
 /**
+ * Whether an existing target is a stub safe to delete before linking.
+ *
+ * Safe means: a real directory holding nothing, or holding nothing but
+ * dot-prefixed cache entries such as `.vite` or `.cache`. A tool that ran
+ * before the link existed can create one of these, and it would otherwise
+ * block the link permanently, because `linkIntoWorktree` skips any target
+ * that exists.
+ *
+ * Everything else is refused. A symlink is already a link, and a directory
+ * with real content is checked-out work — deleting either would be the
+ * clobbering this check exists to prevent.
+ */
+async function isReplaceableStub(target: string): Promise<boolean> {
+  try {
+    const stat = await fsp.lstat(target);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) return false;
+    const entries = await fsp.readdir(target);
+    return entries.every((entry) => entry.startsWith('.'));
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Makes selected paths from the main checkout available inside the worktree.
  *
  * A fresh worktree has no `node_modules` and no untracked `.env.local`, which
@@ -111,8 +135,22 @@ export async function linkIntoWorktree(
       continue;
     }
     if (fs.existsSync(target)) {
-      // Tracked content already checked out; do not clobber it.
-      continue;
+      // Tracked content already checked out; do not clobber it. The one
+      // exception is a stub a tool created on its way past: a validation run
+      // writing `node_modules/.vite` leaves a directory holding nothing but a
+      // cache, and without this that stub would block the link for good.
+      if (!(await isReplaceableStub(target))) continue;
+      try {
+        await fsp.rm(target, { recursive: true, force: true });
+      } catch (err) {
+        failed.push({
+          path: clean,
+          error: `could not replace the empty directory already there: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        });
+        continue;
+      }
     }
 
     try {

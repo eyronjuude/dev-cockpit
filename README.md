@@ -111,12 +111,20 @@ a page in another tab cannot start a run.
 1. Go to **Projects → Register a project**.
 2. Enter the absolute path of a local Git repository and press **Check**. The
    path is resolved to the repository root and the default branch is detected.
-3. Fill in whichever validation commands the project has. Leave the rest blank —
-   a blank command means *not configured*, which is reported as such and never
-   as a failure.
-4. Under **Worktree setup**, list the paths each run needs but a fresh worktree
-   will not have. `node_modules` is the usual one; `.env.local` is common.
-5. Save.
+3. Press **Suggest setup**. Dev Cockpit reads the repository's manifests —
+   `package.json`, `pyproject.toml`, lockfiles, tool configs — and drafts the
+   commands they imply. Review each one and **Apply** the ones you want, or
+   **Apply all to empty fields**. Nothing is saved and nothing already typed is
+   overwritten. Detection needs no model; the provider dropdown only refines
+   what the files already say, and falls back to plain detection if it cannot
+   run.
+4. Fill in or correct whichever validation commands the project has. Leave the
+   rest blank — a blank command means *not configured*, which is reported as
+   such and never as a failure.
+5. Under **Worktree setup**, list the paths each run needs but a fresh worktree
+   will not have, or give a setup command that installs them. See
+   [Dependencies in a worktree](#dependencies-in-a-worktree) for which to pick.
+6. Save.
 
 A worked example, for a typical Node project:
 
@@ -128,11 +136,65 @@ A worked example, for a typical Node project:
 | Build | `npm run build` |
 | Development command | `npm run dev` |
 | Paths to link | `node_modules` |
-| Setup command | *(blank — linking `node_modules` is enough)* |
+| Setup command | *(blank — linking `node_modules` is enough, unless the project builds with Turbopack)* |
 | Open command | `code {path}` |
 | Permission mode | `bypassPermissions` (default) — **skips every permission check**, so the agent can run those four commands itself |
 
+A Python project, for contrast:
+
+| Field | Value |
+| --- | --- |
+| Unit | `uv run pytest` |
+| Lint | `uv run ruff check .` |
+| Development command | `uv run flask --app app run` |
+| Paths to link | *(blank — a virtualenv cannot be linked)* |
+| Setup command | `uv sync` |
+
 Nothing is mandatory except the repository path and a name.
+
+### Dependencies in a worktree
+
+Every run gets a fresh `git worktree`, and a fresh worktree has no
+`node_modules` and no `.venv`. Validation runs there, so the dependencies have
+to get there somehow. Two mechanisms, and the right one depends on the project:
+
+| Mechanism | Disk per worktree | Use it when |
+| --- | --- | --- |
+| **Paths to link** | ~0 | the build tool resolves through a link |
+| **Setup command** | one install | it does not, or the run may change dependencies |
+
+Linking is a junction on Windows and a symlink elsewhere, so it costs nothing
+and takes no time. Prefer it.
+
+Two cases where linking does not work, both worth knowing before you spend an
+afternoon on them:
+
+- **Turbopack refuses it.** A Next.js build caps module resolution at its
+  workspace root and rejects a link that leaves it — `Symlink
+  [project]/node_modules is invalid, it points out of the filesystem root`.
+  A Next.js project needs a setup command. **Suggest setup** already knows
+  this and proposes one.
+- **A virtualenv cannot be moved.** A venv records absolute paths in
+  `pyvenv.cfg` and in script shebangs, so a linked one points its interpreter
+  back at your checkout. Install it instead.
+
+When an install is the only option, the package manager decides what it costs.
+Measured on this repository — 331 packages, Next 16, `better-sqlite3` — into
+one worktree on the same volume as the package store:
+
+| Setup command | Disk consumed | Time |
+| --- | --- | --- |
+| `pnpm install --prefer-offline` | 52 MB | 32s |
+| `npm install --prefer-offline` | 422 MB | 4m 19s |
+
+pnpm hardlinks from its content-addressed store instead of copying, which is
+where the difference comes from. It only holds when the store and the worktree
+are on the same volume — a store on `C:` and worktrees on `E:` makes pnpm fall
+back to copying. `pnpm store path` says where yours is; `store-dir` in an
+`.npmrc` moves it.
+
+Both mechanisms apply to the landing worktree as well as the run worktree, so a
+project that validates on a run also validates when it lands.
 
 ## Start a task
 

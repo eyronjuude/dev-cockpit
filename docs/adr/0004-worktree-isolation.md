@@ -16,7 +16,9 @@ worktree under `<data>/landings/<projectId>/<runId>` to merge, validate, and
 then fast-forward the local target branch. Nothing pushes.
 
 Configured paths are linked into the worktree: directories as junctions on
-Windows (no elevation required) or symlinks elsewhere, files copied.
+Windows (no elevation required) or symlinks elsewhere, files copied. Both
+worktree kinds are provisioned the same way, by one `provisionWorktree` helper:
+a landing worktree is as bare as a run worktree and validation runs there too.
 
 ## Why
 
@@ -50,4 +52,19 @@ landing still needs the run worktree.
   finished statuses this immediate cleanup deliberately leaves alone.)*
 - Junction creation can fail on unusual filesystems. Failures are reported per
   path in a `worktree.setup` event rather than failing the run.
+- **Linking does not work for every build tool.** Turbopack caps module
+  resolution at its workspace root and rejects a link that leaves it —
+  `Symlink [project]/node_modules is invalid, it points out of the filesystem
+  root`, verified against Next 16.3.4. Per-entry junctions inside a real
+  `node_modules` fail the same way: "files outside of the workspace root are
+  not compiled." Such a project needs a setup command instead, and the disk
+  cost is then real — 52 MB with pnpm hardlinking from a same-volume store,
+  422 MB with npm copying. `collectRepoEvidence` detects the case and
+  `proposeProjectSetup` proposes an install for it (ADR 0013).
+- A worktree whose dependencies never arrived is reported as such in a
+  `worktree.setup` notice, and landing skips its AI repair pass for that
+  reason. An agent cannot edit its way out of a missing dependency tree, so
+  attempting it burned a full iteration and failed identically. The check is
+  structural — are the ecosystem's dependency directories present — so it is
+  reliable when it says no and makes no promise when it says yes.
 - Publishing the work is manual. Deliberate.

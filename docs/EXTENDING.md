@@ -1,6 +1,6 @@
 # Extending Dev Cockpit
 
-Five boundaries are designed to be extended. Each is an interface plus a
+Six boundaries are designed to be extended. Each is an interface plus a
 registry, and the orchestrator only ever talks to the interface.
 
 ## Adding a transformer provider
@@ -64,6 +64,65 @@ with its availability and requirement shown.
 the orchestrator catches it, records `transform.failed`, and continues with the
 request as written. Never mutate `input.request`. `summariseOutcome` is optional;
 omit it if the provider cannot do it.
+
+## Adding a setup advisor
+
+A setup advisor drafts a project's configuration when it is registered — the
+install command, the dev command, and which of the six validation kinds map to
+which commands.
+
+It is deliberately **not** a transformer. The transformer contract forbids file
+paths and shell commands, and an advisor deals in exactly those, so it has its
+own boundary rather than bending that one.
+
+Two properties matter more than the model behind it:
+
+- **It cannot read the repository.** The CLI providers run with no tools, so
+  the evidence is gathered by `collectRepoEvidence` in
+  `src/services/repo-evidence.ts` and handed over. An advisor refines a
+  proposal; it never discovers one. If you need a new fact about a repository,
+  add it to the evidence collector, not to a prompt.
+- **It degrades to the deterministic proposal.** `DeterministicAdvisor` is the
+  default and returns the rule-derived proposal untouched. Every other provider
+  returns that same proposal, with `fellBackTo: 'deterministic'` and a reason,
+  on any failure. There is no error path that leaves the user with nothing.
+
+**1. Implement the interface** in `src/advisors/providers.ts`. Copy
+`ClaudeCliAdvisor` for a CLI-backed provider or `OpenAiAdvisor` for an
+API-backed one:
+
+```ts
+export class MyAdvisor implements SetupAdvisor {
+  readonly id = 'my-advisor';
+  readonly label = 'My advisor';
+  readonly requirement = 'Requires MY_API_KEY in the environment.';
+
+  async checkAvailability(): Promise<ProviderAvailability> { /* ... */ }
+
+  async suggestSetup(input: SuggestSetupInput): Promise<SuggestSetupResult> {
+    // On any problem: return fallback(input, this.id, reason, durationMs)
+  }
+}
+```
+
+**2. Register it** in `src/advisors/registry.ts`.
+
+That is all. It appears in the **Draft the setup** provider list on the project
+form, with its availability and requirement shown.
+
+**Contract notes.** Never throw — return a fallback result instead, because a
+broken button is worse than a plain draft. Run every response through
+`normaliseAdvisorResponse`: it closes the validation-kind enum so a model
+cannot invent a seventh kind, and caps every string, because these values
+become shell commands. Never propose a command the evidence does not support; a
+blank check reports as "not configured", and a guessed one reports as a
+failure.
+
+**Security note.** Script names and values from the repository reach the prompt.
+They are extracted fields, capped in count and length, and never whole files —
+`README` and documentation are deliberately excluded. Treat them as data. The
+control that matters is the human review step: nothing an advisor returns is
+saved, and every command is displayed in full before it can be applied.
 
 ## Adding a reviewer
 
