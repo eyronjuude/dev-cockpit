@@ -9,7 +9,7 @@ import {
 } from '@/app/api/_lib/uploads';
 import { DEFAULT_WORK_MODE, workModeSchema } from '@/domain/modes';
 import { executionProfileSchema, runStatusSchema } from '@/domain/types';
-import { startRun } from '@/orchestrator/orchestrator';
+import { getAgent, startRun } from '@/orchestrator/orchestrator';
 import { addAttachments } from '@/services/attachments';
 import { tryRecordImplementationMap } from '@/services/implementation-map';
 import { createRun, listRuns } from '@/services/runs';
@@ -40,6 +40,8 @@ const createSchema = z.object({
   title: z.string().trim().max(200).optional(),
   profile: executionProfileSchema.optional(),
   mode: workModeSchema.optional(),
+  agentProvider: z.string().trim().max(60).optional(),
+  agentModel: z.string().trim().max(120).nullable().optional(),
   transformer: z.string().max(60).optional(),
   reviewer: z.string().max(60).optional(),
   baseRef: z.string().max(200).optional(),
@@ -79,6 +81,7 @@ export function POST(request: Request) {
   return handle(async () => {
     assertLocalRequest(request);
     const { input, files } = await readCreateRequest(request);
+    if (input.agentProvider?.trim()) getAgent(input.agentProvider);
 
     const run = createRun({
       projectId: input.projectId,
@@ -86,6 +89,8 @@ export function POST(request: Request) {
       title: input.title,
       profile: input.profile ?? 'standard',
       mode: input.mode ?? DEFAULT_WORK_MODE,
+      agentProvider: input.agentProvider,
+      agentModel: input.agentModel,
       transformer: input.transformer,
       reviewer: input.reviewer,
       baseRef: input.baseRef,

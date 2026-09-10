@@ -56,6 +56,10 @@ export const createRunSchema = z.object({
   profile: executionProfileSchema.default('standard'),
   /** Working mode: `plan`, `build`, or `auto` to decide from the request. */
   mode: workModeSchema.default('build'),
+  /** Implementation agent provider id. */
+  agentProvider: z.string().trim().max(60).optional(),
+  /** Implementation model. Null or blank lets the provider choose its default. */
+  agentModel: z.string().trim().max(120).nullable().optional(),
   /** Transformer provider id, or 'none'. */
   transformer: z.string().trim().max(60).optional(),
   /** Reviewer provider id, or 'none'. */
@@ -460,6 +464,13 @@ export function createRun(input: CreateRunInput): RunView {
   // choice between the other two modes, not a third behaviour, so nothing
   // downstream ever has to handle it.
   const resolution = resolveWorkMode(parsed.mode, parsed.request);
+  const agentProvider = parsed.agentProvider?.trim() || 'claude-code';
+  const agentModel =
+    parsed.agentModel === undefined
+      ? agentProvider === 'claude-code'
+        ? project.agentModel
+        : null
+      : parsed.agentModel?.trim() || null;
 
   db.insert(runs)
     .values({
@@ -473,8 +484,8 @@ export function createRun(input: CreateRunInput): RunView {
       resolvedMode: resolution.mode,
       baseBranch: parsed.baseRef?.trim() || project.defaultBranch,
       branch: runBranchName(id),
-      agentProvider: 'claude-code',
-      agentModel: project.agentModel,
+      agentProvider,
+      agentModel,
       transformerProvider: parsed.transformer ?? 'none',
       reviewerProvider: parsed.reviewer ?? 'none',
     })
@@ -490,6 +501,8 @@ export function createRun(input: CreateRunInput): RunView {
       profile: parsed.profile,
       mode: parsed.mode,
       resolvedMode: resolution.mode,
+      agentProvider,
+      agentModel,
     },
   });
 

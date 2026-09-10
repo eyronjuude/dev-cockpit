@@ -82,6 +82,9 @@ export function RunView({ initial }: { initial: RunSnapshot }) {
   const currentFindings = run.findings.filter((f) => f.attempt === latestFindingAttempt);
 
   const workMode = effectiveWorkMode(run);
+  const agentLabel =
+    snapshot.implementationAgents.find((agent) => agent.id === run.agentProvider)?.label ??
+    run.agentProvider;
 
   // Phase-level progress, recomputed from the snapshot the stream keeps fresh,
   // so the bar advances while the run does rather than on a page reload.
@@ -160,6 +163,7 @@ export function RunView({ initial }: { initial: RunSnapshot }) {
             mono
           />
           <Meta label="Profile" value={run.profile} />
+          <Meta label="Agent" value={agentLabel} />
           <Meta label="Elapsed" value={elapsed} />
           {run.agentSessionId ? (
             <Meta label="Session" value={run.agentSessionId.slice(0, 8)} mono />

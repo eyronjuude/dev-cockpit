@@ -446,6 +446,46 @@ export function listAgents(): readonly ImplementationAgent[] {
   return Object.values(AGENTS);
 }
 
+export interface ImplementationAgentOption {
+  id: string;
+  label: string;
+}
+
+export interface ImplementationAgentStatus extends ImplementationAgentOption {
+  requirement: string;
+  available: boolean;
+  detail: string;
+}
+
+export function implementationAgentOptions(): ImplementationAgentOption[] {
+  return listAgents().map((agent) => ({ id: agent.id, label: agent.label }));
+}
+
+export async function implementationAgentStatuses(): Promise<ImplementationAgentStatus[]> {
+  return Promise.all(
+    listAgents().map(async (agent) => {
+      try {
+        const availability = await agent.checkAvailability();
+        return {
+          id: agent.id,
+          label: agent.label,
+          requirement: 'CLI login',
+          available: availability.available,
+          detail: availability.detail,
+        };
+      } catch (err) {
+        return {
+          id: agent.id,
+          label: agent.label,
+          requirement: 'CLI login',
+          available: false,
+          detail: errorMessage(err),
+        };
+      }
+    }),
+  );
+}
+
 const DEFAULT_AGENT_FALLBACKS: readonly string[] = ['claude-code', 'codex-code'];
 const AGENT_FALLBACKS_ENV = 'DEV_COCKPIT_AGENT_FALLBACKS';
 
@@ -475,9 +515,75 @@ function modelForAgent(agentId: string, run: RunView, project: ProjectView): str
   const runModel = run.agentModel?.trim() || null;
   const projectModel = project.agentModel?.trim() || null;
 
+  if (agentId !== run.agentProvider) return null;
   if (agentId === 'claude-code') return runModel ?? projectModel;
-  if (agentId === run.agentProvider) return runModel;
-  return null;
+  return runModel;
+}
+
+export interface AgentRunOptions {
+  agentProvider?: string;
+  agentModel?: string | null;
+}
+
+interface AgentOverride {
+  provider?: string;
+  model: string | null;
+  modelSpecified: boolean;
+}
+
+function normaliseAgentOverride(options: AgentRunOptions): AgentOverride | null {
+  const provider = options.agentProvider?.trim();
+  if (provider) getAgent(provider);
+
+  const modelSpecified = Object.hasOwn(options, 'agentModel');
+  const model =
+    modelSpecified && typeof options.agentModel === 'string'
+      ? options.agentModel.trim() || null
+      : (options.agentModel ?? null);
+
+  if (!provider && !modelSpecified) return null;
+  return { provider: provider || undefined, model, modelSpecified };
+}
+
+function applyAgentOverride(
+  run: RunView,
+  override: AgentOverride | null | undefined,
+  reason: string,
+): RunView {
+  if (!override) return run;
+
+  const fromProvider = run.agentProvider;
+  const fromModel = run.agentModel?.trim() || null;
+  const toProvider = override.provider ?? fromProvider;
+  const providerChanged = toProvider !== fromProvider;
+  const toModel = override.modelSpecified ? override.model : providerChanged ? null : fromModel;
+
+  if (toProvider === fromProvider && toModel === fromModel) return run;
+
+  updateRunFields(run.id, {
+    agentProvider: toProvider,
+    agentModel: toModel,
+    ...(providerChanged ? { agentSessionId: null } : {}),
+  });
+
+  appendEvent({
+    runId: run.id,
+    type: 'run.agent_changed',
+    level: 'notice',
+    message: `Implementation agent changed from ${fromProvider}${
+      fromModel ? ` (${fromModel})` : ''
+    } to ${toProvider}${toModel ? ` (${toModel})` : ''}`,
+    payload: {
+      fromProvider,
+      toProvider,
+      fromModel,
+      toModel,
+      sessionCleared: providerChanged,
+      reason,
+    },
+  });
+
+  return requireRun(run.id);
 }
 
 /* ------------------------------------------------------------------ *
@@ -492,8 +598,11 @@ function modelForAgent(agentId: string, run: RunView, project: ProjectView): str
  * writes its state before moving on, so a crash leaves a run that can be
  * explained rather than a blank one.
  */
-export function startRun(runId: string): void {
-  begin(runId, 'preparing', (signal) => execute(runId, signal, { kind: 'initial' }));
+export function startRun(runId: string, options: AgentRunOptions = {}): void {
+  const agentOverride = normaliseAgentOverride(options);
+  begin(runId, 'preparing', (signal) =>
+    execute(runId, signal, { kind: 'initial', agentOverride }),
+  );
 }
 
 export interface RequestChangesOptions {
@@ -505,6 +614,10 @@ export interface RequestChangesOptions {
    * have changed, and asked to build what it just planned.
    */
   mode?: ResolvedWorkMode;
+  /** Run the next implementation attempt with a different implementation agent. */
+  agentProvider?: string;
+  /** Run the next implementation attempt with a different model. Null uses the provider default. */
+  agentModel?: string | null;
 }
 
 /** Continues an existing run with user feedback, resuming the agent session. */
@@ -515,12 +628,14 @@ export function requestChanges(
 ): void {
   const trimmed = feedback.trim();
   if (!trimmed) throw new AppError('Describe what should change.');
+  const agentOverride = normaliseAgentOverride(options);
 
   begin(runId, 'implementing', (signal) =>
     execute(runId, signal, {
       kind: 'change_request',
       feedback: trimmed,
       switchTo: options.mode ?? null,
+      agentOverride,
     }),
   );
 }
@@ -689,7 +804,7 @@ const RETRY_STAGE_PHASES: Record<RetryPlan['stage'], string> = {
  *
  * Returns the plan it acted on so the caller can say what it did.
  */
-export function retryRun(runId: string): RetryPlan {
+export function retryRun(runId: string, options: AgentRunOptions = {}): RetryPlan {
   const run = requireRun(runId);
 
   if (isRunActive(runId)) {
@@ -713,6 +828,16 @@ export function retryRun(runId: string): RetryPlan {
   // verdict re-reached â€” and refusing would leave an Ask or Plan run that
   // stopped after its agent finished with no way forward but a full restart.
   const plan = planRetry(run);
+  const agentOverride = normaliseAgentOverride(options);
+  if (agentOverride && plan.stage !== 'prepare' && plan.stage !== 'implement') {
+    throw new AppError(
+      'This retry does not rerun the implementation agent, so there is no agent or model to switch.',
+      { code: 'wrong_stage' },
+    );
+  }
+  const selectedProvider = agentOverride?.provider ?? run.agentProvider;
+  const resumesSession = plan.resumesSession && selectedProvider === run.agentProvider;
+  const appliedPlan: RetryPlan = { ...plan, resumesSession };
 
   const iteration =
     plan.stage === 'implement' ? lastImplementationIteration(run.iterations) : null;
@@ -725,7 +850,7 @@ export function retryRun(runId: string): RetryPlan {
     payload: {
       stage: plan.stage,
       reason: plan.reason,
-      resumedSession: plan.resumesSession,
+      resumedSession: resumesSession,
       iterationOrdinal: iteration?.ordinal ?? null,
     },
   });
@@ -741,11 +866,11 @@ export function retryRun(runId: string): RetryPlan {
       // specification the transformer already produced is reused rather than
       // paid for twice.
       setStatus(runId, 'DRAFT', { reason: 'retrying from the start' });
-      startRun(runId);
+      startRun(runId, options);
       break;
     case 'implement':
       begin(runId, 'implementing', (signal) =>
-        execute(runId, signal, { kind: 'retry_iteration' }),
+        execute(runId, signal, { kind: 'retry_iteration', agentOverride }),
       );
       break;
     case 'validate':
@@ -753,7 +878,7 @@ export function retryRun(runId: string): RetryPlan {
       break;
   }
 
-  return plan;
+  return appliedPlan;
 }
 
 /**
@@ -764,12 +889,16 @@ export function retryRun(runId: string): RetryPlan {
  * crashed CLI, an agent that stopped halfway â€” rather than the request, which
  * is what "Request changes" is for.
  *
- * The recorded agent session is resumed when there is one, matching what a
- * change request does. So the second attempt starts knowing what the first one
- * already wrote, and a truly cold retry is `restartRun`.
+ * The recorded agent session is resumed when there is one and the provider is
+ * unchanged, matching what a change request does. Switching providers starts
+ * cold because sessions belong to one CLI.
  */
-export function retryIteration(runId: string): { ordinal: number; resuming: boolean } {
+export function retryIteration(
+  runId: string,
+  options: AgentRunOptions = {},
+): { ordinal: number; resuming: boolean } {
   const run = requireRun(runId);
+  const agentOverride = normaliseAgentOverride(options);
 
   if (isRunActive(runId)) {
     throw new AppError(
@@ -796,7 +925,8 @@ export function retryIteration(runId: string): { ordinal: number; resuming: bool
     });
   }
 
-  const resuming = run.agentSessionId !== null;
+  const selectedProvider = agentOverride?.provider ?? run.agentProvider;
+  const resuming = run.agentSessionId !== null && selectedProvider === run.agentProvider;
 
   appendEvent({
     runId,
@@ -812,7 +942,7 @@ export function retryIteration(runId: string): { ordinal: number; resuming: bool
   });
 
   begin(runId, 'implementing', (signal) =>
-    execute(runId, signal, { kind: 'retry_iteration' }),
+    execute(runId, signal, { kind: 'retry_iteration', agentOverride }),
   );
 
   return { ordinal: iteration.ordinal, resuming };
@@ -845,7 +975,11 @@ export interface RestartResult {
  *    fails with that reason and the run is left exactly as it was, rather than
  *    reset to a draft that can never prepare.
  */
-export async function restartRun(runId: string): Promise<RestartResult> {
+export async function restartRun(
+  runId: string,
+  options: AgentRunOptions = {},
+): Promise<RestartResult> {
+  normaliseAgentOverride(options);
   const run = requireRun(runId);
   const project = requireProject(run.projectId);
 
@@ -909,7 +1043,7 @@ export async function restartRun(runId: string): Promise<RestartResult> {
     slot.release();
   }
 
-  startRun(runId);
+  startRun(runId, options);
 
   return { branch, previousBranch: run.branch, worktreeRemoved, stoppedActiveWork };
 }
@@ -929,11 +1063,12 @@ async function nextAttemptBranch(repositoryPath: string, runId: string): Promise
   );
 }
 
-type ExecuteMode =
+type ExecuteMode = { agentOverride?: AgentOverride | null } & (
   | { kind: 'initial' }
   | { kind: 'change_request'; feedback: string; switchTo: ResolvedWorkMode | null }
   | { kind: 'retry_iteration' }
-  | { kind: 'revalidate' };
+  | { kind: 'revalidate' }
+);
 
 type LandingMode = { kind: 'land' } | { kind: 'resolve_conflicts' };
 
@@ -943,6 +1078,12 @@ async function execute(runId: string, signal: AbortSignal, mode: ExecuteMode): P
   const profile = getProfile(run.profile);
 
   try {
+    run = applyAgentOverride(
+      run,
+      mode.agentOverride,
+      mode.kind === 'initial' ? 'selected for this run' : 'selected for this iteration',
+    );
+
     // The working mode governs which phases run at all, so it is settled
     // before the first one. A switch is applied here rather than inside a
     // phase: the stored mode has to be true for the whole of the iteration it
@@ -2854,6 +2995,7 @@ async function runLandingAgentIteration(input: {
 }): Promise<{ completed: boolean; iterationId: string }> {
   const { run, project, profile, landingPath, signal, kind, prompt } = input;
   const agent = getAgent(run.agentProvider);
+  const model = modelForAgent(agent.id, run, project);
   const label = kind === 'merge_resolution' ? 'merge resolution' : 'landing repair';
   const title = kind === 'merge_resolution' ? 'Merge resolution' : 'Landing repair';
 
@@ -2881,7 +3023,7 @@ async function runLandingAgentIteration(input: {
       provider: agent.id,
       sessionId: null,
       resumed: false,
-      model: run.agentModel ?? project.agentModel,
+      model,
     },
   });
 
@@ -2891,7 +3033,7 @@ async function runLandingAgentIteration(input: {
     prompt,
     worktreePath: landingPath,
     additionalDirs: project.agentAddDirs,
-    model: run.agentModel ?? project.agentModel,
+    model,
     permissionMode: project.effectivePermissionMode,
     effort: profile.agentEffort,
     timeoutMs: profile.agentTimeoutMs,

@@ -56,8 +56,10 @@ export function NewTaskForm({
   project,
   projects,
   profiles,
+  implementers,
   transformers,
   reviewers,
+  defaultImplementer,
   defaultTransformer,
   defaultReviewer,
   repoState,
@@ -65,8 +67,10 @@ export function NewTaskForm({
   project: ProjectView;
   projects: { id: string; name: string }[];
   profiles: ExecutionProfile[];
+  implementers: ProviderOption[];
   transformers: ProviderOption[];
   reviewers: ProviderOption[];
+  defaultImplementer: string;
   defaultTransformer: string;
   defaultReviewer: string;
   repoState: RepositoryState;
@@ -80,6 +84,10 @@ export function NewTaskForm({
   const [attachments, setAttachments] = useState<File[]>([]);
   const [mode, setMode] = useState<WorkMode>(DEFAULT_WORK_MODE);
   const [profile, setProfile] = useState<ExecutionProfileName>('standard');
+  const [implementer, setImplementer] = useState(defaultImplementer);
+  const [agentModel, setAgentModel] = useState(
+    defaultImplementer === 'claude-code' ? (project.agentModel ?? '') : '',
+  );
   const [transformer, setTransformer] = useState(defaultTransformer);
   const [reviewer, setReviewer] = useState(defaultReviewer);
   // Prefilled with the checked-out branch when it differs from the project
@@ -95,6 +103,7 @@ export function NewTaskForm({
     (c) => c.enabled && c.command.trim().length > 0,
   );
   const selectedProfile = profiles.find((p) => p.id === profile) ?? profiles[1] ?? profiles[0]!;
+  const selectedImplementer = implementers.find((p) => p.id === implementer);
 
   // Recomputed as the request is typed, using the same pure function the
   // server uses when the run is created, so the preview cannot disagree with
@@ -112,6 +121,8 @@ export function NewTaskForm({
         request,
         mode,
         profile,
+        agentProvider: implementer,
+        agentModel: agentModel.trim() || null,
         transformer,
         reviewer,
         baseRef: baseRef.trim() || undefined,
@@ -367,8 +378,10 @@ export function NewTaskForm({
             {repoState.dirty ? ' Uncommitted work there is left alone.' : ''}
           </Row>
           <Row label={readOnly ? 'Agent' : 'Implementer'}>
-            Claude Code, in that worktree. If it is out of provider capacity, Dev Cockpit tries
-            the next implementation fallback. Permission mode:{' '}
+            {selectedImplementer?.label ?? implementer}
+            {agentModel.trim() ? ` (${agentModel.trim()})` : ''}, in that worktree. If it is out of
+            provider capacity, Dev Cockpit tries the next implementation fallback. Permission
+            mode:{' '}
             {readOnly ? (
               <>
                 <code className="mono">plan</code>, which refuses every edit.
@@ -429,12 +442,40 @@ export function NewTaskForm({
         onClick={() => setShowAdvanced(!showAdvanced)}
         aria-expanded={showAdvanced}
       >
-        {showAdvanced ? '▾' : '▸'} Providers and base ref
+        {showAdvanced ? '▾' : '▸'} Providers, model, and base ref
       </button>
 
       {showAdvanced ? (
         <div className="panel">
           <div className="space-y-3 px-3.5 py-3">
+            <ProviderSelect
+              id="implementer"
+              label="Implementation agent"
+              hint="Runs the task in the isolated worktree. If it runs out of provider capacity, the configured fallback is tried."
+              options={implementers}
+              value={implementer}
+              onChange={(value) => {
+                setImplementer(value);
+                setAgentModel(value === 'claude-code' ? (project.agentModel ?? '') : '');
+              }}
+            />
+
+            <div>
+              <label className="label" htmlFor="agent-model">
+                Implementation model
+              </label>
+              <input
+                id="agent-model"
+                className="input input-mono"
+                value={agentModel}
+                placeholder="leave blank for the provider default"
+                onChange={(e) => setAgentModel(e.target.value)}
+              />
+              <p className="hint">
+                Applies only to this run. Blank lets the selected implementation provider choose.
+              </p>
+            </div>
+
             <ProviderSelect
               id="transformer"
               label="Request transformer"

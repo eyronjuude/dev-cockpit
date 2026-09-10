@@ -6,6 +6,7 @@ import { useState } from 'react';
 import {
   effectiveWorkMode,
   isReadOnlyMode,
+  WORK_MODE_LABELS,
   WORK_MODE_WORDING,
   type ResolvedWorkMode,
 } from '@/domain/modes';
@@ -38,11 +39,12 @@ import type { RunSnapshot } from './use-run-stream';
  *
  * Three actions pick a stopped run back up, and they are deliberately
  * different sizes. **Retry** resumes from wherever it stopped and keeps
- * everything. **Retry iteration** re-issues the same prompt to the same
- * session. **Force restart** throws the worktree away and starts over on a
- * fresh branch, and is the only action offered while a run is still live —
- * stopping the work is what makes it forceful. What each one will actually do
- * is computed by `domain/retry.ts`, so the label is not a guess.
+ * everything. **Retry iteration** re-issues the same prompt, resuming by
+ * default unless the user chooses another provider. **Force restart** throws
+ * the worktree away and starts over on a fresh branch, and is the only action
+ * offered while a run is still live — stopping the work is what makes it
+ * forceful. What each one will actually do is computed by `domain/retry.ts`,
+ * so the label is not a guess.
  */
 
 interface ActionsProps {
@@ -99,6 +101,9 @@ function buildFeedbackFor(mode: ResolvedWorkMode, note: string): string {
 
 type Dialog =
   | 'none'
+  | 'start'
+  | 'retry'
+  | 'retry-iteration'
   | 'changes'
   | 'approve'
   | 'reject'
@@ -123,9 +128,34 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
   const [cleanUp, setCleanUp] = useState(false);
   const [discardChanges, setDiscardChanges] = useState(false);
   const [deleteBranches, setDeleteBranches] = useState(true);
+  const [selectedAgentProvider, setSelectedAgentProvider] = useState(run.agentProvider);
+  const [selectedAgentModel, setSelectedAgentModel] = useState(run.agentModel ?? '');
 
   const active = live.active;
   const targetBranch = run.baseBranch ?? 'the target branch';
+  const selectedAgentLabel =
+    snapshot.implementationAgents.find((agent) => agent.id === selectedAgentProvider)?.label ??
+    selectedAgentProvider;
+  const agentModel = selectedAgentModel.trim();
+  const providerChanged = selectedAgentProvider !== run.agentProvider;
+  const willResumeSelectedAgentSession = run.agentSessionId !== null && !providerChanged;
+  const agentSelectionBody = () => ({
+    agentProvider: selectedAgentProvider,
+    agentModel: agentModel || null,
+  });
+  const selectAgentProvider = (provider: string) => {
+    setSelectedAgentProvider(provider);
+    setSelectedAgentModel(provider === run.agentProvider ? (run.agentModel ?? '') : '');
+  };
+  const toggleAgentDialog = (target: Dialog) => {
+    if (dialog === target) {
+      setDialog('none');
+      return;
+    }
+    setSelectedAgentProvider(run.agentProvider);
+    setSelectedAgentModel(run.agentModel ?? '');
+    setDialog(target);
+  };
 
   const post = async (path: string, body?: unknown, label?: string) => {
     setBusy(label ?? path);
@@ -200,6 +230,7 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
   const retryPlan = planRetry(run);
   const showRetry = canRetry(run, active);
   const showRetryIteration = canRetryIteration(run, active);
+  const retryUsesAgent = retryPlan.stage === 'prepare' || retryPlan.stage === 'implement';
   const showRestart = canForceRestart(run);
   const retriedIteration = lastImplementationIteration(run.iterations);
   // A read-only run runs no checks, so "Retry the checks" would be a lie. What
@@ -235,7 +266,7 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
             type="button"
             className="btn btn-primary"
             disabled={busy !== null}
-            onClick={() => void post(`/api/runs/${run.id}/start`, {}, 'start')}
+            onClick={() => toggleAgentDialog('start')}
           >
             {mode === 'ask' ? 'Ask' : mode === 'plan' ? 'Start planning' : 'Start implementation'}
           </button>
@@ -257,7 +288,7 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
             type="button"
             className="btn btn-primary"
             disabled={busy !== null}
-            onClick={() => setDialog(dialog === 'implement' ? 'none' : 'implement')}
+            onClick={() => toggleAgentDialog('implement')}
           >
             {implementLabel}
           </button>
@@ -268,7 +299,7 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
             type="button"
             className="btn"
             disabled={busy !== null}
-            onClick={() => setDialog(dialog === 'changes' ? 'none' : 'changes')}
+            onClick={() => toggleAgentDialog('changes')}
           >
             {changesLabel}
           </button>
@@ -285,7 +316,10 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
             title={`Resumes this run where it stopped, because ${retryPlan.reason}.${
               retryPlan.resumesSession ? ' The recorded agent session is resumed.' : ''
             }`}
-            onClick={() => void post(`/api/runs/${run.id}/retry`, {}, 'retry')}
+            onClick={() => {
+              if (retryUsesAgent) toggleAgentDialog('retry');
+              else void post(`/api/runs/${run.id}/retry`, {}, 'retry');
+            }}
           >
             {busy === 'retry' ? 'Retrying…' : retryLabel}
           </button>
@@ -302,7 +336,7 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
                 : `Sends iteration ${retriedIteration.ordinal}'s prompt again. No agent session is recorded, so the ${wording.agentNoun} starts cold.`
             }
             onClick={() =>
-              void post(`/api/runs/${run.id}/retry-iteration`, {}, 'retry-iteration')
+              toggleAgentDialog('retry-iteration')
             }
           >
             {busy === 'retry-iteration'
@@ -327,7 +361,7 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
             type="button"
             className="btn"
             disabled={busy !== null}
-            onClick={() => setDialog(dialog === 'restart' ? 'none' : 'restart')}
+            onClick={() => toggleAgentDialog('restart')}
           >
             Force restart
           </button>
@@ -451,12 +485,131 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
         </p>
       ) : null}
 
+      {dialog === 'start' ? (
+        <div className="panel p-3">
+          <p className="mb-2.5 text-[12.5px] text-ink-muted">
+            Starts this draft in <span className="font-medium">{WORK_MODE_LABELS[mode]}</span>{' '}
+            mode on <code className="mono">{run.branch ?? 'a run branch'}</code>.
+          </p>
+          <AgentControls
+            idPrefix="start"
+            agents={snapshot.implementationAgents}
+            provider={selectedAgentProvider}
+            model={selectedAgentModel}
+            onProviderChange={selectAgentProvider}
+            onModelChange={setSelectedAgentModel}
+          />
+          <div className="mt-2.5 flex justify-end gap-1.5">
+            <button type="button" className="btn btn-ghost" onClick={() => setDialog('none')}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={busy !== null}
+              onClick={() =>
+                void post(`/api/runs/${run.id}/start`, agentSelectionBody(), 'start')
+              }
+            >
+              {busy === 'start' ? 'Starting…' : 'Start'}
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {dialog === 'retry' ? (
+        <div className="panel p-3">
+          <p className="mb-2.5 text-[12.5px] text-ink-muted">
+            {retryLabel}: {retryPlan.reason}.
+          </p>
+          <AgentControls
+            idPrefix="retry"
+            agents={snapshot.implementationAgents}
+            provider={selectedAgentProvider}
+            model={selectedAgentModel}
+            onProviderChange={selectAgentProvider}
+            onModelChange={setSelectedAgentModel}
+          />
+          <p className="hint">
+            {willResumeSelectedAgentSession && retryPlan.resumesSession
+              ? `Continues agent session ${run.agentSessionId!.slice(0, 8)} with ${
+                  agentModel ? `${selectedAgentLabel} (${agentModel})` : selectedAgentLabel
+                }.`
+              : providerChanged
+                ? `Starts a fresh ${selectedAgentLabel} pass because the implementation provider is changing.`
+                : `Starts ${selectedAgentLabel} without a recorded session for this retry.`}
+          </p>
+          <div className="mt-2.5 flex justify-end gap-1.5">
+            <button type="button" className="btn btn-ghost" onClick={() => setDialog('none')}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={busy !== null}
+              onClick={() =>
+                void post(`/api/runs/${run.id}/retry`, agentSelectionBody(), 'retry')
+              }
+            >
+              {busy === 'retry' ? 'Retrying…' : retryLabel}
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {dialog === 'retry-iteration' && retriedIteration ? (
+        <div className="panel p-3">
+          <p className="mb-2.5 text-[12.5px] text-ink-muted">
+            Sends iteration {retriedIteration.ordinal}&rsquo;s prompt again without changing the
+            instruction.
+          </p>
+          <AgentControls
+            idPrefix="retry-iteration"
+            agents={snapshot.implementationAgents}
+            provider={selectedAgentProvider}
+            model={selectedAgentModel}
+            onProviderChange={selectAgentProvider}
+            onModelChange={setSelectedAgentModel}
+          />
+          <p className="hint">
+            {willResumeSelectedAgentSession
+              ? `Continues agent session ${run.agentSessionId!.slice(0, 8)} with ${
+                  agentModel ? `${selectedAgentLabel} (${agentModel})` : selectedAgentLabel
+                }.`
+              : providerChanged
+                ? `Starts a fresh ${selectedAgentLabel} pass because the implementation provider is changing.`
+                : `Starts ${selectedAgentLabel} without a recorded session for this retry.`}
+          </p>
+          <div className="mt-2.5 flex justify-end gap-1.5">
+            <button type="button" className="btn btn-ghost" onClick={() => setDialog('none')}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={busy !== null}
+              onClick={() =>
+                void post(
+                  `/api/runs/${run.id}/retry-iteration`,
+                  agentSelectionBody(),
+                  'retry-iteration',
+                )
+              }
+            >
+              {busy === 'retry-iteration'
+                ? 'Starting…'
+                : `Retry iteration ${retriedIteration.ordinal}`}
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       {dialog === 'implement' ? (
         <div className="panel p-3">
           <p className="mb-2.5 text-[12.5px] text-ink-muted">
             Switches this run to <span className="font-medium">Build</span> mode and hands the{' '}
-            {wording.deliverable} back to the session that produced it. The project&rsquo;s checks
-            run afterwards, and the diff appears on this screen as it would for any build run.
+            {wording.deliverable} to the selected implementation agent. The project&rsquo;s checks run
+            afterwards, and the diff appears on this screen as it would for any build run.
           </p>
           <label className="label" htmlFor="implement-note">
             {mode === 'plan'
@@ -475,10 +628,22 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
             }
             onChange={(e) => setImplementNote(e.target.value)}
           />
+          <AgentControls
+            idPrefix="implement"
+            agents={snapshot.implementationAgents}
+            provider={selectedAgentProvider}
+            model={selectedAgentModel}
+            onProviderChange={selectAgentProvider}
+            onModelChange={setSelectedAgentModel}
+          />
           <p className="hint">
-            {run.agentSessionId
-              ? `Continues agent session ${run.agentSessionId.slice(0, 8)}, so the reading behind the ${wording.deliverable} is not thrown away.`
-              : `No agent session is recorded for this run, so the implementer starts fresh with the ${wording.deliverable} text in its prompt.`}
+            {willResumeSelectedAgentSession
+              ? `Continues agent session ${run.agentSessionId!.slice(0, 8)} with ${
+                  agentModel ? `${selectedAgentLabel} (${agentModel})` : selectedAgentLabel
+                }.`
+              : providerChanged
+                ? `Starts a fresh ${selectedAgentLabel} pass because the implementation provider is changing.`
+                : `No agent session is recorded for this run, so the implementer starts fresh with the ${wording.deliverable} text in its prompt.`}
           </p>
           <div className="mt-2.5 flex justify-end gap-1.5">
             <button type="button" className="btn btn-ghost" onClick={() => setDialog('none')}>
@@ -494,6 +659,7 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
                   {
                     mode: 'build',
                     feedback: buildFeedbackFor(mode, implementNote),
+                    ...agentSelectionBody(),
                   },
                   'implement',
                 )
@@ -541,6 +707,14 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
               the agent to exit before touching the worktree.
             </p>
           ) : null}
+          <AgentControls
+            idPrefix="restart"
+            agents={snapshot.implementationAgents}
+            provider={selectedAgentProvider}
+            model={selectedAgentModel}
+            onProviderChange={selectAgentProvider}
+            onModelChange={setSelectedAgentModel}
+          />
 
           <div className="mt-2.5 flex justify-end gap-1.5">
             <button type="button" className="btn btn-ghost" onClick={() => setDialog('none')}>
@@ -550,7 +724,9 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
               type="button"
               className="btn btn-danger"
               disabled={busy !== null}
-              onClick={() => void post(`/api/runs/${run.id}/restart`, {}, 'restart')}
+              onClick={() =>
+                void post(`/api/runs/${run.id}/restart`, agentSelectionBody(), 'restart')
+              }
             >
               {busy === 'restart' ? 'Restarting…' : 'Discard and restart'}
             </button>
@@ -581,13 +757,23 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
             }
             onChange={(e) => setFeedback(e.target.value)}
           />
+          <AgentControls
+            idPrefix="changes"
+            agents={snapshot.implementationAgents}
+            provider={selectedAgentProvider}
+            model={selectedAgentModel}
+            onProviderChange={selectAgentProvider}
+            onModelChange={setSelectedAgentModel}
+          />
           <p className="hint">
-            {run.agentSessionId
-              ? `Continues agent session ${run.agentSessionId.slice(0, 8)}, so the ${
+            {willResumeSelectedAgentSession
+              ? `Continues agent session ${run.agentSessionId!.slice(0, 8)}, so the ${
                   readOnly ? `reading behind the ${wording.deliverable}` : 'implementation context'
                 } is kept. ${
                   readOnly ? 'Still changes no files.' : 'Validation runs again afterwards.'
                 }`
+              : providerChanged
+                ? `Starts a fresh ${selectedAgentLabel} pass because the implementation provider is changing.`
               : `No agent session is recorded for this run, so the ${wording.agentNoun} starts fresh from this run's stored request.`}
           </p>
           <div className="mt-2.5 flex justify-end gap-1.5">
@@ -598,7 +784,13 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
               type="button"
               className="btn btn-primary"
               disabled={feedback.trim().length === 0 || busy !== null}
-              onClick={() => void post(`/api/runs/${run.id}/changes`, { feedback }, 'changes')}
+              onClick={() =>
+                void post(
+                  `/api/runs/${run.id}/changes`,
+                  { feedback, ...agentSelectionBody() },
+                  'changes',
+                )
+              }
             >
               {busy === 'changes' ? 'Sending…' : `Send to the ${wording.agentNoun}`}
             </button>
@@ -872,6 +1064,58 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
           </div>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function AgentControls({
+  idPrefix,
+  agents,
+  provider,
+  model,
+  onProviderChange,
+  onModelChange,
+}: {
+  idPrefix: string;
+  agents: RunSnapshot['implementationAgents'];
+  provider: string;
+  model: string;
+  onProviderChange: (value: string) => void;
+  onModelChange: (value: string) => void;
+}) {
+  if (agents.length === 0) return null;
+
+  return (
+    <div className="mt-2.5 grid gap-2 sm:grid-cols-2">
+      <div>
+        <label className="label" htmlFor={`${idPrefix}-agent-provider`}>
+          Implementation agent
+        </label>
+        <select
+          id={`${idPrefix}-agent-provider`}
+          className="select"
+          value={provider}
+          onChange={(e) => onProviderChange(e.target.value)}
+        >
+          {agents.map((agent) => (
+            <option key={agent.id} value={agent.id}>
+              {agent.label}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div>
+        <label className="label" htmlFor={`${idPrefix}-agent-model`}>
+          Model
+        </label>
+        <input
+          id={`${idPrefix}-agent-model`}
+          className="input input-mono"
+          value={model}
+          placeholder="provider default"
+          onChange={(e) => onModelChange(e.target.value)}
+        />
+      </div>
     </div>
   );
 }

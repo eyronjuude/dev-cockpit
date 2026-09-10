@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
 import { NewTaskForm } from '@/components/new-task-form';
+import { implementationAgentStatuses } from '@/orchestrator/orchestrator';
 import { listProfiles } from '@/orchestrator/profiles';
 import { reviewerStatuses } from '@/reviewers/registry';
 import { getProject, listProjects, repositoryState } from '@/services/projects';
@@ -18,7 +19,8 @@ export default async function NewTaskPage({
   const project = getProject(projectId);
   if (!project) notFound();
 
-  const [transformers, reviewers, repoState] = await Promise.all([
+  const [implementers, transformers, reviewers, repoState] = await Promise.all([
+    implementationAgentStatuses(),
     transformerStatuses(),
     reviewerStatuses(),
     repositoryState(project),
@@ -33,6 +35,11 @@ export default async function NewTaskPage({
     order: readonly string[],
   ): string => order.find((id) => candidates.some((c) => c.id === id && c.available)) ?? 'none';
 
+  const preferredImplementer = firstAvailable(implementers, ['claude-code', 'codex-code']);
+  const defaultImplementer =
+    preferredImplementer === 'none'
+      ? (implementers[0]?.id ?? 'claude-code')
+      : preferredImplementer;
   const defaultTransformer = firstAvailable(transformers, ['codex-cli', 'claude-cli']);
   const defaultReviewer = firstAvailable(reviewers, ['codex-cli', 'claude-cli']);
 
@@ -57,8 +64,10 @@ export default async function NewTaskPage({
         project={project}
         projects={listProjects().map((p) => ({ id: p.id, name: p.name }))}
         profiles={listProfiles()}
+        implementers={implementers}
         transformers={transformers}
         reviewers={reviewers}
+        defaultImplementer={defaultImplementer}
         defaultTransformer={defaultTransformer}
         defaultReviewer={defaultReviewer}
         repoState={repoState}

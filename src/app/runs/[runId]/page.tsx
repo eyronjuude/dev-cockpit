@@ -2,7 +2,11 @@ import { notFound } from 'next/navigation';
 
 import { RunView } from '@/components/run-view';
 import { planExpiry } from '@/domain/expiry';
-import { activeRunPhase, isRunActive } from '@/orchestrator/orchestrator';
+import {
+  activeRunPhase,
+  implementationAgentOptions,
+  isRunActive,
+} from '@/orchestrator/orchestrator';
 import { listArtifacts } from '@/services/artifacts';
 import { canModifyAttachments } from '@/services/attachments';
 import { getRunPreview } from '@/services/previews';
@@ -37,6 +41,7 @@ export default async function RunPage({ params }: { params: Promise<{ runId: str
     preview: getRunPreview(runId),
     worktrees: runWorktrees(run, project),
     expiry: planExpiry(run, retentionPolicy(project)),
+    implementationAgents: implementationAgentOptions(),
     attachmentsMutable: canModifyAttachments(runId) && !active,
     configuredValidations: project.validationCommands
       .filter((c) => c.enabled && c.command.trim().length > 0)

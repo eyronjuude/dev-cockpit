@@ -149,10 +149,10 @@ planRetry(run) ─► land       when the run is landable (landing keeps its own
 ```
 
 `retryIteration` is narrower: it re-issues the last implementation iteration's
-prompt verbatim, resuming the recorded agent session. `restartRun` is the
-forceful one — it stops in-flight work, waits for the process to exit, removes
-the worktree, moves the run to the next free `-rN` branch and re-runs the
-pipeline cold.
+prompt verbatim, resuming the recorded agent session when the provider is
+unchanged. `restartRun` is the forceful one — it stops in-flight work, waits for
+the process to exit, removes the worktree, moves the run to the next free `-rN`
+branch and re-runs the pipeline cold.
 
 `PAUSED` is the capacity-exhaustion case. The implementation phase uses
 `DEV_COCKPIT_AGENT_FALLBACKS` after the run's preferred provider, defaulting to
@@ -161,6 +161,12 @@ that attempt as failed, records `agent.fallback_started`, and tries the next
 implementation agent. If every option is exhausted or unavailable after one has
 exhausted, the run records `run.paused`, keeps its worktree and branch, and the
 normal **Retry** action re-enters `IMPLEMENTING`.
+
+The preferred provider and model can also be changed explicitly before an
+implementation pass starts: new run, draft start, retrying an agent pass,
+retrying an iteration, change request, read-only mode switch to Build, or force
+restart. A provider change clears `agentSessionId` before the pass begins; a
+model-only change keeps it.
 
 One run gets one work slot, claimed through `begin` in the orchestrator. Every
 entry point goes through it, so "is something already running for this run" is
@@ -303,11 +309,12 @@ a missed notification costs nothing.
 
 ## Implementation agents
 
-The run stores one preferred `agentProvider`, currently `claude-code` for new
-runs. When a fallback provider successfully implements the run, the run's
-provider is moved to that agent so later change requests do not try to resume a
-session with the wrong CLI. Provider-specific model names are only forwarded to
-the matching adapter.
+The run stores one preferred `agentProvider`, defaulting to `claude-code` for
+new runs unless the user chooses another implementation provider. When a
+fallback provider successfully implements the run, the run's provider is moved
+to that agent so later change requests do not try to resume a session with the
+wrong CLI. Provider-specific model names are only forwarded to the matching
+adapter.
 
 ### Claude Code integration
 
