@@ -97,6 +97,7 @@ export const EVENT_TYPES = [
   'run.failed',
   'run.cancelled',
   'run.commit_created',
+  'run.worktree_missing',
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
@@ -378,6 +379,7 @@ export interface EventPayloads {
   'run.failed': { error: string };
   'run.cancelled': { reason: string };
   'run.commit_created': { sha: string; message: string };
+  'run.worktree_missing': { path: string; branch: string; commitSha: string };
 }
 
 /** A persisted event as it comes back out of the database. */

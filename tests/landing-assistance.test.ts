@@ -340,6 +340,28 @@ describe('landing assistance', () => {
     expect(landed.error).toBeNull();
   });
 
+  it('lands an approved committed run when the run worktree has already gone', async () => {
+    const { repo, run, runPath } = await makeApprovedRun(
+      'missing-run-worktree',
+      'run branch edit\n',
+    );
+
+    fs.rmSync(runPath, { recursive: true, force: true });
+    git(['worktree', 'prune'], repo);
+
+    orchestrator.landRun(run.id);
+    await waitForIdle(run.id);
+
+    expect(runsService.requireRun(run.id).status).toBe('LANDED');
+    expect(normaliseLines(fs.readFileSync(path.join(repo, 'file.txt'), 'utf8'))).toBe(
+      'run branch edit\n',
+    );
+
+    const types = eventsService.listEvents(run.id).map((event) => event.type);
+    expect(types).toContain('run.worktree_missing');
+    expect(types).toContain('landing.applied');
+  });
+
   it('runs setup for a reused landing worktree when dependencies are still missing', async () => {
     const repo = makeRepo('reused-landing-setup');
     fs.writeFileSync(

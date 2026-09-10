@@ -1,5 +1,6 @@
 import 'server-only';
 
+import fs from 'node:fs';
 import path from 'node:path';
 
 import { capacityExhaustionReason } from '@/agents/capacity';
@@ -2705,8 +2706,8 @@ async function ensureRunBranchCommitted(
   project: ProjectView,
   commitMessage?: string,
 ): Promise<RunView> {
-  if (!run.worktreePath || !run.branch) {
-    throw new AppError('This run has no worktree to land.');
+  if (!run.branch) {
+    throw new AppError('This run has no branch to land.');
   }
   if (project.protectedBranches.includes(run.branch)) {
     throw new AppError(`Refusing to commit onto the protected branch ${run.branch}.`, {
@@ -2715,7 +2716,11 @@ async function ensureRunBranchCommitted(
   }
 
   let commitSha = await resolveCommit(project.repositoryPath, run.branch);
-  if (await isDirty(run.worktreePath)) {
+  const hasInspectableWorktree = Boolean(
+    run.worktreePath && fs.existsSync(path.join(run.worktreePath, '.git')),
+  );
+
+  if (hasInspectableWorktree && run.worktreePath && (await isDirty(run.worktreePath))) {
     const message =
       commitMessage?.trim() || `${run.title}\n\nApproved by Dev Cockpit run ${run.id}.`;
     commitSha = await commitAll(run.worktreePath, message, {
@@ -2727,6 +2732,14 @@ async function ensureRunBranchCommitted(
       type: 'run.commit_created',
       message: `Created commit ${commitSha.slice(0, 7)} on ${run.branch}`,
       payload: { sha: commitSha, message },
+    });
+  } else if (run.worktreePath && !hasInspectableWorktree) {
+    appendEvent({
+      runId: run.id,
+      type: 'run.worktree_missing',
+      level: 'notice',
+      message: `Run worktree is unavailable; landing committed branch ${run.branch}`,
+      payload: { path: run.worktreePath, branch: run.branch, commitSha },
     });
   }
 
