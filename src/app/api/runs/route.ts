@@ -39,6 +39,8 @@ const createSchema = z.object({
   request: z.string().trim().min(1).max(20_000),
   title: z.string().trim().max(200).optional(),
   profile: executionProfileSchema.optional(),
+  /** Overrides the project default and the profile's recommendation. */
+  model: z.string().trim().max(120).optional(),
   mode: workModeSchema.optional(),
   transformer: z.string().max(60).optional(),
   reviewer: z.string().max(60).optional(),
@@ -85,6 +87,7 @@ export function POST(request: Request) {
       request: input.request,
       title: input.title,
       profile: input.profile ?? 'standard',
+      model: input.model,
       mode: input.mode ?? DEFAULT_WORK_MODE,
       transformer: input.transformer,
       reviewer: input.reviewer,

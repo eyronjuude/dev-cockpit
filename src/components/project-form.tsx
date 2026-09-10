@@ -13,6 +13,8 @@ import {
   DEFAULT_ARTIFACT_RETENTION_DAYS,
   DEFAULT_WORKTREE_RETENTION_DAYS,
 } from '@/domain/expiry';
+import { agentModelLabel, CLAUDE_CODE_PROVIDER, listAgentModels } from '@/domain/models';
+import { PROFILES, recommendedModelFor } from '@/orchestrator/profiles';
 import type { ProjectView } from '@/services/projects';
 import type { RepositoryProbe } from '@/services/projects';
 
@@ -550,10 +552,31 @@ export function ProjectForm({ existing }: { existing?: ProjectView }) {
             <input
               id="agent-model"
               className="input input-mono"
+              list="project-agent-model-options"
               value={agentModel}
-              placeholder="leave blank for the default implementation model"
+              placeholder="leave blank to follow the execution profile"
               onChange={(e) => setAgentModel(e.target.value)}
             />
+            <datalist id="project-agent-model-options">
+              {listAgentModels(CLAUDE_CODE_PROVIDER).map((model) => (
+                <option key={model.id} value={model.id}>
+                  {model.label}
+                </option>
+              ))}
+            </datalist>
+            <p className="hint">
+              A standing default for every run in this project. Blank is the better answer for
+              most projects: each execution profile already recommends a model — Quick{' '}
+              <code className="mono">
+                {agentModelLabel(recommendedModelFor(PROFILES.quick, CLAUDE_CODE_PROVIDER))}
+              </code>
+              , Deep{' '}
+              <code className="mono">
+                {agentModelLabel(recommendedModelFor(PROFILES.deep, CLAUDE_CODE_PROVIDER))}
+              </code>{' '}
+              — and setting a model here overrides all three. Either way, New Task can pick a
+              different one for a single run.
+            </p>
           </div>
           <div>
             <label className="label" htmlFor="permission-mode">

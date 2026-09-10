@@ -140,8 +140,10 @@ Nothing is mandatory except the repository path and a name.
 it, pick a mode and a profile, press **Start**.
 
 Two independent choices. The **mode** decides what the run produces; the
-**profile** decides how much effort it spends producing it. Attachments are
-optional and covered [below](#attachments).
+**profile** decides how much effort it spends producing it. The profile also
+suggests the **model** that does the spending, which you can change without
+touching either. Attachments are optional and covered
+[below](#attachments).
 
 ### Working modes
 
@@ -202,16 +204,47 @@ mapping was written without access to Cursor's documentation.
 
 ### Execution profiles
 
-| Profile | Implementation | Validation | Reviewer |
-| --- | --- | --- | --- |
-| Quick | effort `medium`, 15m cap | commands enabled for `quick` | skipped |
-| **Standard** (default) | effort `high`, 45m cap | all configured commands | on, if selected |
-| Deep | effort `xhigh`, 90m cap | all configured commands | on, if selected |
+| Profile | Model | Implementation | Validation | Reviewer |
+| --- | --- | --- | --- | --- |
+| Quick | Haiku 4.5 | effort `medium`, 15m cap | commands enabled for `quick` | skipped |
+| **Standard** (default) | Sonnet 5 | effort `high`, 45m cap | all configured commands | on, if selected |
+| Deep | Opus 5 | effort `xhigh`, 90m cap | all configured commands | on, if selected |
 
-In Ask and Plan mode a profile sets effort and the time cap only.
+In Ask and Plan mode a profile sets the model, the effort and the time cap only.
+
+### The model
+
+Effort and model are one statement about how much a run should spend, so each
+profile recommends a model to go with its effort level. The recommendation is
+the weakest of the three ways a model gets chosen:
+
+| Set on | Applies to | Overrides |
+| --- | --- | --- |
+| **New task → Model** | one run | everything below |
+| **Project → Implementation agent → Model** | every run in that project | the profile |
+| **The execution profile** | runs that pin nothing | — |
+
+Nothing set anywhere leaves the choice to Claude Code itself.
+
+The interesting selections are the mismatched ones, so nothing stops you making
+them: Deep on Haiku for a change that is large but dull, Quick on Opus for one
+that is small but subtle. **The model wins over the effort.** Where a model does
+not accept the profile's level, the level moves to the nearest one it does and
+the New Task screen says so — Haiku 4.5 takes no effort setting at all, so a
+Deep run on Haiku sends none.
+
+Anything not in the list can be typed in under **Another model** and is passed
+to `--model` verbatim, for a model newer than this build knows about. Its effort
+is left at the profile's level, because nothing here knows what it accepts.
+
+The model is resolved when the run is created and written onto it, so changing a
+project default later never rewrites what a finished run reports having used. A
+capacity fallback to another vendor's CLI does not inherit it: `claude-opus-5`
+means nothing to Codex, so that provider runs on its own default. See
+[ADR 0013](docs/adr/0013-model-selection.md).
 
 The **What will run** panel on that page states exactly what is about to happen
-before you commit to it.
+before you commit to it, model and effort included.
 
 ## When a run stops short
 

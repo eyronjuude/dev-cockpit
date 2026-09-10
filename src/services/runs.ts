@@ -23,6 +23,8 @@ import {
   type ResolvedWorkMode,
   type WorkMode,
 } from '@/domain/modes';
+import { CLAUDE_CODE_PROVIDER, resolveAgentModel } from '@/domain/models';
+import { getProfile, recommendedModelFor } from '@/orchestrator/profiles';
 import {
   ACTIVE_STATUSES,
   assertTransition,
@@ -54,6 +56,11 @@ export const createRunSchema = z.object({
   request: z.string().trim().min(1).max(20_000),
   title: z.string().trim().max(200).optional(),
   profile: executionProfileSchema.default('standard'),
+  /**
+   * Model for this run, overriding both the project default and the profile's
+   * recommendation. Blank or absent leaves that precedence intact.
+   */
+  model: z.string().trim().max(120).optional(),
   /** Working mode: `plan`, `build`, or `auto` to decide from the request. */
   mode: workModeSchema.default('build'),
   /** Transformer provider id, or 'none'. */
@@ -461,6 +468,20 @@ export function createRun(input: CreateRunInput): RunView {
   // downstream ever has to handle it.
   const resolution = resolveWorkMode(parsed.mode, parsed.request);
 
+  /**
+   * Resolved at creation and written down, rather than derived at each phase.
+   *
+   * Same reason the provider choices are stored per run: changing a project
+   * default, or the recommendation attached to a profile, must not retroactively
+   * change what an existing run reports having used. It also means the model the
+   * New Task form showed is the model on the row.
+   */
+  const model = resolveAgentModel({
+    requested: parsed.model,
+    projectDefault: project.agentModel,
+    recommended: recommendedModelFor(getProfile(parsed.profile), CLAUDE_CODE_PROVIDER),
+  });
+
   db.insert(runs)
     .values({
       id,
@@ -473,8 +494,8 @@ export function createRun(input: CreateRunInput): RunView {
       resolvedMode: resolution.mode,
       baseBranch: parsed.baseRef?.trim() || project.defaultBranch,
       branch: runBranchName(id),
-      agentProvider: 'claude-code',
-      agentModel: project.agentModel,
+      agentProvider: CLAUDE_CODE_PROVIDER,
+      agentModel: model.model,
       transformerProvider: parsed.transformer ?? 'none',
       reviewerProvider: parsed.reviewer ?? 'none',
     })
@@ -490,6 +511,8 @@ export function createRun(input: CreateRunInput): RunView {
       profile: parsed.profile,
       mode: parsed.mode,
       resolvedMode: resolution.mode,
+      model: model.model,
+      modelSource: model.source,
     },
   });
 

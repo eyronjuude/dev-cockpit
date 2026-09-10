@@ -7,9 +7,10 @@ import {
   WORK_MODE_LABELS,
   WORK_MODES,
 } from '@/domain/modes';
+import { agentModelLabel, CLAUDE_CODE_PROVIDER } from '@/domain/models';
 import { getWorkMode } from '@/orchestrator/modes';
 import { listAgents } from '@/orchestrator/orchestrator';
-import { listProfiles } from '@/orchestrator/profiles';
+import { listProfiles, recommendedModelFor } from '@/orchestrator/profiles';
 import { reviewerStatuses } from '@/reviewers/registry';
 import { transformerStatuses } from '@/transformers/registry';
 
@@ -164,13 +165,21 @@ export default async function SettingsPage() {
               </div>
               <p className="mt-0.5 text-[12px] text-ink-muted">{profile.description}</p>
               <p className="mt-0.5 text-[11px] text-ink-faint">
-                effort {profile.agentEffort} · timeout{' '}
-                {Math.round(profile.agentTimeoutMs / 60_000)}m · reviewer{' '}
+                effort {profile.agentEffort} · model{' '}
+                {agentModelLabel(recommendedModelFor(profile, CLAUDE_CODE_PROVIDER)) ||
+                  'provider default'}{' '}
+                · timeout {Math.round(profile.agentTimeoutMs / 60_000)}m · reviewer{' '}
                 {profile.runReviewer ? 'on' : 'off'}
               </p>
             </li>
           ))}
         </ul>
+        <p className="border-t border-line px-3.5 py-2 text-[12px] text-ink-muted">
+          The model is a recommendation, and the weakest of the three ways one gets chosen: a
+          project&rsquo;s saved model overrides it, and the New Task screen overrides both for a
+          single run. Where a model will not accept a profile&rsquo;s effort, the model is kept and
+          the effort moves.
+        </p>
       </section>
     </div>
   );
