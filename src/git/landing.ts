@@ -77,6 +77,8 @@ export async function mergeSourceIntoLanding(
   worktreePath: string,
   sourceBranch: string,
 ): Promise<{ merged: boolean; conflicts: string[]; stdout: string; stderr: string }> {
+  await removeIncomingTrackedUntrackedFiles(worktreePath, sourceBranch);
+
   const res = await git(
     worktreePath,
     ['merge', '--no-ff', '--no-edit', sourceBranch],
@@ -97,6 +99,8 @@ export async function mergeTargetIntoLanding(
   worktreePath: string,
   targetBranch: string,
 ): Promise<{ merged: boolean; conflicts: string[]; stdout: string; stderr: string }> {
+  await removeIncomingTrackedUntrackedFiles(worktreePath, targetBranch);
+
   const res = await git(
     worktreePath,
     ['merge', '--no-ff', '--no-edit', targetBranch],
@@ -111,6 +115,40 @@ export async function mergeTargetIntoLanding(
   }
 
   return { merged: res.exitCode === 0, conflicts, stdout: res.stdout, stderr: res.stderr };
+}
+
+function parseNullSeparatedPaths(output: string): string[] {
+  return output.split('\0').filter(Boolean);
+}
+
+async function removeIncomingTrackedUntrackedFiles(
+  worktreePath: string,
+  incomingRef: string,
+): Promise<string[]> {
+  const incoming = await git(
+    worktreePath,
+    ['ls-tree', '-r', '-z', '--name-only', incomingRef],
+    { allowFailure: true },
+  );
+  if (incoming.exitCode !== 0) return [];
+
+  const untracked = await git(worktreePath, ['ls-files', '--others', '--exclude-standard', '-z']);
+  const incomingPaths = new Set(parseNullSeparatedPaths(incoming.stdout));
+  const blockers = parseNullSeparatedPaths(untracked.stdout).filter((file) =>
+    incomingPaths.has(file),
+  );
+
+  for (const file of blockers) {
+    const absolutePath = path.resolve(worktreePath, file);
+    if (!isInside(worktreePath, absolutePath)) {
+      throw new AppError(`Untracked merge blocker escapes the landing worktree: ${file}`, {
+        code: 'unsafe_path',
+      });
+    }
+    await fsp.rm(absolutePath, { recursive: true, force: true });
+  }
+
+  return blockers;
 }
 
 export async function unmergedFiles(worktreePath: string): Promise<string[]> {

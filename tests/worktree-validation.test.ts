@@ -542,6 +542,45 @@ describe('landing worktrees', () => {
     expect(appliedAgain).toBe(applied);
   });
 
+  it('removes untracked landing files that the incoming branch tracks before merging', async () => {
+    const repo = makeSecondRepo('landing-untracked-blocker');
+    const runId = 'run_land_untracked_blocker';
+    const sourceBranch = `cockpit/${runId}`;
+    const landingBranch = `cockpit/landing/${runId}`;
+    const runPath = path.join(dataDir, 'worktrees', 'prj', runId);
+    const landingPath = path.join(dataDir, 'landings', 'prj', runId);
+
+    await worktree.prepareWorktree({
+      repositoryPath: repo,
+      worktreePath: runPath,
+      branch: sourceBranch,
+      baseRef: 'main',
+      protectedBranches: ['main'],
+    });
+    fs.writeFileSync(path.join(runPath, '.npmrc'), 'public-hoist-pattern[]=*eslint*\n');
+    await diff.commitAll(runPath, 'chore: add npmrc', {
+      name: 'Dev Cockpit',
+      email: 'dev-cockpit@localhost',
+    });
+
+    await landing.ensureLandingWorktree({
+      repositoryPath: repo,
+      worktreePath: landingPath,
+      branch: landingBranch,
+      targetBranch: 'main',
+    });
+    fs.writeFileSync(path.join(landingPath, '.npmrc'), 'untracked landing helper\n');
+
+    const merged = await landing.mergeSourceIntoLanding(landingPath, sourceBranch);
+
+    expect(merged.merged).toBe(true);
+    expect(merged.conflicts).toEqual([]);
+    expect(fs.readFileSync(path.join(landingPath, '.npmrc'), 'utf8').replace(/\r\n/g, '\n')).toBe(
+      'public-hoist-pattern[]=*eslint*\n',
+    );
+    expect(git(['status', '--short', '--', '.npmrc'], landingPath)).toBe('');
+  });
+
   it('keeps the target branch unchanged when the landing merge conflicts', async () => {
     const repo = makeSecondRepo('landing-conflict');
     const runId = 'run_land_conflict';
