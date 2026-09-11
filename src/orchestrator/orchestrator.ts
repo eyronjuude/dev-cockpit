@@ -120,6 +120,7 @@ import {
   type IterationView,
   type RunView,
 } from '@/services/runs';
+import { isUnresolvedBackgroundWait } from '@/transformers/prompts';
 import { getTransformer } from '@/transformers/registry';
 import type { TransformerProvider } from '@/transformers/types';
 import { formatDuration, runValidation, type ValidationRunSummary } from '@/validation/engine';
@@ -2446,6 +2447,22 @@ async function phaseSummarise(
           ? 'No transformer configured; showing the implementer’s message as written'
           : `${transformer.label} cannot summarise; showing the message as written`,
       payload: { provider: transformer.id, iterationId, reason: 'not available' },
+    });
+    return;
+  }
+
+  // BUILD_RULES tells the agent not to end its turn deferring to a background
+  // job's notification — nothing wakes this process up again once it exits.
+  // A model that does it anyway hasn't reported an outcome, so rewriting it
+  // into plain language would just paraphrase the same non-answer.
+  if (isUnresolvedBackgroundWait(agentText)) {
+    appendEvent({
+      runId: run.id,
+      type: 'summarise.skipped',
+      level: 'debug',
+      message:
+        "The implementer's closing message describes unfinished work rather than an outcome; nothing to rewrite",
+      payload: { provider: transformer.id, iterationId, reason: 'unresolved background wait' },
     });
     return;
   }

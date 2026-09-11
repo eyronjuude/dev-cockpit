@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { isUnresolvedBackgroundWait } from '@/transformers/prompts';
 import { getTransformer, listTransformers, transformerStatuses } from '@/transformers/registry';
 import { getReviewer, listReviewers, reviewerStatuses } from '@/reviewers/registry';
 
@@ -163,4 +164,32 @@ describe('codex-cli availability', () => {
       else process.env.DEV_COCKPIT_CODEX_BIN = saved;
     }
   }, 30_000);
+});
+
+describe('detecting a closing message that defers to a background job', () => {
+  it('catches the reported phrasing', () => {
+    expect(
+      isUnresolvedBackgroundWait(
+        "I'll wait for the background test task's completion notification rather than poll.",
+      ),
+    ).toBe(true);
+    expect(
+      isUnresolvedBackgroundWait(
+        "I'll wait for the background test task to notify me when it completes rather than polling.",
+      ),
+    ).toBe(true);
+  });
+
+  it('leaves an ordinary report of finished work alone', () => {
+    expect(
+      isUnresolvedBackgroundWait(
+        'Added the login form and wired it to the auth endpoint. Tests pass.',
+      ),
+    ).toBe(false);
+    expect(
+      isUnresolvedBackgroundWait(
+        'Implemented a background job queue for uploads, with retry on failure.',
+      ),
+    ).toBe(false);
+  });
 });

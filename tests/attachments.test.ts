@@ -560,6 +560,14 @@ describe('what the agent is told', () => {
     expect(prompt).toMatch(/[Dd]o not copy them into the worktree/);
   });
 
+  it('warns against ending a turn waiting on a background job that cannot notify it', async () => {
+    // A CLI invocation gets no second wake-up once it exits, so a closing
+    // message that defers to "I'll wait for the notification" is a dead end.
+    // BUILD_RULES has to say so, or the agent has no way to know.
+    const runId = await newRun();
+    expect(buildFor(runId)).toMatch(/nothing will notify you/);
+  });
+
   it('counts one file in the singular', async () => {
     const runId = await newRun();
     await attachmentsService.addAttachment({
