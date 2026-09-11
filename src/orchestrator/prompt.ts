@@ -27,6 +27,7 @@ How this works:
 - This worktree is disposable and on its own branch. The developer's real checkout is untouched.
 - After you stop, an orchestrator runs this project's configured checks (typecheck, lint, tests, build) against your work and records the results. Your own assessment does not decide whether the task is done.
 - Because of that, do not claim anything passes unless you actually ran it. Reporting "I believe this works" is fine; reporting a green test suite you never ran is not.
+- If you start something that keeps running after your own turn (a background command, a long test run), do not end your turn saying you will wait for it to notify you — nothing will notify you once you stop; this process simply ends. Wait for it yourself and report the actual result, or stop it and say plainly that you did not verify it.
 - Work only inside this worktree.`;
 
 const PLAN_RULES = `You are planning a change inside an isolated Git worktree created for this task. You are not implementing it.

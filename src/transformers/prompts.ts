@@ -88,3 +88,27 @@ Agent's closing message:
 ${input.agentText}
 """`;
 }
+
+/**
+ * Whether a closing message defers to a background job's notification rather
+ * than reporting an outcome — e.g. "I'll wait for the background test task to
+ * notify me when it completes rather than polling."
+ *
+ * No CLI invocation gets a second wake-up once it exits, so a message like
+ * this is never actually kept: rewriting it into plain language would just
+ * paraphrase the same non-answer. `BUILD_RULES` in `orchestrator/prompt.ts`
+ * now tells agents not to write this in the first place; this is the
+ * fallback for when a model does anyway.
+ *
+ * Deliberately narrow — it requires both a wait/poll verb and a background
+ * job's notification mentioned close together, so an ordinary report that
+ * happens to mention "background" in passing is not caught by mistake.
+ */
+export function isUnresolvedBackgroundWait(text: string): boolean {
+  const normalized = text.toLowerCase();
+  const mentionsWaiting = /\b(wait|waiting|poll|polling)\b/.test(normalized);
+  const mentionsBackgroundNotice =
+    /\bbackground\b[\s\S]{0,60}\b(notif\w*|complet\w*)\b/.test(normalized) ||
+    /\b(notif\w*)\b[\s\S]{0,60}\bbackground\b/.test(normalized);
+  return mentionsWaiting && mentionsBackgroundNotice;
+}
