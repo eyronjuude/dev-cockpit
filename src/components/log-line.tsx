@@ -93,6 +93,7 @@ const ICON: Partial<Record<EventType, string>> = {
   'landing.validation_failed': '✕',
   'landing.applied': '✓',
   'landing.failed': '✕',
+  'run.impact': '∑',
   'run.ready': '✓',
   'run.needs_changes': '⚑',
   'run.approved': '✓',

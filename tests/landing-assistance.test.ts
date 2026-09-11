@@ -180,6 +180,7 @@ function successOutcome(finalText: string): AgentOutcome {
     numTurns: 1,
     durationMs: 5,
     costUsd: null,
+    usage: null,
     errorMessage: null,
     cancelled: false,
     timedOut: false,

@@ -24,7 +24,7 @@ not race to fast-forward the same checkout.
 │                                          ▲                                   │
 │  ┌────────────────── orchestrator ───────┴─────────────────────────────┐     │
 │  │  transform → prepare → implement → summarise → collect →           │     │
-│  │  validate → review → decide                                        │     │
+│  │  validate → review → impact → decide                               │     │
 │  └───┬──────────────┬──────────────┬──────────────┬───────────────┬────┘     │
 └──────┼──────────────┼──────────────┼──────────────┼───────────────┼──────────┘
        │              │              │              │               │
@@ -221,6 +221,54 @@ A follow-up iteration is short, because the resumed session still holds the
 rules, the task and what it produced. With no session to resume that inverts,
 and the prompt carries all three instead — feedback alone would ask a cold
 agent to revise work it has never seen. See ADR 0010.
+
+## Impact
+
+A run says which files it changed. It says nothing about the shape of the work
+behind them, so two runs an order of magnitude apart in cost read the same and
+the difference goes unexplained. `phaseDecide` writes one `run.impact` event
+before the verdict — before, so the numbers are recorded whichever way the
+verdict goes, and a `NEEDS_CHANGES` run is exactly the one whose cost wants
+explaining.
+
+`domain/impact.ts` is pure, and the run screen calls the same function, so the
+panel and the log cannot disagree. Three derived numbers carry it, and none of
+them is the dollar figure:
+
+- **average context per turn** — cache reads over turns. The transcript is
+  re-sent every turn, so cost grows with turns *and* with how large the session
+  got. This is what separates a run that explored efficiently from one that
+  filled its window early and paid for it on every later turn.
+- **cost per turn** — the price of one unit of agent work, comparable across
+  tasks in a way that cost per run is not.
+- **total tokens** — the scale of the run, which varies by an order of
+  magnitude where the cache-read *share* does not. That share is on the object
+  and deliberately off the summary line: it measured 96-99% on every run in the
+  sample, so it separates nothing and invites being read as a share of cost.
+
+Expressed in tokens rather than money on purpose: prices change and vary by
+model, a share of tokens stays true, and the provider's own `costUsd` is
+reported alongside unchanged.
+
+Answering *which* setting changed needs the settings as they were, so
+`iterations` records the resolved model, effort and permission mode rather than
+the names they were resolved from. Both sources move otherwise —
+`profiles.ts` holds the effort for a profile name, so editing it silently
+re-labels every past run, and `runs.agent_model` is written back from the
+session's init message, which is what the provider chose rather than what was
+asked for. `settingsChanged` compares against the project's previous run and
+reports nothing for a setting that run never recorded, so the runs from before
+this existed do not each read as a deliberate reconfiguration.
+
+Token counts live on the row rather than in the raw stream artifact, because
+artifacts expire under retention and the question "did that change help"
+outlives them. Every count is nullable: Codex reports none, and null says "not
+reported" where zero would claim the iteration used none.
+
+`addRunCost` is the single place a run's cost grows. There are five callers —
+the implementer, the two landing agents, the transformer and the reviewer — and
+four of them previously dropped the number, which made the run total a subset
+that did not say so.
 
 ## Readiness
 

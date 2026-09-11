@@ -20,6 +20,7 @@ import type {
   AgentRunStatus,
   AgentStartInput,
   AgentStreamEvent,
+  TokenUsage,
   ImplementationAgent,
 } from './types';
 
@@ -175,6 +176,7 @@ export class ClaudeCodeAgent implements ImplementationAgent {
     let numTurns: number | null = null;
     let durationMs: number | null = null;
     let costUsd: number | null = null;
+    let usage: TokenUsage | null = null;
     let errorMessage: string | null = null;
     let deniedTools: string[] = [];
     let timedOut = false;
@@ -216,6 +218,7 @@ export class ClaudeCodeAgent implements ImplementationAgent {
             numTurns = event.numTurns;
             durationMs = event.durationMs;
             costUsd = event.costUsd;
+            usage = event.usage;
             errorMessage = event.errorMessage;
             deniedTools = event.deniedTools;
             await emit(event);
@@ -271,6 +274,7 @@ export class ClaudeCodeAgent implements ImplementationAgent {
         numTurns: null,
         durationMs: null,
         costUsd: null,
+        usage: null,
         errorMessage: `Could not start ${claudeBinary()}: ${
           err instanceof Error ? err.message : String(err)
         }`,
@@ -366,6 +370,7 @@ export class ClaudeCodeAgent implements ImplementationAgent {
       numTurns,
       durationMs,
       costUsd,
+      usage,
       errorMessage: ok ? null : errorMessage,
       cancelled,
       timedOut,

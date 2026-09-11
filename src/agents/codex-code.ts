@@ -209,6 +209,7 @@ export class CodexCodeAgent implements ImplementationAgent {
         numTurns: null,
         durationMs: Date.now() - start,
         costUsd: null,
+        usage: null,
         errorMessage: `Could not start ${codexBinary()}: ${
           err instanceof Error ? err.message : String(err)
         }`,
@@ -323,6 +324,8 @@ export class CodexCodeAgent implements ImplementationAgent {
       numTurns: null,
       durationMs,
       costUsd: null,
+      // Codex does not report token counts on its JSON stream.
+      usage: null,
       errorMessage: ok ? null : errorMessage,
       cancelled,
       timedOut,

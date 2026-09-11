@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { and, asc, desc, eq, inArray, max } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull, lt, max, or } from 'drizzle-orm';
 import { z } from 'zod';
 
 import { getDb } from '@/db/client';
@@ -14,6 +14,7 @@ import {
 } from '@/db/schema';
 import { newIterationId, newRunId, runBranchName } from '@/core/ids';
 import { notFound } from '@/core/errors';
+import type { TokenUsage } from '@/agents/types';
 import {
   effectiveWorkMode,
   resolveWorkMode,
@@ -104,12 +105,22 @@ export interface IterationView {
   exitCode: number | null;
   numTurns: number | null;
   costUsd: number | null;
+  /** The settings this iteration actually ran with, as requested. */
+  settings: IterationSettings;
+  /** Token counts behind `costUsd`. Null where the provider reports none. */
+  usage: TokenUsage | null;
   finalText: string | null;
   summary: string | null;
   summaryProvider: string | null;
   error: string | null;
   startedAt: string;
   finishedAt: string | null;
+}
+
+export interface IterationSettings {
+  model: string | null;
+  effort: string | null;
+  permissionMode: string | null;
 }
 
 export interface ValidationResultView {
@@ -215,6 +226,24 @@ export interface RunProviderChoices {
  * Queries
  * ------------------------------------------------------------------ */
 
+/**
+ * Token counts off the row, or null when the provider reported none.
+ *
+ * All-null and "used no tokens" are different claims, and only the first is
+ * ever true, so a row with nothing recorded returns null rather than zeroes
+ * that a report would go on to divide by.
+ */
+function hydrateUsage(row: typeof iterations.$inferSelect): TokenUsage | null {
+  const usage: TokenUsage = {
+    inputTokens: row.inputTokens,
+    outputTokens: row.outputTokens,
+    thinkingTokens: row.thinkingTokens,
+    cacheReadTokens: row.cacheReadTokens,
+    cacheCreationTokens: row.cacheCreationTokens,
+  };
+  return Object.values(usage).some((v) => v !== null) ? usage : null;
+}
+
 function hydrateIteration(row: typeof iterations.$inferSelect): IterationView {
   return {
     id: row.id,
@@ -227,6 +256,12 @@ function hydrateIteration(row: typeof iterations.$inferSelect): IterationView {
     exitCode: row.exitCode,
     numTurns: row.numTurns,
     costUsd: row.costUsd,
+    settings: {
+      model: row.model,
+      effort: row.effort,
+      permissionMode: row.permissionMode,
+    },
+    usage: hydrateUsage(row),
     finalText: row.finalText,
     summary: row.summary,
     summaryProvider: row.summaryProvider,
@@ -778,6 +813,11 @@ export function createIteration(input: {
   prompt: string;
   sessionId: string | null;
   resumed: boolean;
+  /**
+   * What the agent was asked to run with. Written at creation rather than at
+   * finish so an iteration that dies mid-flight still says what it was trying.
+   */
+  settings?: Partial<IterationSettings>;
 }): IterationView {
   const db = getDb();
   const current = db
@@ -799,6 +839,9 @@ export function createIteration(input: {
       status: 'running',
       sessionId: input.sessionId,
       resumed: input.resumed,
+      model: input.settings?.model ?? null,
+      effort: input.settings?.effort ?? null,
+      permissionMode: input.settings?.permissionMode ?? null,
     })
     .run();
 
@@ -815,14 +858,49 @@ export function finishIteration(
     exitCode?: number | null;
     numTurns?: number | null;
     costUsd?: number | null;
+    usage?: TokenUsage | null;
     finalText?: string | null;
     error?: string | null;
   },
 ): void {
+  const { usage, ...rest } = fields;
   const db = getDb();
   db.update(iterations)
-    .set({ ...fields, finishedAt: new Date().toISOString() })
+    .set({
+      ...rest,
+      // Spread rather than assigned wholesale: a provider that reports nothing
+      // must not overwrite counts an earlier write already recorded.
+      ...(usage
+        ? {
+            inputTokens: usage.inputTokens,
+            outputTokens: usage.outputTokens,
+            thinkingTokens: usage.thinkingTokens,
+            cacheReadTokens: usage.cacheReadTokens,
+            cacheCreationTokens: usage.cacheCreationTokens,
+          }
+        : {}),
+      finishedAt: new Date().toISOString(),
+    })
     .where(eq(iterations.id, iterationId))
+    .run();
+}
+
+/**
+ * Adds to a run's rolled-up cost.
+ *
+ * One function rather than a read-modify-write at each call site, because
+ * there are now five of them — the implementer, the two landing agents, the
+ * transformer and the reviewer — and four of those were previously dropping
+ * the number on the floor. A run's cost is what the run spent, not what its
+ * implementation phase spent.
+ */
+export function addRunCost(runId: string, costUsd: number | null | undefined): void {
+  if (typeof costUsd !== 'number' || !Number.isFinite(costUsd) || costUsd === 0) return;
+  const db = getDb();
+  const current = db.select({ value: runs.costUsd }).from(runs).where(eq(runs.id, runId)).get();
+  db.update(runs)
+    .set({ costUsd: (current?.value ?? 0) + costUsd, updatedAt: new Date().toISOString() })
+    .where(eq(runs.id, runId))
     .run();
 }
 
@@ -843,6 +921,61 @@ export function setIterationSummary(
     .set({ summary, summaryProvider: provider })
     .where(eq(iterations.id, iterationId))
     .run();
+}
+
+/**
+ * The settings the project's previous run finished with, for comparison.
+ *
+ * Scoped to the project because that is the only comparison that means
+ * anything — two runs against different repositories differ in everything.
+ * Ordered by the run's creation rather than the iteration's, so a change
+ * request on an old run does not present itself as the latest configuration.
+ *
+ * Null when nothing earlier recorded any settings, which is every run from
+ * before this was captured. `settingsChanged` treats that as "no change
+ * observed" rather than inventing one.
+ */
+export function previousRunSettings(run: RunView): IterationSettings | null {
+  const db = getDb();
+  const row = db
+    .select({
+      model: iterations.model,
+      effort: iterations.effort,
+      permissionMode: iterations.permissionMode,
+      profile: runs.profile,
+    })
+    .from(iterations)
+    .innerJoin(runs, eq(runs.id, iterations.runId))
+    .where(
+      and(
+        eq(runs.projectId, run.projectId),
+        lt(runs.createdAt, run.createdAt),
+        or(
+          isNotNull(iterations.model),
+          isNotNull(iterations.effort),
+          isNotNull(iterations.permissionMode),
+        ),
+      ),
+    )
+    .orderBy(desc(runs.createdAt), desc(iterations.ordinal))
+    .limit(1)
+    .get();
+
+  if (!row) return null;
+  return { model: row.model, effort: row.effort, permissionMode: row.permissionMode };
+}
+
+/** The profile of the project's previous run, paired with `previousRunSettings`. */
+export function previousRunProfile(run: RunView): string | null {
+  const db = getDb();
+  const row = db
+    .select({ profile: runs.profile })
+    .from(runs)
+    .where(and(eq(runs.projectId, run.projectId), lt(runs.createdAt, run.createdAt)))
+    .orderBy(desc(runs.createdAt))
+    .limit(1)
+    .get();
+  return row?.profile ?? null;
 }
 
 export function latestIteration(runId: string): IterationView | null {

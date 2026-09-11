@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 
 import type { RunEvent } from '@/domain/events';
+import { describeRunImpact, summariseRunImpact } from '@/domain/impact';
 import {
   effectiveWorkMode,
   isReadOnlyMode,
@@ -425,6 +426,72 @@ function Meta({ label, value, mono }: { label: string; value: string; mono?: boo
   );
 }
 
+/**
+ * What the run changed, and what it cost to change it.
+ *
+ * Derived on the client from the same pure function the orchestrator writes
+ * into the `run.impact` event, so the panel and the log cannot disagree. Only
+ * shown once an iteration has run — before that there is nothing to report and
+ * a row of dashes is worse than no panel.
+ */
+function ImpactPanel({ run }: { run: RunSnapshot['run'] }) {
+  if (run.iterations.length === 0) return null;
+
+  const validationAttempt = run.validations.reduce((acc, v) => Math.max(acc, v.attempt), 0);
+  const findingAttempt = run.findings.reduce((acc, f) => Math.max(acc, f.attempt), 0);
+
+  const impact = summariseRunImpact({
+    profile: run.profile,
+    costUsd: run.costUsd,
+    iterations: run.iterations.map((it) => ({
+      kind: it.kind,
+      status: it.status,
+      numTurns: it.numTurns,
+      costUsd: it.costUsd,
+      settings: it.settings,
+      usage: it.usage,
+    })),
+    changedFiles: run.changedFiles.map((f) => ({
+      additions: f.additions,
+      deletions: f.deletions,
+    })),
+    validations: run.validations
+      .filter((v) => v.attempt === validationAttempt)
+      .map((v) => ({ outcome: v.outcome, blocking: v.blocking })),
+    findings: run.findings
+      .filter((f) => f.attempt === findingAttempt)
+      .map((f) => ({ severity: f.severity })),
+  });
+
+  const lines = describeRunImpact(impact);
+
+  return (
+    <div className="panel">
+      <div className="panel-head">
+        <h2 className="panel-title">Impact</h2>
+        <span className="text-[11px] text-ink-faint">
+          {impact.tokens
+            ? 'measured from the provider’s own token counts'
+            : 'this provider reports no token counts'}
+        </span>
+      </div>
+      <div className="space-y-1 px-3.5 py-2.5 text-[12.5px] leading-relaxed">
+        {lines.map((line, i) => (
+          <p key={line} className={i === 0 ? 'text-ink' : 'text-ink-faint'}>
+            {line}
+          </p>
+        ))}
+      </div>
+      {impact.avgContextTokens !== null ? (
+        <p className="border-t border-line px-3.5 py-1.5 text-[11px] text-ink-faint">
+          Average context is the transcript re-sent on every turn. It grows as the session does,
+          and is usually what separates two runs of very different cost.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function OverviewTab({
   snapshot,
   findings,
@@ -473,6 +540,8 @@ function OverviewTab({
           <Markdown className="px-3.5 py-2.5">{run.spec}</Markdown>
         </div>
       ) : null}
+
+      <ImpactPanel run={run} />
 
       {interpreted ? (
         <div className="panel">
