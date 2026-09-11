@@ -88,11 +88,21 @@ agent session, one worktree, one branch — so the mode belongs to it, chosen on
 the New Task screen. `mode` records what was asked for and is never rewritten;
 `resolved_mode` records what is executing and moves if the run switches.
 
-**A read-only run can become a build.** "Implement this plan" (or "Switch to
-Build" from an Ask) moves `resolved_mode` and resumes the same Claude Code
-session, told explicitly that the read-only rules are replaced. Without that,
-asking or planning separately would cost a whole second run and throw away
-everything the agent read.
+**A run can switch to any other mode, in either direction.** "Implement this
+plan" (or "Switch to Build" from an Ask), "Switch to Plan", and "Switch to
+Ask" all do the same thing: move `resolved_mode` and resume the same Claude
+Code session, told explicitly that the previous mode's rules are replaced by
+whichever set applies now. This is symmetric — Build can hand back to Ask or
+Plan just as either read-only mode can hand off to Build — because the point
+is the same regardless of direction: asking, planning and building separately
+would cost a whole second run and throw away everything the agent already
+read. A switch is only offered once the run is idle and has a finished
+iteration to switch from; it does not interrupt a live one.
+
+Switching away from Build does not undo what Build already changed. A run
+that goes Build → Plan still carries those changes in its worktree, so the
+read-only promise "changed nothing" is judged against the whole run, not just
+the iteration since the last switch — see the readiness note below.
 
 **Approving a plan does not end it.** A plan has nothing to commit and nothing
 to land, so `APPROVED` on a read-only run means "build this", not "this run is
@@ -128,6 +138,14 @@ promise, and that is exactly what a person should be shown.
 non-empty text. A failed or cancelled iteration can still carry partial output,
 and half a plan presented as ready is the same class of mistake as a green
 badge on a test that never ran.
+
+"The worktree is untouched" is checked against the whole run, not the current
+iteration. A run that was Build before switching to Ask or Plan still shows
+those changed files, and the reason given does not claim the current mode
+made them — it says the run has changes and this mode should leave them
+alone. Scoping the check to "since the last switch" would need its own
+baseline recorded at switch time; left as a known gap rather than assumed
+away.
 
 `IMPLEMENTER != APPROVER` is unchanged. What the mode alters is what counts as
 evidence, never who weighs it: the agent's own assessment decides nothing in

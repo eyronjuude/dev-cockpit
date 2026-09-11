@@ -6,6 +6,7 @@ import { useState } from 'react';
 import {
   effectiveWorkMode,
   isReadOnlyMode,
+  RESOLVED_WORK_MODES,
   WORK_MODE_LABELS,
   WORK_MODE_WORDING,
   type ResolvedWorkMode,
@@ -81,22 +82,61 @@ const LANDING_WORKTREE_STATUSES: readonly RunStatus[] = [
 ];
 
 /**
- * The instruction sent when a read-only run is switched to Build.
+ * The instruction sent when a run switches mode.
  *
  * A plan is a complete brief on its own, so the note is an adjustment to it. An
  * answer is not, so the note carries the actual instruction and the fallback
- * has to be vague rather than pretend otherwise.
+ * has to be vague rather than pretend otherwise. Switching into Plan or Ask
+ * only ever asks the agent to stop and produce that deliverable instead, since
+ * neither may touch a file regardless of what mode came before.
  */
-function buildFeedbackFor(mode: ResolvedWorkMode, note: string): string {
+function switchFeedbackFor(from: ResolvedWorkMode, to: ResolvedWorkMode, note: string): string {
   const trimmed = note.trim();
-  if (mode === 'plan') {
+  if (to === 'build') {
+    if (from === 'plan') {
+      return trimmed
+        ? `Implement the plan you wrote, with this adjustment:\n\n${trimmed}`
+        : 'Implement the plan you wrote, in full.';
+    }
     return trimmed
-      ? `Implement the plan you wrote, with this adjustment:\n\n${trimmed}`
-      : 'Implement the plan you wrote, in full.';
+      ? `Implement this, following the answer you just gave:\n\n${trimmed}`
+      : 'Implement what your answer describes. If the answer did not describe a change, say what you would need to know instead of guessing.';
+  }
+  if (to === 'plan') {
+    return trimmed
+      ? `Write a plan instead, with this in mind:\n\n${trimmed}`
+      : 'Write a plan instead of what you were doing, based on everything you have read so far.';
   }
   return trimmed
-    ? `Implement this, following the answer you just gave:\n\n${trimmed}`
-    : 'Implement what your answer describes. If the answer did not describe a change, say what you would need to know instead of guessing.';
+    ? `Answer this instead:\n\n${trimmed}`
+    : 'Answer instead of continuing — say what you found, not what you would change.';
+}
+
+/** The button label for switching this run from `from` into `to`. */
+function switchModeLabel(from: ResolvedWorkMode, to: ResolvedWorkMode): string {
+  if (to === 'build') return from === 'plan' ? 'Implement this plan' : 'Switch to Build';
+  return `Switch to ${WORK_MODE_LABELS[to]}`;
+}
+
+/** The note field's label, asked relative to what the target mode produces. */
+function switchNoteLabel(from: ResolvedWorkMode, to: ResolvedWorkMode): string {
+  if (to === 'build') {
+    return from === 'plan'
+      ? 'Anything to change about the plan first? (optional)'
+      : 'What should it build? (optional, but useful)';
+  }
+  if (to === 'plan') return 'Anything the plan should account for? (optional)';
+  return 'What do you want to know? (optional)';
+}
+
+function switchNotePlaceholder(from: ResolvedWorkMode, to: ResolvedWorkMode): string {
+  if (to === 'build') {
+    return from === 'plan'
+      ? 'Skip step 4 for now — the migration can wait until the endpoint is in.'
+      : 'Do the second option you described, and leave the cache alone.';
+  }
+  if (to === 'plan') return 'Also plan for the case where the session already exists.';
+  return 'What does the current retry logic actually do on a 500?';
 }
 
 type Dialog =
@@ -122,6 +162,7 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
 
   const [feedback, setFeedback] = useState('');
   const [implementNote, setImplementNote] = useState('');
+  const [switchTarget, setSwitchTarget] = useState<ResolvedWorkMode>('build');
   const [note, setNote] = useState('');
   const [createCommit, setCreateCommit] = useState(true);
   const [commitMessage, setCommitMessage] = useState('');
@@ -155,6 +196,19 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
     setSelectedAgentProvider(run.agentProvider);
     setSelectedAgentModel(run.agentModel ?? '');
     setDialog(target);
+  };
+  // A separate opener rather than `toggleAgentDialog('implement')`: two
+  // buttons share that dialog now, one per switch target, and clicking the
+  // other one while it is open must retarget it rather than close it.
+  const openSwitchDialog = (target: ResolvedWorkMode) => {
+    if (dialog === 'implement' && switchTarget === target) {
+      setDialog('none');
+      return;
+    }
+    setSelectedAgentProvider(run.agentProvider);
+    setSelectedAgentModel(run.agentModel ?? '');
+    setSwitchTarget(target);
+    setDialog('implement');
   };
 
   const post = async (path: string, body?: unknown, label?: string) => {
@@ -240,23 +294,22 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
     retryPlan.stage === 'validate' && readOnly
       ? 'Retry the verdict'
       : RETRY_STAGE_LABELS[retryPlan.stage];
-  // Named once because the approve dialog promises these two by name, and a
-  // promise that drifts from the button it points at is worse than none.
-  const implementLabel = mode === 'plan' ? 'Implement this plan' : 'Switch to Build';
   const changesLabel =
     mode === 'ask' ? 'Ask a follow-up' : mode === 'plan' ? 'Revise the plan' : 'Request changes';
 
-  // Only once there is something finished to build on. An iteration that
-  // failed part-way can still hold text, and switching to Build on half a plan
-  // is a build run started the long way round.
-  const canSwitchToBuild =
-    readOnly &&
+  // Only once there is something finished to hand off. An iteration that
+  // failed part-way can still hold text, and switching mode on half a plan or
+  // half a build is a run started the long way round. Available from any
+  // mode now, not just the read-only ones — a build can hand back to Ask or
+  // Plan just as a plan can hand off to Build.
+  const canSwitchMode =
     !active &&
     reworkable &&
     run.worktreePath !== null &&
     run.iterations.some(
       (i) => i.status === 'completed' && i.finalText !== null && i.finalText.trim().length > 0,
     );
+  const switchTargets = RESOLVED_WORK_MODES.filter((m) => m !== mode);
 
   return (
     <div className="space-y-2.5">
@@ -283,16 +336,19 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
           </button>
         ) : null}
 
-        {canSwitchToBuild ? (
-          <button
-            type="button"
-            className="btn btn-primary"
-            disabled={busy !== null}
-            onClick={() => toggleAgentDialog('implement')}
-          >
-            {implementLabel}
-          </button>
-        ) : null}
+        {canSwitchMode
+          ? switchTargets.map((target) => (
+              <button
+                key={target}
+                type="button"
+                className="btn btn-primary"
+                disabled={busy !== null}
+                onClick={() => openSwitchDialog(target)}
+              >
+                {switchModeLabel(mode, target)}
+              </button>
+            ))
+          : null}
 
         {canRequestChanges ? (
           <button
@@ -311,7 +367,7 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
             // The leading action for a run that stopped, unless the run already
             // has one: on a Plan run that produced its plan, building it is
             // worth more than re-reaching the same verdict.
-            className={canSwitchToBuild ? 'btn' : 'btn btn-primary'}
+            className={canSwitchMode ? 'btn' : 'btn btn-primary'}
             disabled={busy !== null}
             title={`Resumes this run where it stopped, because ${retryPlan.reason}.${
               retryPlan.resumesSession ? ' The recorded agent session is resumed.' : ''
@@ -607,25 +663,22 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
       {dialog === 'implement' ? (
         <div className="panel p-3">
           <p className="mb-2.5 text-[12.5px] text-ink-muted">
-            Switches this run to <span className="font-medium">Build</span> mode and hands the{' '}
-            {wording.deliverable} to the selected implementation agent. The project&rsquo;s checks run
-            afterwards, and the diff appears on this screen as it would for any build run.
+            Switches this run to{' '}
+            <span className="font-medium">{WORK_MODE_LABELS[switchTarget]}</span> mode and hands
+            the {wording.deliverable} to the selected {WORK_MODE_WORDING[switchTarget].agentNoun}.{' '}
+            {switchTarget === 'build'
+              ? "The project's checks run afterwards, and the diff appears on this screen as it would for any build run."
+              : 'No checks run afterwards, since nothing changes.'}
           </p>
           <label className="label" htmlFor="implement-note">
-            {mode === 'plan'
-              ? 'Anything to change about the plan first? (optional)'
-              : 'What should it build? (optional, but useful)'}
+            {switchNoteLabel(mode, switchTarget)}
           </label>
           <textarea
             id="implement-note"
             className="textarea"
             rows={3}
             value={implementNote}
-            placeholder={
-              mode === 'plan'
-                ? 'Skip step 4 for now — the migration can wait until the endpoint is in.'
-                : 'Do the second option you described, and leave the cache alone.'
-            }
+            placeholder={switchNotePlaceholder(mode, switchTarget)}
             onChange={(e) => setImplementNote(e.target.value)}
           />
           <AgentControls
@@ -643,7 +696,7 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
                 }.`
               : providerChanged
                 ? `Starts a fresh ${selectedAgentLabel} pass because the implementation provider is changing.`
-                : `No agent session is recorded for this run, so the implementer starts fresh with the ${wording.deliverable} text in its prompt.`}
+                : `No agent session is recorded for this run, so the ${WORK_MODE_WORDING[switchTarget].agentNoun} starts fresh with the ${wording.deliverable} text in its prompt.`}
           </p>
           <div className="mt-2.5 flex justify-end gap-1.5">
             <button type="button" className="btn btn-ghost" onClick={() => setDialog('none')}>
@@ -657,15 +710,19 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
                 void post(
                   `/api/runs/${run.id}/changes`,
                   {
-                    mode: 'build',
-                    feedback: buildFeedbackFor(mode, implementNote),
+                    mode: switchTarget,
+                    feedback: switchFeedbackFor(mode, switchTarget, implementNote),
                     ...agentSelectionBody(),
                   },
                   'implement',
                 )
               }
             >
-              {busy === 'implement' ? 'Sending…' : 'Switch to Build and implement'}
+              {busy === 'implement'
+                ? 'Sending…'
+                : switchTarget === 'build'
+                  ? 'Switch to Build and implement'
+                  : switchModeLabel(mode, switchTarget)}
             </button>
           </div>
         </div>
@@ -827,9 +884,8 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
           {readOnly ? (
             <p className="mb-2.5 text-[12.5px] text-ink-muted">
               Approving records the decision. It does not start any work and changes no files
-              &mdash; <span className="font-medium">{implementLabel}</span> and{' '}
-              <span className="font-medium">{changesLabel}</span> both stay available afterwards,
-              on this same worktree and agent session.
+              &mdash; switching mode and <span className="font-medium">{changesLabel}</span> both
+              stay available afterwards, on this same worktree and agent session.
             </p>
           ) : null}
 

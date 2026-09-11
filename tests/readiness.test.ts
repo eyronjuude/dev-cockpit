@@ -707,7 +707,7 @@ describe('assessReadiness in the read-only modes', () => {
 
     const assessment = runs.assessReadiness(runs.requireRun(run.id), project);
     expect(assessment.ready).toBe(false);
-    expect(assessment.reasons.some((r) => r.includes('changed 1 file'))).toBe(true);
+    expect(assessment.reasons.some((r) => r.includes('This run has 1 changed file'))).toBe(true);
   });
 
   it('does not accept partial output from an iteration that failed', async () => {
@@ -768,7 +768,9 @@ describe('assessReadiness in the read-only modes', () => {
 
     const assessment = runs.assessReadiness(runs.requireRun(run.id), project);
     expect(assessment.ready).toBe(false);
-    expect(assessment.reasons.some((r) => r.includes('Ask mode changed 1 file'))).toBe(true);
+    expect(
+      assessment.reasons.some((r) => r.includes('This run has 1 changed file') && r.includes('Ask mode')),
+    ).toBe(true);
   });
 
   it('judges a switched run by the mode it is now in', async () => {
@@ -782,6 +784,45 @@ describe('assessReadiness in the read-only modes', () => {
     expect(after.mode).toBe('build');
     expect(after.ready).toBe(false);
     expect(after.reasons).toContain('No files changed');
+  });
+
+  it('moves an ask run to plan and keeps its deliverable as evidence', async () => {
+    const { project, run } = await planRun('ready-ask-to-plan', 'ask');
+    seedPlan(run.id, 'An answer.');
+    expect(runs.requireRun(run.id).resolvedMode).toBe('ask');
+
+    runs.switchRunMode(run.id, 'plan', 'requested with the change');
+    const after = runs.requireRun(run.id);
+    expect(after.mode).toBe('ask');
+    expect(after.resolvedMode).toBe('plan');
+
+    const assessment = runs.assessReadiness(after, project);
+    expect(assessment.mode).toBe('plan');
+    expect(assessment.ready).toBe(true);
+  });
+
+  it('does not blame the mode in effect now for files an earlier build changed', async () => {
+    const { project, run } = await planRun('ready-build-to-plan', 'plan');
+    seedPlan(run.id, 'A plan.');
+    runs.switchRunMode(run.id, 'build', 'requested with the change');
+    runs.replaceChangedFiles(run.id, [
+      {
+        path: 'src/app.ts',
+        previousPath: null,
+        changeType: 'modified',
+        additions: 4,
+        deletions: 1,
+        binary: false,
+      },
+    ]);
+
+    // Back to Plan without touching the worktree any further.
+    runs.switchRunMode(run.id, 'plan', 'requested with the change');
+    const assessment = runs.assessReadiness(runs.requireRun(run.id), project);
+    expect(assessment.ready).toBe(false);
+    const reason = assessment.reasons.find((r) => r.includes('changed file'));
+    expect(reason).toContain('This run has 1 changed file');
+    expect(reason).not.toContain('Plan mode changed');
   });
 });
 
