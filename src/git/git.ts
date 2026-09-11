@@ -158,6 +158,76 @@ export async function guessDefaultBranch(dir: string): Promise<string> {
   return currentBranch(dir);
 }
 
+export interface RunCommit {
+  sha: string;
+  shortSha: string;
+  subject: string;
+  authorName: string;
+  /** ISO-8601 author date. */
+  authorDate: string;
+  additions: number;
+  deletions: number;
+  filesChanged: number;
+}
+
+const UNIT_SEPARATOR = String.fromCharCode(31);
+
+function parseShortstat(text: string): { additions: number; deletions: number; filesChanged: number } {
+  const line = text.trim().split('\n').at(-1) ?? '';
+  const files = /(\d+) files? changed/.exec(line);
+  const additions = /(\d+) insertions?\(\+\)/.exec(line);
+  const deletions = /(\d+) deletions?\(-\)/.exec(line);
+  return {
+    filesChanged: files ? Number.parseInt(files[1]!, 10) : 0,
+    additions: additions ? Number.parseInt(additions[1]!, 10) : 0,
+    deletions: deletions ? Number.parseInt(deletions[1]!, 10) : 0,
+  };
+}
+
+/**
+ * Every commit reachable from `head` but not from `base`, oldest first.
+ *
+ * One extra `git show --shortstat` per commit rather than a single `git log
+ * --numstat` pass: run branches hold few commits at a time, and a per-commit
+ * call is far simpler to keep correct than reassembling numstat blocks split
+ * across commit boundaries (see `numstat()` in `git/diff.ts`, which already
+ * has to do that for a single working-tree diff).
+ */
+export async function listCommitsSince(
+  dir: string,
+  base: string,
+  head: string,
+): Promise<RunCommit[]> {
+  const res = await git(
+    dir,
+    ['log', '--reverse', `--format=%H${UNIT_SEPARATOR}%h${UNIT_SEPARATOR}%s${UNIT_SEPARATOR}%an${UNIT_SEPARATOR}%aI`, `${base}..${head}`],
+    { allowFailure: true },
+  );
+  if (res.exitCode !== 0 || !res.stdout.trim()) return [];
+
+  const commits: RunCommit[] = [];
+  for (const line of res.stdout.split('\n')) {
+    if (!line.trim()) continue;
+    const [sha, shortSha, subject, authorName, authorDate] = line.split(UNIT_SEPARATOR);
+    if (!sha) continue;
+
+    const stat = await git(dir, ['show', '--shortstat', '--format=', sha], { allowFailure: true });
+    const { additions, deletions, filesChanged } = parseShortstat(stat.stdout);
+
+    commits.push({
+      sha,
+      shortSha: shortSha ?? sha.slice(0, 7),
+      subject: subject ?? '',
+      authorName: authorName ?? '',
+      authorDate: authorDate ?? '',
+      additions,
+      deletions,
+      filesChanged,
+    });
+  }
+  return commits;
+}
+
 export interface AheadBehind {
   ahead: number;
   behind: number;

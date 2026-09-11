@@ -73,6 +73,7 @@ import { linkIntoWorktree, prepareWorktree, removeWorktree } from '@/git/worktre
 import { runCommand } from '@/process/spawn';
 import { getReviewer } from '@/reviewers/registry';
 import { register, writeTextArtifact } from '@/services/artifacts';
+import { markRunCommitsLanded, recordRunCommits } from '@/services/commits';
 import { appendEvent } from '@/services/events';
 import { tryRecordImplementationMap } from '@/services/implementation-map';
 import { stopRunPreview } from '@/services/previews';
@@ -1467,6 +1468,11 @@ async function executeLanding(
     });
     setStatus(run.id, 'LANDED', { reason: `landed on ${targetBranch}`, finished: true });
 
+    // Landing merges the whole branch at once, so every commit recorded for
+    // this run reached the target branch together — there is no scenario
+    // where some land and others do not.
+    markRunCommitsLanded(run.id);
+
     // The work is on the target branch now, so both worktrees are spent.
     // Reclaiming them must never turn a successful landing into a failure,
     // hence the swallow: the run is already LANDED at this point.
@@ -2405,6 +2411,12 @@ async function phaseCollectDiff(run: RunView, _signal: AbortSignal): Promise<Run
   if (!run.worktreePath || !run.baseCommit) return run;
   setPhase(run.id, 'collecting');
 
+  // Picks up any commit the implementer made itself, when the project allows
+  // it (`allowAgentCommit`) — this is what lets a run hold more than one
+  // commit at all. Idempotent, so recording again next iteration or at
+  // landing costs nothing for shas already known.
+  await recordRunCommits(run.id, run.worktreePath, run.baseCommit);
+
   const diff = await collectRunDiff(run.worktreePath, run.baseCommit);
   replaceChangedFiles(run.id, diff.files);
 
@@ -2763,6 +2775,12 @@ async function ensureRunBranchCommitted(
     throw new AppError('The run branch has no committed changes to land.', {
       code: 'empty_run_branch',
     });
+  }
+
+  // Captures the commit just created above, and anything the implementer
+  // committed itself that a prior `phaseCollectDiff` pass missed.
+  if (hasInspectableWorktree && run.worktreePath && run.baseCommit) {
+    await recordRunCommits(run.id, run.worktreePath, run.baseCommit);
   }
 
   updateRunFields(run.id, { commitSha });

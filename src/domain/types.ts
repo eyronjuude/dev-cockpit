@@ -293,6 +293,7 @@ export const executionProfileSchema = z.enum(EXECUTION_PROFILES);
 
 export const ARTIFACT_KINDS = [
   'git_diff',
+  'commit_diff',
   'changed_files',
   'implementation_map',
   'implementation_log',
@@ -316,6 +317,7 @@ export const artifactKindSchema = z.enum(ARTIFACT_KINDS);
 
 export const ARTIFACT_KIND_LABELS: Record<ArtifactKind, string> = {
   git_diff: 'Git diff',
+  commit_diff: 'Commit diff',
   changed_files: 'Changed files',
   implementation_map: 'Implementation map',
   implementation_log: 'Implementation log',

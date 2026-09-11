@@ -211,6 +211,19 @@ function devNull(): string {
   return process.platform === 'win32' ? 'NUL' : '/dev/null';
 }
 
+/** A single commit's own patch, capped the same way a run's full diff is. */
+export async function commitPatch(worktree: string, sha: string): Promise<string> {
+  const res = await git(worktree, ['show', '--patch', '--format=', sha], {
+    allowFailure: true,
+    maxBuffer: MAX_PATCH_BYTES * 2,
+  });
+  let patch = res.stdout;
+  if (Buffer.byteLength(patch) > MAX_PATCH_BYTES) {
+    patch = `${patch.slice(0, MAX_PATCH_BYTES)}\n\n... [diff truncated at ${MAX_PATCH_BYTES} bytes] ...\n`;
+  }
+  return patch;
+}
+
 /**
  * Commits everything in the worktree onto the run branch. Only ever called
  * from the explicit approval action, and never touches a protected branch:

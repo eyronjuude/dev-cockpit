@@ -22,6 +22,7 @@ export const newValidationId = () => shortId('val');
 export const newArtifactId = () => shortId('art');
 export const newAttachmentId = () => shortId('att');
 export const newFindingId = () => shortId('fnd');
+export const newCommitId = () => shortId('cmt');
 
 /** Git branch component derived from a run id. Safe for `refs/heads/`. */
 export function runBranchName(runId: string): string {

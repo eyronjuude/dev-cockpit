@@ -63,7 +63,7 @@ const ASK_SHAPE = `Lead with the answer in the first sentence or two, then the e
 
 const NO_COMMIT_RULE = `- Do not run git commit, git push, git merge, git rebase, git reset --hard, or anything that rewrites history. Leave your changes in the working tree; the orchestrator captures the diff.`;
 
-const COMMIT_ALLOWED_RULE = `- You may create local commits on this branch if it helps you work. Never push, merge, rebase or force-push.`;
+const COMMIT_ALLOWED_RULE = `- You may create local commits on this branch if it helps you work. Prefer several small, focused commits over one large one — each commit should be one logical change, reviewable on its own. Never push, merge, rebase or force-push.`;
 
 /** What to say when an iteration runs in a different mode from the last one. */
 const MODE_SWITCH_NOTE: Record<ResolvedWorkMode, string> = {

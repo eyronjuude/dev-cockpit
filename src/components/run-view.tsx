@@ -14,6 +14,7 @@ import {
 import { computeRunProgress } from '@/domain/progress';
 import type { ChangeType } from '@/domain/types';
 import { CHANGE_TYPE_TONE, type BadgeTone } from '@/domain/vocabulary';
+import type { CommitView } from '@/services/commits';
 import { ArtifactPanel } from './artifact-panel';
 import { AttachmentList } from './attachments';
 import { DiffView } from './diff-view';
@@ -37,6 +38,7 @@ const TABS = [
   'Preview',
   'Map',
   'Changes',
+  'Commits',
   'Diff',
   'Tests',
   'Artifacts',
@@ -213,6 +215,9 @@ export function RunView({ initial }: { initial: RunSnapshot }) {
                     {run.changedFiles.length}
                   </span>
                 ) : null}
+                {name === 'Commits' && run.commits.length > 0 ? (
+                  <span className="ml-1.5 text-[10.5px] text-ink-faint">{run.commits.length}</span>
+                ) : null}
                 {name === 'Artifacts' && artifacts.length > 0 ? (
                   <span className="ml-1.5 text-[10.5px] text-ink-faint">{artifacts.length}</span>
                 ) : null}
@@ -287,6 +292,8 @@ export function RunView({ initial }: { initial: RunSnapshot }) {
                 </table>
               )
             ) : null}
+
+            {tab === 'Commits' ? <CommitsTab commits={run.commits} /> : null}
 
             {tab === 'Diff' ? (
               diffArtifact ? (
@@ -876,6 +883,64 @@ function MapTab({ artifacts }: { artifacts: RunSnapshot['artifacts'] }) {
         </p>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * Every commit found on this run's branch, oldest first, each expandable to
+ * its own diff.
+ *
+ * This is the run's real commit history, not the single `commitSha` the
+ * approval flow records — a project with `allowAgentCommit` on can have the
+ * implementer leave several commits behind, and this is where a reviewer
+ * checks whether each one is a focused, atomic change.
+ */
+function CommitsTab({ commits }: { commits: CommitView[] }) {
+  if (commits.length === 0) {
+    return (
+      <p className="empty-state">
+        No commits recorded yet. One is captured after every implementation pass, and again when
+        the run is approved.
+      </p>
+    );
+  }
+
+  return (
+    <ul className="divide-y divide-line">
+      {commits.map((commit) => (
+        <li key={commit.sha} className="px-3.5 py-2">
+          <details>
+            <summary className="flex cursor-pointer flex-wrap items-center gap-2 text-[12.5px]">
+              <code className="mono text-ink-faint">{commit.shortSha}</code>
+              <span className="min-w-0 flex-1 truncate">{commit.subject}</span>
+              <span
+                className={`badge ${commit.landed ? 'badge-pass' : 'badge-idle'}`}
+                title={
+                  commit.landed
+                    ? 'This run has been merged into its target branch'
+                    : 'Not yet landed'
+                }
+              >
+                {commit.landed ? 'landed' : 'not landed'}
+              </span>
+              <span className="text-[11px] text-ink-faint">
+                {formatTime(commit.authorDate)} · {commit.filesChanged} file
+                {commit.filesChanged === 1 ? '' : 's'}
+              </span>
+              <span className="tabular-nums text-pass">+{commit.additions}</span>
+              <span className="tabular-nums text-fail">−{commit.deletions}</span>
+            </summary>
+            <div className="mt-2">
+              {commit.diffArtifactId ? (
+                <LazyDiff artifactId={commit.diffArtifactId} />
+              ) : (
+                <p className="empty-state">No diff was captured for this commit.</p>
+              )}
+            </div>
+          </details>
+        </li>
+      ))}
+    </ul>
   );
 }
 

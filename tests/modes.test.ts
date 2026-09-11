@@ -114,6 +114,7 @@ function makeRun(overrides: Partial<RunView> = {}): RunView {
     changedFiles: [],
     findings: [],
     attachments: [],
+    commits: [],
     ...overrides,
   };
 }

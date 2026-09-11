@@ -49,6 +49,7 @@ import {
 } from '@/domain/types';
 import type { FileChange } from '@/git/diff';
 import { listAttachments, type AttachmentView } from './attachments';
+import { clearRunCommits, listRunCommits, type CommitView } from './commits';
 import { appendEvent } from './events';
 import { fromLines, requireProject, type ProjectView } from './projects';
 import type { ReviewFinding } from '@/reviewers/types';
@@ -204,6 +205,15 @@ export interface RunView {
   validations: ValidationResultView[];
   changedFiles: ChangedFileView[];
   findings: ReviewFindingView[];
+  /**
+   * Every commit found on this run's branch since its base commit.
+   *
+   * Distinct from `commitSha`: that column is the single commit the approval
+   * flow creates for whatever was left uncommitted, while this is every commit
+   * on the branch — including any the implementer made itself, when the
+   * project allows it (`allowAgentCommit`).
+   */
+  commits: CommitView[];
   /**
    * Files the developer attached to the request.
    *
@@ -381,6 +391,7 @@ export function getRun(id: string): RunView | null {
       createdAt: f.createdAt,
     })),
     attachments: listAttachments(id),
+    commits: listRunCommits(id),
   };
 }
 
@@ -786,6 +797,10 @@ export function resetRunForRestart(
 
   // The recorded diff describes a worktree that no longer exists.
   replaceChangedFiles(runId, []);
+  // Likewise the recorded commits: they lived on the branch this attempt just
+  // discarded. Their `commit_diff` artifacts are kept, same as every other
+  // artifact a restart leaves behind.
+  clearRunCommits(runId);
 
   appendEvent({
     runId,
