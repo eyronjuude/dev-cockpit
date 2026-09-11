@@ -92,11 +92,17 @@ function openingRules(project: ProjectView, mode: WorkModeBehaviour): string[] {
   }
 }
 
-/** The project's enabled validation commands, as prompt lines. */
+/**
+ * The project's enabled validation steps, as prompt lines.
+ *
+ * Named by label rather than kind: a pipeline may hold several steps of one
+ * kind, and an agent told only "unit" cannot tell which command it is being
+ * asked to satisfy.
+ */
 function checkLines(project: ProjectView): string[] {
-  return project.validationCommands
-    .filter((c) => c.enabled && c.command.trim())
-    .map((c) => `- ${c.kind}: \`${c.command}\``);
+  return project.validationSteps
+    .filter((step) => step.enabled && step.command.trim())
+    .map((step) => `- ${step.label}: \`${step.command}\``);
 }
 
 /**

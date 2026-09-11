@@ -20,7 +20,18 @@ const BASELINE: SetupProposal = {
   setupCommand: null,
   developmentCommand: 'pnpm dev',
   linkPaths: ['node_modules'],
-  validationCommands: [{ kind: 'build', command: 'pnpm build', workingDir: null }],
+  validationSteps: [
+    {
+      key: 'build',
+      label: 'Build',
+      kind: 'build',
+      command: 'pnpm build',
+      workingDir: null,
+      position: 0,
+      blocking: true,
+    },
+  ],
+  preview: { command: 'pnpm dev', workingDir: null, readyPath: '/' },
   notes: null,
   confidence: 'high',
 };
@@ -114,12 +125,23 @@ describe('credentialled providers with no credentials', () => {
 });
 
 describe('advisor response contract', () => {
+  const step = {
+    key: 'build',
+    label: 'Build',
+    kind: 'build',
+    command: 'pnpm build',
+    workingDir: null,
+    blocking: true,
+  };
+
   const valid = {
     packageManager: 'pnpm',
     setupCommand: 'pnpm install',
     developmentCommand: 'pnpm dev',
     linkPaths: ['node_modules'],
-    validationCommands: [{ kind: 'build', command: 'pnpm build', workingDir: null }],
+    validationSteps: [step],
+    previewWorkingDir: null,
+    previewReadyPath: '/',
     notes: 'Read from the lockfile.',
     confidence: 'high' as const,
   };
@@ -127,19 +149,69 @@ describe('advisor response contract', () => {
   it('accepts a well-formed response', () => {
     const proposal = providers.normaliseAdvisorResponse(valid);
     expect(proposal?.setupCommand).toBe('pnpm install');
-    expect(proposal?.validationCommands).toEqual([
-      { kind: 'build', command: 'pnpm build', workingDir: null },
+    expect(proposal?.validationSteps).toEqual([
+      {
+        key: 'build',
+        label: 'Build',
+        kind: 'build',
+        command: 'pnpm build',
+        workingDir: null,
+        position: 0,
+        blocking: true,
+      },
     ]);
   });
 
   it('rejects an invented validation kind', () => {
-    // A closed enum is what stops a model widening the six fixed kinds.
+    // Still a closed enum, even though a step may now carry no kind at all.
+    // "Fits none of the six" and "there is a seventh" are different claims.
     expect(
       providers.normaliseAdvisorResponse({
         ...valid,
-        validationCommands: [{ kind: 'smoke', command: 'make smoke', workingDir: null }],
+        validationSteps: [{ ...step, key: 'smoke', kind: 'smoke', command: 'make smoke' }],
       }),
     ).toBeNull();
+  });
+
+  it('accepts a step with no kind', () => {
+    const proposal = providers.normaliseAdvisorResponse({
+      ...valid,
+      validationSteps: [{ ...step, key: 'licences', kind: null, command: 'npx licence-check' }],
+    });
+    expect(proposal?.validationSteps[0]?.kind).toBeNull();
+  });
+
+  it('rejects a key that is not a slug', () => {
+    // Keys reach a filename and a unique index, so the character set is narrow.
+    expect(
+      providers.normaliseAdvisorResponse({
+        ...valid,
+        validationSteps: [{ ...step, key: 'Build Web!' }],
+      }),
+    ).toBeNull();
+  });
+
+  it('renumbers positions from the order returned, not from the model', () => {
+    const proposal = providers.normaliseAdvisorResponse({
+      ...valid,
+      validationSteps: [
+        { ...step, key: 'lint', kind: 'lint', command: 'pnpm lint' },
+        { ...step, key: 'build' },
+      ],
+    });
+    expect(proposal?.validationSteps.map((s) => [s.key, s.position])).toEqual([
+      ['lint', 0],
+      ['build', 10],
+    ]);
+  });
+
+  it('refuses a ready path that is really a URL', () => {
+    // Otherwise a readiness probe could be pointed at another host.
+    const proposal = providers.normaliseAdvisorResponse({
+      ...valid,
+      previewReadyPath: 'http://example.com/health',
+    });
+    expect(proposal?.preview.readyPath).toBe('/');
   });
 
   it('rejects a missing field rather than filling it in', () => {
@@ -159,19 +231,22 @@ describe('advisor response contract', () => {
     expect(providers.normaliseAdvisorResponse('pnpm build')).toBeNull();
   });
 
-  it('drops a blank command and keeps only the first entry per kind', () => {
+  it('keeps two steps of one kind but not two of one key', () => {
     const proposal = providers.normaliseAdvisorResponse({
       ...valid,
-      validationCommands: [
-        { kind: 'build', command: 'pnpm build', workingDir: null },
-        { kind: 'build', command: 'pnpm build:other', workingDir: null },
-        { kind: 'lint', command: '   ', workingDir: null },
+      validationSteps: [
+        { ...step, key: 'lint-web', kind: 'lint', command: 'pnpm --filter web lint' },
+        { ...step, key: 'lint-api', kind: 'lint', command: 'pnpm --filter api lint' },
+        // A duplicate key would overwrite the first step's results, since a
+        // result row is keyed by it.
+        { ...step, key: 'lint-web', command: 'pnpm lint:other' },
+        { ...step, key: 'blank', command: '   ' },
       ],
     });
 
-    // The form has one field per kind, so a duplicate would overwrite silently.
-    expect(proposal?.validationCommands).toEqual([
-      { kind: 'build', command: 'pnpm build', workingDir: null },
+    expect(proposal?.validationSteps.map((s) => [s.key, s.command])).toEqual([
+      ['lint-web', 'pnpm --filter web lint'],
+      ['lint-api', 'pnpm --filter api lint'],
     ]);
   });
 });

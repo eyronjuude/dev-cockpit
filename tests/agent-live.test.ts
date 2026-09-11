@@ -303,7 +303,7 @@ describeLive('read-only providers', () => {
         { path: 'server.js', changeType: 'modified', additions: 4, deletions: 0 },
       ],
       validations: [
-        { kind: 'unit', outcome: 'pass', exitCode: 0, command: 'npm test', excerpt: null },
+        { label: 'unit', kind: 'unit', outcome: 'pass', exitCode: 0, command: 'npm test', excerpt: null },
       ],
       agentSummary: 'Added the echo route.',
     });

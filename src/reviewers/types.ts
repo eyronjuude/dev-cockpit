@@ -29,7 +29,10 @@ export interface ReviewEvidence {
     deletions: number;
   }[];
   validations: readonly {
-    kind: ValidationKind;
+    /** What the project calls this step. */
+    label: string;
+    /** A tag. Null for a step that fits none of the six kinds. */
+    kind: ValidationKind | null;
     outcome: ValidationOutcome;
     exitCode: number | null;
     command: string | null;

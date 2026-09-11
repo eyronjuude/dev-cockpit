@@ -43,9 +43,15 @@ export default async function RunPage({ params }: { params: Promise<{ runId: str
     expiry: planExpiry(run, retentionPolicy(project)),
     implementationAgents: implementationAgentOptions(),
     attachmentsMutable: canModifyAttachments(runId) && !active,
-    configuredValidations: project.validationCommands
-      .filter((c) => c.enabled && c.command.trim().length > 0)
-      .map((c) => ({ kind: c.kind, command: c.command, blocking: c.blocking })),
+    configuredValidations: project.validationSteps
+      .filter((step) => step.enabled && step.command.trim().length > 0)
+      .map((step) => ({
+        key: step.key,
+        label: step.label,
+        kind: step.kind,
+        command: step.command,
+        blocking: step.blocking,
+      })),
     policies: {
       requireValidation: project.requireValidation,
       requireE2eForUiChanges: project.requireE2eForUiChanges,

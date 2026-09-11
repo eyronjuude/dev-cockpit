@@ -28,12 +28,37 @@
 
 import type { RepoEvidence, SetupProposal } from '@/services/repo-evidence';
 
+/**
+ * What running the previous proposal actually produced.
+ *
+ * Present only on a revision pass. It is what keeps `auto` mode honest: the
+ * model still cannot read the repository or run anything, but it is now
+ * correcting against real exit codes rather than against its own guess. Our
+ * code discovers; the model refines. That property is why the providers can go
+ * on running with no tools at all.
+ *
+ * Carries only steps that *errored*. A step that failed ran correctly and found
+ * something, and handing that to a model invites it to make the red go away.
+ */
+export interface ProbeFeedback {
+  steps: readonly {
+    key: string;
+    command: string;
+    outcome: string;
+    error: string | null;
+  }[];
+  /** Set when the preview command never answered its readiness probe. */
+  previewError: string | null;
+}
+
 export interface SuggestSetupInput {
   /** Facts read from the repository by our own code, never by the model. */
   evidence: RepoEvidence;
   /** The deterministic proposal, which the model refines rather than replaces. */
   baseline: SetupProposal;
   projectName: string;
+  /** Outcomes from a probe of a previous proposal, on a revision pass only. */
+  probeFeedback?: ProbeFeedback;
   signal?: AbortSignal;
 }
 

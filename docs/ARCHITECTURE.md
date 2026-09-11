@@ -47,6 +47,7 @@ only the interfaces.
 | Transformer | `TransformerProvider` | `NoopTransformer`, `CodexCliTransformer`, `ClaudeCliTransformer`, `OpenAiTransformer`, `AnthropicApiTransformer` |
 | Reviewer | `ReviewerAgent` | `CodexCliReviewer`, `OpenAiReviewer`, `ClaudeCliReviewer`, `AnthropicApiReviewer` |
 | Validator | `Validator` | `CommandValidator` |
+| Setup advisor | `SetupAdvisor` | `DeterministicAdvisor`, `ClaudeCliAdvisor`, `CodexCliAdvisor`, `OpenAiAdvisor`, `AnthropicApiAdvisor` |
 | Artifact storage | `services/artifacts` | local filesystem + SQLite metadata |
 | Attachment storage | `services/attachments` | local filesystem + SQLite metadata |
 
@@ -69,6 +70,7 @@ src/
 ├── transformers/  TransformerProvider + implementations + registry
 ├── reviewers/     ReviewerAgent + implementations + registry
 ├── validation/    Validator + the engine that sequences them
+├── advisors/      SetupAdvisor + the probe that verifies what one drafts
 ├── visualisation/ the implementation map: stored run state → one SVG
 ├── orchestrator/  the state machine, prompts, working modes, execution profiles
 ├── services/      projects, runs, events, artifacts, previews, attachments, expiry, bus, bootstrap
@@ -270,6 +272,59 @@ the implementer, the two landing agents, the transformer and the reviewer — an
 four of them previously dropped the number, which made the run total a subset
 that did not say so.
 
+## Validation pipelines
+
+A project's validation is an ordered list of named steps, stored in
+`validation_steps` and keyed by `key` rather than by kind. Two steps may share a
+kind; a step may carry none. Order is an explicit `position` column, spaced by
+ten so a step can be inserted between two without renumbering the rest.
+
+`kind` survives as a *tag*, and only three things read it: readiness coverage,
+the `requireE2eForUiChanges` policy, and the implementation map. None of them
+decides what runs or in what order.
+
+Conditions are evaluated step by step rather than up front, because `depends_on`
+needs outcomes that do not exist until the pipeline is part-way through.
+`stepsForRun` resolves order and profile filtering; `evaluateRunWhen` in
+`domain/validation-steps.ts` decides each skip. A held-back step records
+`skipped`, which never blocks readiness — not running is not failing.
+
+A dependency cycle is refused by `replaceValidationSteps` when the configuration
+is saved. Discovering it mid-run would produce a pipeline that ran nothing and
+reported it as though nothing were configured, which is precisely the reading
+the scorecard exists to prevent.
+
+`validation_results` is keyed `(run_id, attempt, step_key)`. Rows written before
+migration 0011 carry their kind as the key, which is what identity meant then.
+
+## Configuration probes
+
+`auto` mode saves a drafted configuration and then runs it, which is the only
+path where a model's commands execute without a human reading them first. The
+isolation mirrors landing's: `git/probe.ts` creates a worktree under
+`probesDir()` — its own root, not a corner of `worktrees/`, because retention
+walks runs and a probe has none.
+
+The model gains no capability from this. `claudeQuery` still runs with
+`--tools ""`; `advisors/probe.ts` executes the proposal and returns exit codes,
+and `feedbackFrom` hands back only the steps that *errored*. A step that failed
+is withheld deliberately: it ran correctly and found something, and a model
+asked to fix a red pipeline will reach for it.
+
+`applyRevision` enforces what the prompt merely asks for. A step that passed or
+failed is kept verbatim; only one that could not run may be rewritten; a step
+the user wrote can never be deleted.
+
+`services/config-revisions.ts` snapshots the pipeline and preview configuration
+before every save — the advisor's and the user's alike. A history with holes in
+it is not a history, and the snapshot is what makes an automatic save something
+other than a commitment.
+
+Progress is polled, not streamed. `events.run_id` is a NOT NULL foreign key to
+`runs`, so a probe cannot append to the event log without a nullable foreign key
+or a second event system. The `config_probes` row carries its own status and a
+JSON report instead.
+
 ## Readiness
 
 `assessReadiness(run, project)` is a pure function over stored state. It reads
@@ -279,9 +334,11 @@ mode.
 
 For a build run it blocks on:
 
-- a blocking validation that failed or errored,
+- a blocking step that failed or errored, named by its label,
 - a validation still running,
 - validation never having run, when the project requires it,
+- coverage still counted per kind, so a kind no step claims reads as not
+  configured rather than as a gap in the pipeline,
 - a UI-touching change with no E2E result, when the project requires it,
 - a high or critical review finding, only when the project opts in,
 - no files having changed.

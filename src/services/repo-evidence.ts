@@ -3,7 +3,12 @@ import 'server-only';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { VALIDATION_KINDS, type ValidationKind } from '@/domain/types';
+import {
+  POSITION_STRIDE,
+  VALIDATION_KIND_LABELS,
+  VALIDATION_KINDS,
+  type ValidationKind,
+} from '@/domain/types';
 
 /**
  * What a repository says about itself, and the project setup that follows.
@@ -91,10 +96,24 @@ export interface RepoEvidence {
   notes: string[];
 }
 
-export interface ProposedValidationCommand {
-  kind: ValidationKind;
+export interface ProposedValidationStep {
+  /** Slug. Derived from the kind for a rule-built step. */
+  key: string;
+  label: string;
+  /** A tag. Null for a step that fits none of the six kinds. */
+  kind: ValidationKind | null;
   command: string;
   workingDir: string | null;
+  /** Ten apart, so a step can be inserted between two without a re-number. */
+  position: number;
+  blocking: boolean;
+}
+
+export interface ProposedPreview {
+  command: string | null;
+  workingDir: string | null;
+  /** Path a readiness probe should hit. `/` unless something says otherwise. */
+  readyPath: string;
 }
 
 export interface SetupProposal {
@@ -102,7 +121,9 @@ export interface SetupProposal {
   setupCommand: string | null;
   developmentCommand: string | null;
   linkPaths: string[];
-  validationCommands: ProposedValidationCommand[];
+  /** The pipeline, in the order it should run. */
+  validationSteps: ProposedValidationStep[];
+  preview: ProposedPreview;
   /** Why this proposal looks the way it does. Shown to the user verbatim. */
   notes: string | null;
   confidence: 'high' | 'low';
@@ -503,6 +524,39 @@ const NODE_SCRIPT_CANDIDATES: Record<ValidationKind, readonly string[]> = {
   build: ['build', 'compile'],
 };
 
+/**
+ * Appends a rule-derived step.
+ *
+ * Rule-built steps are one per kind, so the kind makes a serviceable key and
+ * `VALIDATION_KIND_LABELS` a serviceable label. Ordering follows
+ * `VALIDATION_KINDS`, which is cheapest-first by construction — a typecheck
+ * that fails in four seconds should not wait behind a six-minute build.
+ */
+function pushStep(
+  proposal: SetupProposal,
+  kind: ValidationKind,
+  command: string,
+  workingDir: string | null = null,
+): void {
+  proposal.validationSteps.push({
+    key: kind,
+    label: VALIDATION_KIND_LABELS[kind],
+    kind,
+    command,
+    workingDir,
+    position: VALIDATION_KINDS.indexOf(kind) * POSITION_STRIDE,
+    // E2E is the one check routinely worth keeping advisory: it is the
+    // flakiest, and blocking every run on it is what makes people turn
+    // validation off altogether.
+    blocking: kind !== 'e2e',
+  });
+}
+
+/** Whether any proposed step already covers a kind. */
+function hasKind(proposal: SetupProposal, kind: ValidationKind): boolean {
+  return proposal.validationSteps.some((step) => step.kind === kind);
+}
+
 function proposeNode(evidence: RepoEvidence, proposal: SetupProposal): void {
   const manager = evidence.packageManager ?? 'npm';
   proposal.packageManager = manager;
@@ -513,26 +567,20 @@ function proposeNode(evidence: RepoEvidence, proposal: SetupProposal): void {
     if (!script) continue;
     // `test` is the unit slot; do not also offer it as the integration suite.
     if (kind === 'integration' && script === 'test') continue;
-    proposal.validationCommands.push({
-      kind,
-      command: scriptRunner(manager, script),
-      workingDir: null,
-    });
+    pushStep(proposal, kind, scriptRunner(manager, script));
   }
 
   // Playwright is usually not wired to a script, but the config proves it is there.
-  const hasE2e = proposal.validationCommands.some((c) => c.kind === 'e2e');
   const playwright = evidence.toolingConfigs.some((c) => c.startsWith('playwright.config'));
-  if (!hasE2e && playwright) {
-    proposal.validationCommands.push({
-      kind: 'e2e',
-      command: 'npx playwright test',
-      workingDir: null,
-    });
+  if (!hasKind(proposal, 'e2e') && playwright) {
+    pushStep(proposal, 'e2e', 'npx playwright test');
   }
 
   const dev = pickScript(evidence.scripts, ['dev', 'start', 'serve']);
-  if (dev) proposal.developmentCommand = scriptRunner(manager, dev);
+  if (dev) {
+    proposal.developmentCommand = scriptRunner(manager, dev);
+    proposal.preview.command = proposal.developmentCommand;
+  }
 
   if (evidence.rejectsLinkedDependencies) {
     // Linking is the cheap option everywhere else, but Turbopack rejects it.
@@ -577,26 +625,18 @@ function proposePython(evidence: RepoEvidence, proposal: SetupProposal): void {
 
   // uv and poetry run tools through the project environment.
   const prefix = manager === 'uv' ? 'uv run ' : manager === 'poetry' ? 'poetry run ' : '';
-  const has = (kind: ValidationKind) => proposal.validationCommands.some((c) => c.kind === kind);
+  const has = (kind: ValidationKind) => hasKind(proposal, kind);
 
   const pytest =
     evidence.toolingConfigs.includes('pytest.ini') ||
     evidence.toolingConfigs.includes('tox.ini') ||
     evidence.manifests.includes('pyproject.toml');
   if (pytest && !has('unit')) {
-    proposal.validationCommands.push({
-      kind: 'unit',
-      command: `${prefix}pytest`,
-      workingDir: null,
-    });
+    pushStep(proposal, 'unit', `${prefix}pytest`);
   }
 
   if (evidence.toolingConfigs.includes('ruff.toml') && !has('lint')) {
-    proposal.validationCommands.push({
-      kind: 'lint',
-      command: `${prefix}ruff check .`,
-      workingDir: null,
-    });
+    pushStep(proposal, 'lint', `${prefix}ruff check .`);
   }
 
   // A venv holds absolute paths in pyvenv.cfg and in script shebangs, so a
@@ -616,11 +656,11 @@ function proposeSimple(
   },
 ): void {
   proposal.packageManager ??= spec.manager;
-  const has = (kind: ValidationKind) => proposal.validationCommands.some((c) => c.kind === kind);
+  const has = (kind: ValidationKind) => hasKind(proposal, kind);
   for (const kind of VALIDATION_KINDS) {
     const command = spec.commands[kind];
     if (!command || has(kind)) continue;
-    proposal.validationCommands.push({ kind, command, workingDir: null });
+    pushStep(proposal, kind, command);
   }
   if (spec.linkPath && !proposal.linkPaths.includes(spec.linkPath)) {
     proposal.linkPaths.push(spec.linkPath);
@@ -642,7 +682,8 @@ export function proposeProjectSetup(evidence: RepoEvidence): SetupProposal {
     setupCommand: null,
     developmentCommand: null,
     linkPaths: [],
-    validationCommands: [],
+    validationSteps: [],
+    preview: { command: null, workingDir: null, readyPath: '/' },
     notes: null,
     confidence: 'low',
   };
@@ -689,7 +730,7 @@ export function proposeProjectSetup(evidence: RepoEvidence): SetupProposal {
   // Make is a fallback: only offer targets that exist, and only for kinds
   // nothing better already filled.
   if (evidence.ecosystems.includes('make') && evidence.makeTargets.length > 0) {
-    const has = (kind: ValidationKind) => proposal.validationCommands.some((c) => c.kind === kind);
+    const has = (kind: ValidationKind) => hasKind(proposal, kind);
     const makeFor: Partial<Record<ValidationKind, readonly string[]>> = {
       build: ['build', 'all'],
       unit: ['test', 'tests'],
@@ -702,7 +743,7 @@ export function proposeProjectSetup(evidence: RepoEvidence): SetupProposal {
       if (has(kind)) continue;
       const target = makeFor[kind]?.find((t) => evidence.makeTargets.includes(t));
       if (target) {
-        proposal.validationCommands.push({ kind, command: `make ${target}`, workingDir: null });
+        pushStep(proposal, kind, `make ${target}`);
       }
     }
   }
@@ -713,7 +754,7 @@ export function proposeProjectSetup(evidence: RepoEvidence): SetupProposal {
     evidence.packageManagerSource === 'packageManager field' ||
     evidence.scripts.length > 0;
   proposal.confidence =
-    strongEvidence && proposal.validationCommands.length > 0 ? 'high' : 'low';
+    strongEvidence && proposal.validationSteps.length > 0 ? 'high' : 'low';
 
   if (evidence.monorepo) {
     const marker = evidence.monorepoMarkers.join(', ');

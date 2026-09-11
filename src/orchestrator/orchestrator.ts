@@ -94,7 +94,7 @@ import { register, writeTextArtifact } from '@/services/artifacts';
 import { markRunCommitsLanded, recordRunCommits } from '@/services/commits';
 import { appendEvent } from '@/services/events';
 import { tryRecordImplementationMap } from '@/services/implementation-map';
-import { stopRunPreview } from '@/services/previews';
+import { startRunPreview, stopRunPreview } from '@/services/previews';
 import { requireProject, type ProjectView } from '@/services/projects';
 import { checkDependencyReadiness } from '@/services/repo-evidence';
 import { cleanUpFinishedRunWorktrees, cleanUpRunWorktrees } from '@/services/worktrees';
@@ -1529,11 +1529,18 @@ async function executeLanding(
 
     await collectLandingEvidence(run, landing.worktreePath, refreshed.targetCommit);
 
+    // Conditions are evaluated against the *run's* changed files, not the
+    // merge's. A landing check answers "does this change still hold up against
+    // the target branch", so a step the run skipped should stay skipped rather
+    // than switching on because the merge brought in someone else's file.
+    const changedPaths = run.changedFiles.map((file) => file.path);
+
     let validation = await runValidation({
       runId: run.id,
       worktreePath: landing.worktreePath,
       project,
       profile: profile.id,
+      changedPaths,
       signal,
     });
 
@@ -1594,6 +1601,7 @@ async function executeLanding(
         worktreePath: landing.worktreePath,
         project,
         profile: profile.id,
+        changedPaths,
         signal,
       });
 
@@ -1748,9 +1756,13 @@ async function phaseTransform(
       projectSummary: project.developmentCommand
         ? `Development command: ${project.developmentCommand}`
         : null,
-      configuredValidations: project.validationCommands
-        .filter((c) => c.enabled && c.command.trim())
-        .map((c) => c.kind),
+      // The transformer is given kinds, not labels: it writes a
+        // specification, and "there is an e2e suite" is the part that shapes
+        // one. A step with no kind has nothing to say here.
+        configuredValidations: project.validationSteps
+          .filter((step) => step.enabled && step.command.trim())
+          .map((step) => step.kind)
+          .filter((kind): kind is NonNullable<typeof kind> => kind !== null),
       profile: profile.id,
       signal,
     });
@@ -2672,6 +2684,7 @@ async function phaseValidate(
     worktreePath: run.worktreePath,
     project,
     profile: profile.id,
+    changedPaths: run.changedFiles.map((file) => file.path),
     signal,
   });
 
@@ -2780,6 +2793,7 @@ async function phaseReview(
         deletions: f.deletions,
       })),
       validations: validations.map((v) => ({
+        label: v.stepLabel || v.stepKey,
         kind: v.kind,
         outcome: v.outcome,
         exitCode: v.exitCode,
@@ -3142,6 +3156,17 @@ function appendLandingValidationFailed(
   });
 }
 
+/**
+ * What to call a failed step in a repair prompt or a log line.
+ *
+ * The label, because "unit" no longer identifies one thing: a pipeline may
+ * hold several steps of a kind, and telling the agent which one failed is the
+ * whole value of the message.
+ */
+function describeFailedStep(result: { stepLabel: string; stepKey: string }): string {
+  return result.stepLabel || result.stepKey;
+}
+
 async function tryRepairLandingValidation(input: {
   run: RunView;
   project: ProjectView;
@@ -3366,7 +3391,7 @@ async function phaseRepairLandingValidation(
     runId: run.id,
     type: 'landing.repair_started',
     message: `Asking ${getAgent(run.agentProvider).label} to repair ${failed.length} failed landing check(s)`,
-    payload: { path: landingPath, failed: failed.map((result) => result.kind) },
+    payload: { path: landingPath, failed: failed.map(describeFailedStep) },
   });
 
   const agentRun = await runLandingAgentIteration({
@@ -3860,6 +3885,34 @@ function reportRunImpact(run: RunView): void {
   }
 }
 
+/**
+ * Starts the preview once a build run is ready, when the project asks for it.
+ *
+ * Only on READY, and only for a run with a worktree: a preview of code that did
+ * not pass its checks is a preview of something nobody should be looking at
+ * yet. A failure here is reported and swallowed — the run is already finished,
+ * and a dev server that would not start is not a reason to un-finish it.
+ */
+async function autoStartPreview(runId: string, project: ProjectView): Promise<void> {
+  if (!project.preview.autoStart) return;
+  if (!project.preview.command?.trim()) return;
+
+  const run = requireRun(runId);
+  if (!run.worktreePath) return;
+
+  try {
+    await startRunPreview(runId);
+  } catch (err) {
+    appendEvent({
+      runId,
+      type: 'preview.failed',
+      level: 'error',
+      message: `Auto-start failed: ${errorMessage(err)}`,
+      payload: { error: errorMessage(err), exitCode: null, signal: null },
+    });
+  }
+}
+
 async function phaseDecide(
   run: RunView,
   project: ProjectView,
@@ -3891,6 +3944,7 @@ async function phaseDecide(
         blockingFindings: assessment.blockingFindings,
       },
     });
+    await autoStartPreview(fresh.id, project);
     return;
   }
 

@@ -1,7 +1,12 @@
 import 'server-only';
 
+import { eq } from 'drizzle-orm';
+
+import { configProbes } from '@/db/schema';
+
 import { ensureDataDirs } from '@/core/paths';
 import { getDb } from '@/db/client';
+import { sweepAbandonedProbes } from '@/git/probe';
 import { scheduleExpirySweeps } from './expiry';
 import { reconcileInterruptedRuns } from './runs';
 
@@ -42,4 +47,35 @@ export function bootstrap(): void {
   // Asynchronous and never awaited — reclaiming disk must not delay the first
   // page render, and a sweep that throws leaves storage in place.
   scheduleExpirySweeps();
+
+  // A configuration probe holds no state across a restart, so anything left in
+  // the probe root is debris from a process that died mid-probe. Nothing else
+  // would ever find it: the retention sweep walks runs, and a probe has none.
+  void sweepAbandonedProbes()
+    .then((removed) => {
+      if (removed > 0) {
+        console.info(`[dev-cockpit] Removed ${removed} abandoned configuration probe(s).`);
+      }
+    })
+    .catch(() => {
+      // Left for the next start rather than failing this one.
+    });
+
+  // Marks probes that were running when the process stopped, for the same
+  // reason interrupted runs are marked: a spinner that never resolves is worse
+  // than a plain statement that it died.
+  reconcileInterruptedProbes();
+}
+
+function reconcileInterruptedProbes(): void {
+  getDb()
+    .update(configProbes)
+    .set({
+      status: 'failed',
+      phase: 'failed',
+      error: 'Interrupted by a restart. Nothing was left behind; run it again.',
+      finishedAt: new Date().toISOString(),
+    })
+    .where(eq(configProbes.status, 'running'))
+    .run();
 }

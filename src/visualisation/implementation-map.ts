@@ -56,12 +56,46 @@ export interface MapFile {
 }
 
 export interface MapValidation {
-  kind: ValidationKind;
+  /** What the project calls this step. */
+  label: string;
+  /** A tag. Null for a step that fits none of the six kinds. */
+  kind: ValidationKind | null;
   outcome: ValidationOutcome;
   blocking: boolean;
   exitCode: number | null;
   durationMs: number | null;
 }
+
+/**
+ * What one kind's cell reports when several steps carry that kind.
+ *
+ * The worst of them, and the total of their durations. A cell showing the
+ * first step's green while a second failed would be worse than no cell.
+ */
+const CHECK_SEVERITY: readonly ValidationOutcome[] = [
+  'error',
+  'fail',
+  'cancelled',
+  'running',
+  'skipped',
+  'pass',
+  'not_configured',
+];
+
+function kindSummary(
+  validations: readonly MapValidation[],
+  kind: ValidationKind,
+): { outcome: ValidationOutcome; durationMs: number | null; count: number } {
+  const matching = validations.filter((v) => v.kind === kind);
+  if (matching.length === 0) return { outcome: 'not_configured', durationMs: null, count: 0 };
+
+  const outcomes = matching.map((v) => v.outcome);
+  const outcome =
+    CHECK_SEVERITY.find((candidate) => outcomes.includes(candidate)) ?? 'not_configured';
+  const total = matching.reduce((acc, v) => acc + (v.durationMs ?? 0), 0);
+  return { outcome, durationMs: total > 0 ? total : null, count: matching.length };
+}
+
 
 export interface MapFinding {
   severity: FindingSeverity;
@@ -423,8 +457,9 @@ export function describeImplementationMap(input: ImplementationMapInput): string
   const deletions = sumBy(changedFiles, (f) => f.deletions);
 
   const checks = VALIDATION_KINDS.map((kind) => {
-    const result = validations.find((v) => v.kind === kind);
-    return `${kind} ${OUTCOME_LABEL[result?.outcome ?? 'not_configured'].toLowerCase()}`;
+    const summary = kindSummary(validations, kind);
+    const suffix = summary.count > 1 ? ` across ${summary.count} steps` : '';
+    return `${kind} ${OUTCOME_LABEL[summary.outcome].toLowerCase()}${suffix}`;
   }).join(', ');
 
   return [
@@ -780,8 +815,8 @@ export function renderImplementationMap(input: ImplementationMapInput): string {
 
   const cellW = (INNER - 5 * 6) / 6;
   VALIDATION_KINDS.forEach((kind, index) => {
-    const result = validations.find((v) => v.kind === kind);
-    const outcome: ValidationOutcome = result?.outcome ?? 'not_configured';
+    const summary = kindSummary(validations, kind);
+    const outcome: ValidationOutcome = summary.outcome;
     const colours = TONE_COLOURS[OUTCOME_TONE[outcome]];
     const x = PAD + index * (cellW + 6);
     parts.push(box(x, y, cellW, CHECK_H, { fill: PALETTE.surface, stroke: colours.border, rx: 6 }));
@@ -794,7 +829,7 @@ export function renderImplementationMap(input: ImplementationMapInput): string {
       }),
     );
     parts.push(
-      label(x + cellW - 9, y + 34, formatDuration(result?.durationMs ?? null), {
+      label(x + cellW - 9, y + 34, formatDuration(summary.durationMs), {
         size: 9.5,
         fill: PALETTE.inkFaint,
         anchor: 'end',

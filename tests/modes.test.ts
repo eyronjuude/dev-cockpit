@@ -65,18 +65,38 @@ function makeProject(overrides: Partial<ProjectView> = {}): ProjectView {
     aiFormatsCommitMessages: false,
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
-    validationCommands: [
+    aiConfigMode: 'draft',
+    aiConfigProvider: null,
+    validationSteps: [
       {
         id: 1,
+        key: 'unit',
+        label: 'Unit',
         kind: 'unit',
         command: 'npm test',
         workingDir: null,
+        env: [],
         timeoutMs: 900_000,
         enabled: true,
         blocking: true,
         profiles: ['quick', 'standard', 'deep'],
+        position: 0,
+        runWhen: 'always',
+        runWhenArg: null,
+        retries: 0,
+        retryOn: 'error',
       },
     ],
+    preview: {
+      command: null,
+      workingDir: null,
+      env: [],
+      portStrategy: 'auto',
+      fixedPort: null,
+      readyPath: '/',
+      readyTimeoutMs: 120_000,
+      autoStart: false,
+    },
     ...overrides,
   };
 }
@@ -613,6 +633,8 @@ describe('buildChangeRequestPrompt', () => {
         {
           id: 'val_1',
           attempt: 1,
+          stepKey: 'lint',
+          stepLabel: 'Lint',
           kind: 'lint',
           commandSource: 'project',
           command: 'npm run lint',

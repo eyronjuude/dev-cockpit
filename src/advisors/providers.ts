@@ -5,7 +5,8 @@ import { z } from 'zod';
 import { ClaudeCodeAgent } from '@/agents/claude-code';
 import { claudeQuery } from '@/agents/claude-query';
 import { checkCodexAvailable, codexQuery } from '@/agents/codex-query';
-import { VALIDATION_KINDS } from '@/domain/types';
+import { POSITION_STRIDE, VALIDATION_KINDS } from '@/domain/types';
+import { STEP_KEY_PATTERN } from '@/domain/validation-steps';
 import type { SetupProposal } from '@/services/repo-evidence';
 import { SETUP_JSON_SCHEMA, SETUP_SYSTEM_PROMPT, setupUserPrompt } from './prompts';
 import type {
@@ -30,27 +31,46 @@ import type {
 const MAX_COMMAND = 500;
 
 /**
+ * The cap on how many steps a model may propose.
+ *
+ * Generous rather than structural: a pipeline is free-form now, so this exists
+ * to bound a runaway response, not to say what a project may need. The cap that
+ * still matters is on string *length* — these values become shell commands, and
+ * a page of text in a command field is the failure worth refusing.
+ */
+const MAX_STEPS = 24;
+
+/**
  * The response schema.
  *
  * Tighter than the JSON Schema handed to the model, because this is the one
  * that actually runs. `kind` is a closed enum so a model cannot invent a
- * seventh validation kind, and every string is length-capped so a runaway
- * response cannot land a page of text in a command field.
+ * seventh validation kind, `key` must match the slug pattern the database
+ * indexes, and every string is length-capped.
  */
+
 const setupResponseSchema = z.object({
   packageManager: z.string().trim().max(40).nullable(),
   setupCommand: z.string().trim().max(MAX_COMMAND).nullable(),
   developmentCommand: z.string().trim().max(MAX_COMMAND).nullable(),
   linkPaths: z.array(z.string().trim().max(200)).max(10),
-  validationCommands: z
+  validationSteps: z
     .array(
       z.object({
-        kind: z.enum(VALIDATION_KINDS),
+        key: z.string().trim().regex(STEP_KEY_PATTERN),
+        label: z.string().trim().min(1).max(80),
+        // Still a closed enum, so a model cannot invent a seventh kind. Null is
+        // now legal and means "fits none of them", which is a different claim
+        // from inventing one.
+        kind: z.enum(VALIDATION_KINDS).nullable(),
         command: z.string().trim().max(MAX_COMMAND),
         workingDir: z.string().trim().max(200).nullable(),
+        blocking: z.boolean(),
       }),
     )
-    .max(VALIDATION_KINDS.length * 2),
+    .max(MAX_STEPS),
+  previewWorkingDir: z.string().trim().max(200).nullable(),
+  previewReadyPath: z.string().trim().max(200),
   notes: z.string().trim().max(1_500).nullable(),
   confidence: z.enum(['high', 'low']),
 });
@@ -70,32 +90,62 @@ export function normaliseAdvisorResponse(structured: unknown): SetupProposal | n
 /**
  * Normalises a validated response into a proposal.
  *
- * Drops blank commands and keeps only the first entry per kind, because the
- * form has exactly one field per kind and a duplicate would silently overwrite
- * the other.
+ * Drops blank commands and de-duplicates by key, because a key is a database
+ * unique index and a result-row identity — two steps claiming one would make
+ * the second silently overwrite the first's results.
+ *
+ * Positions are renumbered here rather than taken from the model. The order it
+ * returned is honoured; the numbers it might have invented are not, so a
+ * response with three steps all at position 0 still produces a pipeline that
+ * runs in the order it was written.
  */
 function toProposal(parsed: z.infer<typeof setupResponseSchema>): SetupProposal {
   const seen = new Set<string>();
-  const validationCommands = parsed.validationCommands.filter((c) => {
-    if (!c.command) return false;
-    if (seen.has(c.kind)) return false;
-    seen.add(c.kind);
+  const steps = parsed.validationSteps.filter((step) => {
+    if (!step.command) return false;
+    if (seen.has(step.key)) return false;
+    seen.add(step.key);
     return true;
   });
+
+  const developmentCommand = parsed.developmentCommand || null;
 
   return {
     packageManager: parsed.packageManager || null,
     setupCommand: parsed.setupCommand || null,
-    developmentCommand: parsed.developmentCommand || null,
+    developmentCommand,
     linkPaths: parsed.linkPaths.filter(Boolean),
-    validationCommands: validationCommands.map((c) => ({
-      kind: c.kind,
-      command: c.command,
-      workingDir: c.workingDir || null,
+    validationSteps: steps.map((step, index) => ({
+      key: step.key,
+      label: step.label || step.key,
+      kind: step.kind,
+      command: step.command,
+      workingDir: step.workingDir || null,
+      position: index * POSITION_STRIDE,
+      blocking: step.blocking,
     })),
+    preview: {
+      command: developmentCommand,
+      workingDir: parsed.previewWorkingDir || null,
+      readyPath: normaliseReadyPath(parsed.previewReadyPath),
+    },
     notes: parsed.notes || null,
     confidence: parsed.confidence,
   };
+}
+
+/**
+ * Forces a ready path to be a path.
+ *
+ * A model returning `http://example.com/health` here would point the readiness
+ * probe at another host, so anything carrying a scheme or an authority is
+ * discarded rather than corrected — there is no safe reading of it.
+ */
+function normaliseReadyPath(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return '/';
+  if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed) || trimmed.startsWith('//')) return '/';
+  return trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
 }
 
 function fallback(

@@ -23,10 +23,17 @@ export const newArtifactId = () => shortId('art');
 export const newAttachmentId = () => shortId('att');
 export const newFindingId = () => shortId('fnd');
 export const newCommitId = () => shortId('cmt');
+export const newProbeId = () => shortId('prb');
+export const newRevisionId = () => shortId('rev');
 
 /** Git branch component derived from a run id. Safe for `refs/heads/`. */
 export function runBranchName(runId: string): string {
   return `cockpit/${runId.replace(/[^A-Za-z0-9_-]/g, '-')}`;
+}
+
+/** Branch a configuration probe checks out. Disposable, and removed with it. */
+export function probeBranchName(probeId: string): string {
+  return `cockpit/probe/${probeId.replace(/[^A-Za-z0-9_-]/g, '-')}`;
 }
 
 /** Branch used to prepare the final merge before touching the target branch. */

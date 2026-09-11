@@ -5,26 +5,39 @@ import path from 'node:path';
 
 import { newValidationId } from '@/core/ids';
 import { isInside } from '@/core/paths';
+import { registerExtraSecrets } from '@/core/redact';
 import { runCommand, type CommandResult } from '@/process/spawn';
 import {
   BLOCKING_OUTCOMES,
-  VALIDATION_KINDS,
   type ExecutionProfileName,
   type ValidationKind,
   type ValidationOutcome,
 } from '@/domain/types';
+import {
+  evaluateRunWhen,
+  orderSteps,
+  parseEnvLines,
+  secretValuesIn,
+  shouldRetry,
+  uncoveredKinds,
+} from '@/domain/validation-steps';
 import { appendEvent } from '@/services/events';
 import { writeTextArtifact } from '@/services/artifacts';
 import { nextValidationAttempt, upsertValidationResult } from '@/services/runs';
-import type { ProjectView, ValidationCommandView } from '@/services/projects';
+import type { ProjectView, ValidationStepView } from '@/services/projects';
 
 /**
  * Deterministic validation.
  *
  * Entirely separate from the implementation agent: it executes the project's
- * own configured commands and records what happened. It never edits a file and
+ * own configured steps and records what happened. It never edits a file and
  * never asks a model anything, which is why its results are the factual basis
  * for a run becoming READY.
+ *
+ * A pipeline is an ordered list of named steps, not a fixed set of six kinds.
+ * Two steps may share a kind, or carry none. What has not changed is what a
+ * result means: `fail` is a check that ran and did not pass, `error` is a check
+ * that could not run, and `skipped` and `not_configured` are neither.
  *
  * `Validator` is the plugin seam. V1 ships one implementation — the configured
  * shell command — and the engine does not care how a result was produced.
@@ -35,8 +48,13 @@ export interface ValidatorContext {
   worktreePath: string;
   project: ProjectView;
   profile: ExecutionProfileName;
+  /**
+   * Paths the run changed, for steps conditioned on them. Empty is safe: a
+   * `changed_files_match` step simply finds no match and records `skipped`.
+   */
+  changedPaths?: readonly string[];
   signal?: AbortSignal;
-  onOutput?: (kind: ValidationKind, chunk: string) => void;
+  onOutput?: (step: ValidationStepView, chunk: string) => void;
 }
 
 export interface ValidatorOutcome {
@@ -53,7 +71,8 @@ export interface ValidatorOutcome {
 }
 
 export interface Validator {
-  readonly kind: ValidationKind;
+  readonly key: string;
+  readonly kind: ValidationKind | null;
   /** Whether a blocking failure here holds the run back. */
   readonly blocking: boolean;
   run(context: ValidatorContext): Promise<ValidatorOutcome>;
@@ -72,12 +91,14 @@ const NOT_CONFIGURED: ValidatorOutcome = {
   workingDir: null,
 };
 
-/** Runs one project-configured command. */
+/** Runs one project-configured step. */
 export class CommandValidator implements Validator {
-  readonly kind: ValidationKind;
+  readonly key: string;
+  readonly kind: ValidationKind | null;
   readonly blocking: boolean;
 
-  constructor(private readonly config: ValidationCommandView) {
+  constructor(private readonly config: ValidationStepView) {
+    this.key = config.key;
     this.kind = config.kind;
     this.blocking = config.blocking;
   }
@@ -111,13 +132,21 @@ export class CommandValidator implements Validator {
       };
     }
 
+    // A step's own environment never reaches `process.env`, so the redactor's
+    // environment scan cannot see it. Register the secret-looking values here
+    // or the one field a user is most likely to put a credential in is the one
+    // field that would not be masked.
+    const stepEnv = parseEnvLines(this.config.env.join('\n'));
+    registerExtraSecrets(secretValuesIn(stepEnv));
+
     const result: CommandResult = await runCommand({
       command: this.config.command,
       cwd,
+      env: { ...process.env, ...stepEnv },
       timeoutMs: this.config.timeoutMs,
       signal,
-      onStdout: onOutput ? (chunk) => onOutput(this.kind, chunk) : undefined,
-      onStderr: onOutput ? (chunk) => onOutput(this.kind, chunk) : undefined,
+      onStdout: onOutput ? (chunk) => onOutput(this.config, chunk) : undefined,
+      onStderr: onOutput ? (chunk) => onOutput(this.config, chunk) : undefined,
     });
 
     return {
@@ -155,75 +184,91 @@ function describeFailure(result: CommandResult): string | null {
  * Engine
  * ------------------------------------------------------------------ */
 
+export interface ValidationStepResult {
+  key: string;
+  label: string;
+  kind: ValidationKind | null;
+  outcome: ValidationOutcome;
+  blocking: boolean;
+  exitCode: number | null;
+  durationMs: number | null;
+  /** How many extra runs the retry policy bought. Zero on the common path. */
+  attempts: number;
+  /** Why a step did not run, when it did not. */
+  skipReason: string | null;
+}
+
 export interface ValidationRunSummary {
   attempt: number;
-  results: {
-    kind: ValidationKind;
-    outcome: ValidationOutcome;
-    blocking: boolean;
-    exitCode: number | null;
-    durationMs: number | null;
-  }[];
+  results: ValidationStepResult[];
   passed: number;
   failed: number;
+  skipped: number;
   notConfigured: number;
-  /** True when at least one blocking command failed or errored. */
+  /** True when at least one blocking step failed or errored. */
   blocking: boolean;
   cancelled: boolean;
 }
 
-/** Which validation kinds a profile runs. */
-export function kindsForProfile(
+/**
+ * The steps a profile runs, in configured order.
+ *
+ * Conditions are not evaluated here: `depends_on` needs outcomes that do not
+ * exist until the pipeline is part-way through, so ordering is resolved first
+ * and skipping is decided step by step.
+ */
+export function stepsForRun(
   project: ProjectView,
   profile: ExecutionProfileName,
-): ValidationCommandView[] {
-  return project.validationCommands
-    .filter((c) => c.enabled && c.command.trim().length > 0)
-    .filter((c) => c.profiles.length === 0 || c.profiles.includes(profile))
-    .slice()
-    .sort(
-      (a, b) => VALIDATION_KINDS.indexOf(a.kind) - VALIDATION_KINDS.indexOf(b.kind),
-    );
+): ValidationStepView[] {
+  return orderSteps(
+    project.validationSteps
+      .filter((step) => step.enabled && step.command.trim().length > 0)
+      .filter((step) => step.profiles.length === 0 || step.profiles.includes(profile)),
+  );
 }
 
 /**
  * Runs the project's validation for one attempt, recording every outcome.
  *
- * Kinds with no configured command are recorded as `not_configured` rather than
- * omitted, so the scorecard can distinguish "never set up" from "failed".
+ * Kinds no step claims are recorded as `not_configured` rather than omitted, so
+ * the scorecard can still distinguish "never set up" from "failed" even though
+ * the pipeline no longer has one slot per kind.
+ *
  * Execution is sequential: these commands compete for the same CPU, ports and
  * lockfiles, and interleaving them produces flaky results.
  */
 export async function runValidation(context: ValidatorContext): Promise<ValidationRunSummary> {
   const { runId, project, profile, signal } = context;
   const attempt = nextValidationAttempt(runId);
-  const configured = kindsForProfile(project, profile);
-  const configuredKinds = new Set(configured.map((c) => c.kind));
+  const configured = stepsForRun(project, profile);
+  const changedPaths = context.changedPaths ?? [];
 
   appendEvent({
     runId,
     type: 'validation.started',
     message:
       configured.length === 0
-        ? 'No validation commands are configured for this profile'
-        : `Running ${configured.length} validation command(s): ${configured
-            .map((c) => c.kind)
+        ? 'No validation steps are configured for this profile'
+        : `Running ${configured.length} validation step(s): ${configured
+            .map((step) => step.label)
             .join(', ')}`,
     payload: {
       kind: (configured[0]?.kind ?? 'typecheck') as ValidationKind,
-      command: configured.map((c) => c.kind).join(', '),
+      command: configured.map((step) => step.label).join(', '),
       validationId: `attempt-${attempt}`,
     },
   });
 
-  // Record the unconfigured kinds up front so the scorecard is complete from
+  // Record the kinds nothing covers up front so the scorecard is complete from
   // the first render rather than filling in as it goes.
-  for (const kind of VALIDATION_KINDS) {
-    if (configuredKinds.has(kind)) continue;
+  for (const kind of uncoveredKinds(project.validationSteps)) {
     upsertValidationResult({
       id: newValidationId(),
       runId,
       attempt,
+      stepKey: kind,
+      stepLabel: null,
       kind,
       command: null,
       workingDir: null,
@@ -232,28 +277,35 @@ export async function runValidation(context: ValidatorContext): Promise<Validati
     });
   }
 
-  const results: ValidationRunSummary['results'] = [];
+  const results: ValidationStepResult[] = [];
+  const outcomes = new Map<string, ValidationOutcome>();
   let cancelled = false;
 
-  for (const config of configured) {
+  for (const step of configured) {
     if (signal?.aborted) {
       cancelled = true;
-      upsertValidationResult({
-        id: newValidationId(),
+      record(runId, attempt, step, 'cancelled', null);
+      outcomes.set(step.key, 'cancelled');
+      results.push(emptyResult(step, 'cancelled', null));
+      continue;
+    }
+
+    const decision = evaluateRunWhen(step, { changedPaths, outcomes });
+    if (decision.skipped) {
+      record(runId, attempt, step, 'skipped', decision.reason);
+      outcomes.set(step.key, 'skipped');
+      results.push(emptyResult(step, 'skipped', decision.reason));
+      appendEvent({
         runId,
-        attempt,
-        kind: config.kind,
-        command: config.command,
-        workingDir: config.workingDir,
-        outcome: 'cancelled',
-        blocking: config.blocking,
-      });
-      results.push({
-        kind: config.kind,
-        outcome: 'cancelled',
-        blocking: config.blocking,
-        exitCode: null,
-        durationMs: null,
+        type: 'validation.result',
+        message: `${step.label}: skipped — ${decision.reason}`,
+        payload: {
+          kind: (step.kind ?? 'build') as ValidationKind,
+          validationId: `${attempt}-${step.key}`,
+          outcome: 'skipped',
+          exitCode: null,
+          durationMs: null,
+        },
       });
       continue;
     }
@@ -264,33 +316,65 @@ export async function runValidation(context: ValidatorContext): Promise<Validati
       id: validationId,
       runId,
       attempt,
-      kind: config.kind,
-      command: config.command,
-      workingDir: config.workingDir,
+      stepKey: step.key,
+      stepLabel: step.label,
+      kind: step.kind,
+      command: step.command,
+      workingDir: step.workingDir,
       outcome: 'running',
-      blocking: config.blocking,
+      blocking: step.blocking,
       startedAt: new Date().toISOString(),
     });
 
     appendEvent({
       runId,
       type: 'validation.started',
-      message: `${config.kind}: ${config.command}`,
-      payload: { kind: config.kind, command: config.command, validationId },
+      message: `${step.label}: ${step.command}`,
+      payload: {
+        kind: (step.kind ?? 'build') as ValidationKind,
+        command: step.command,
+        validationId,
+      },
     });
 
-    const validator = new CommandValidator(config);
-    const outcome = await validator.run(context);
+    const validator = new CommandValidator(step);
+    let outcome = await validator.run(context);
+    let extraAttempts = 0;
+
+    // A retry is for a step that could not run, or one whose suite is known to
+    // flake. It is never silent: the count reaches the log artifact, so a step
+    // that only passed on the third go does not read as a clean pass.
+    while (
+      extraAttempts < step.retries &&
+      !signal?.aborted &&
+      shouldRetry(outcome.outcome, step.retryOn)
+    ) {
+      extraAttempts += 1;
+      appendEvent({
+        runId,
+        type: 'validation.started',
+        level: 'notice',
+        message: `${step.label}: ${outcome.outcome}, retrying (${extraAttempts} of ${step.retries})`,
+        payload: {
+          kind: (step.kind ?? 'build') as ValidationKind,
+          command: step.command,
+          validationId,
+        },
+      });
+      outcome = await validator.run(context);
+    }
 
     upsertValidationResult({
       id: validationId,
       runId,
       attempt,
-      kind: config.kind,
+      stepKey: step.key,
+      stepLabel: step.label,
+      kind: step.kind,
       command: outcome.command,
       workingDir: outcome.workingDir,
       outcome: outcome.outcome,
-      blocking: config.blocking,
+      blocking: step.blocking,
       exitCode: outcome.exitCode,
       durationMs: outcome.durationMs,
       stdout: tail(outcome.stdout, 20_000),
@@ -305,12 +389,14 @@ export async function runValidation(context: ValidatorContext): Promise<Validati
       await writeTextArtifact({
         runId,
         kind: 'stdout_log',
-        label: `${config.kind} output (attempt ${attempt})`,
-        fileName: path.join('validation', `attempt-${attempt}-${config.kind}.log`),
-        content: buildLog(config, outcome),
+        label: `${step.label} output (attempt ${attempt})`,
+        fileName: path.join('validation', `attempt-${attempt}-${step.key}.log`),
+        content: buildLog(step, outcome, extraAttempts),
         meta: {
-          validationKind: config.kind,
+          validationKind: step.kind,
+          stepKey: step.key,
           attempt,
+          retries: extraAttempts,
           exitCode: outcome.exitCode,
           outcome: outcome.outcome,
         },
@@ -321,11 +407,13 @@ export async function runValidation(context: ValidatorContext): Promise<Validati
       runId,
       type: 'validation.result',
       level: BLOCKING_OUTCOMES.includes(outcome.outcome) ? 'error' : 'info',
-      message: `${config.kind}: ${outcome.outcome}${
+      message: `${step.label}: ${outcome.outcome}${
         outcome.exitCode === null ? '' : ` (exit ${outcome.exitCode})`
-      }${outcome.durationMs === null ? '' : ` in ${formatDuration(outcome.durationMs)}`}`,
+      }${outcome.durationMs === null ? '' : ` in ${formatDuration(outcome.durationMs)}`}${
+        extraAttempts > 0 ? ` after ${extraAttempts} retry(s)` : ''
+      }`,
       payload: {
-        kind: config.kind,
+        kind: (step.kind ?? 'build') as ValidationKind,
         validationId,
         outcome: outcome.outcome,
         exitCode: outcome.exitCode,
@@ -335,25 +423,32 @@ export async function runValidation(context: ValidatorContext): Promise<Validati
 
     if (outcome.outcome === 'cancelled') cancelled = true;
 
+    outcomes.set(step.key, outcome.outcome);
     results.push({
-      kind: config.kind,
+      key: step.key,
+      label: step.label,
+      kind: step.kind,
       outcome: outcome.outcome,
-      blocking: config.blocking,
+      blocking: step.blocking,
       exitCode: outcome.exitCode,
       durationMs: outcome.durationMs,
+      attempts: extraAttempts,
+      skipReason: null,
     });
   }
 
   const passed = results.filter((r) => r.outcome === 'pass').length;
   const failed = results.filter((r) => BLOCKING_OUTCOMES.includes(r.outcome)).length;
+  const skipped = results.filter((r) => r.outcome === 'skipped').length;
   const blocking = results.some((r) => r.blocking && BLOCKING_OUTCOMES.includes(r.outcome));
-  const notConfigured = VALIDATION_KINDS.length - configured.length;
+  const notConfigured = uncoveredKinds(project.validationSteps).length;
 
   const summary: ValidationRunSummary = {
     attempt,
     results,
     passed,
     failed,
+    skipped,
     notConfigured,
     blocking,
     cancelled,
@@ -364,20 +459,61 @@ export async function runValidation(context: ValidatorContext): Promise<Validati
     kind: 'validation_report',
     label: `Validation report (attempt ${attempt})`,
     fileName: path.join('validation', `attempt-${attempt}-report.md`),
-    content: buildReport(project, profile, summary),
+    content: buildReport(project, profile, summary, changedPaths),
     mimeType: 'text/markdown',
-    meta: { attempt, passed, failed, blocking },
+    meta: { attempt, passed, failed, skipped, blocking },
   });
 
   appendEvent({
     runId,
     type: 'validation.completed',
     level: blocking ? 'error' : 'info',
-    message: `Validation finished: ${passed} passed, ${failed} failed, ${notConfigured} not configured`,
+    message: `Validation finished: ${passed} passed, ${failed} failed, ${skipped} skipped, ${notConfigured} kind(s) not configured`,
     payload: { total: results.length, passed, failed, notConfigured, blocking },
   });
 
   return summary;
+}
+
+/** Writes a result row for a step that never produced output. */
+function record(
+  runId: string,
+  attempt: number,
+  step: ValidationStepView,
+  outcome: ValidationOutcome,
+  reason: string | null,
+): void {
+  upsertValidationResult({
+    id: newValidationId(),
+    runId,
+    attempt,
+    stepKey: step.key,
+    stepLabel: step.label,
+    kind: step.kind,
+    command: step.command,
+    workingDir: step.workingDir,
+    outcome,
+    blocking: step.blocking,
+    error: reason,
+  });
+}
+
+function emptyResult(
+  step: ValidationStepView,
+  outcome: ValidationOutcome,
+  skipReason: string | null,
+): ValidationStepResult {
+  return {
+    key: step.key,
+    label: step.label,
+    kind: step.kind,
+    outcome,
+    blocking: step.blocking,
+    exitCode: null,
+    durationMs: null,
+    attempts: 0,
+    skipReason,
+  };
 }
 
 function tail(text: string, limit: number): string {
@@ -385,10 +521,16 @@ function tail(text: string, limit: number): string {
   return `... [truncated to the last ${limit} characters] ...\n${text.slice(-limit)}`;
 }
 
-function buildLog(config: ValidationCommandView, outcome: ValidatorOutcome): string {
+function buildLog(
+  step: ValidationStepView,
+  outcome: ValidatorOutcome,
+  retries: number,
+): string {
   const lines = [
-    `# ${config.kind}`,
-    `Command: ${config.command}`,
+    `# ${step.label}`,
+    `Step: ${step.key}`,
+    `Kind: ${step.kind ?? '(none)'}`,
+    `Command: ${step.command}`,
     `Working directory: ${outcome.workingDir ?? '(worktree root)'}`,
     `Outcome: ${outcome.outcome}`,
     `Exit code: ${outcome.exitCode ?? '(none)'}`,
@@ -396,6 +538,9 @@ function buildLog(config: ValidationCommandView, outcome: ValidatorOutcome): str
     `Started: ${outcome.startedAt ?? '(unknown)'}`,
     `Finished: ${outcome.finishedAt ?? '(unknown)'}`,
   ];
+  // A step that only passed on a retry is not the same as one that passed, and
+  // the duration above reports the last go alone.
+  if (retries > 0) lines.push(`Retries used: ${retries} of ${step.retries}`);
   if (outcome.error) lines.push(`Error: ${outcome.error}`);
   lines.push('', '--- stdout ---', outcome.stdout || '(empty)', '', '--- stderr ---', outcome.stderr || '(empty)');
   return lines.join('\n');
@@ -405,14 +550,22 @@ function buildReport(
   project: ProjectView,
   profile: ExecutionProfileName,
   summary: ValidationRunSummary,
+  changedPaths: readonly string[],
 ): string {
-  const rows = VALIDATION_KINDS.map((kind) => {
-    const result = summary.results.find((r) => r.kind === kind);
-    if (!result) return `| ${kind} | not configured | — | — |`;
-    return `| ${kind} | ${result.outcome} | ${result.exitCode ?? '—'} | ${
-      result.durationMs === null ? '—' : formatDuration(result.durationMs)
-    } |`;
-  }).join('\n');
+  const rows = summary.results
+    .map((result) => {
+      const note = result.skipReason
+        ? result.skipReason
+        : result.attempts > 0
+          ? `${result.attempts} retry(s)`
+          : '';
+      return `| ${result.label} | ${result.kind ?? '—'} | ${result.outcome} | ${
+        result.exitCode ?? '—'
+      } | ${result.durationMs === null ? '—' : formatDuration(result.durationMs)} | ${note || '—'} |`;
+    })
+    .join('\n');
+
+  const uncovered = uncoveredKinds(project.validationSteps);
 
   return `# Validation report — attempt ${summary.attempt}
 
@@ -420,13 +573,16 @@ Project: ${project.name}
 Profile: ${profile}
 Blocking failure: ${summary.blocking ? 'yes' : 'no'}
 
-| Check | Outcome | Exit | Duration |
-| --- | --- | --- | --- |
-${rows}
+Conditions were evaluated against ${changedPaths.length} changed file(s) from this run.
+
+| Step | Kind | Outcome | Exit | Duration | Note |
+| --- | --- | --- | --- | --- | --- |
+${rows || '| (no steps ran) | — | — | — | — | — |'}
 
 Passed: ${summary.passed}
 Failed: ${summary.failed}
-Not configured: ${summary.notConfigured}
+Skipped: ${summary.skipped}
+Kinds no step covers: ${uncovered.length === 0 ? 'none' : uncovered.join(', ')}
 `;
 }
 

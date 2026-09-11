@@ -3,13 +3,26 @@
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 
+import type { ProbeRecordView } from '@/advisors/probe';
 import type { SuggestedSetup } from '@/advisors/suggest';
 import {
+  AI_CONFIG_MODE_LABELS,
+  AI_CONFIG_MODES,
   DEFAULT_AGENT_PERMISSION_MODE,
+  PREVIEW_PORT_STRATEGIES,
   VALIDATION_KIND_LABELS,
   VALIDATION_KINDS,
+  type AiConfigMode,
+  type PreviewPortStrategy,
   type ValidationKind,
 } from '@/domain/types';
+import {
+  blankStep,
+  newStepFor,
+  PROFILE_NAMES,
+  StepEditor,
+  type StepState,
+} from './validation-step-editor';
 import {
   DEFAULT_ARTIFACT_RETENTION_DAYS,
   DEFAULT_WORKTREE_RETENTION_DAYS,
@@ -23,34 +36,12 @@ import type { ProviderOption } from './new-task-form';
 /**
  * Project registration and configuration.
  *
- * Every validation kind is offered but none is required: an empty command means
- * "not configured", which the scorecard renders as such rather than as a
- * failure. That is the whole reason the form does not validate for completeness.
+ * The validation pipeline is a list the user builds, not six fixed slots: steps
+ * can be added, removed and reordered, two may share a kind, and a step may
+ * carry no kind at all. What has not changed is that nothing is required — a
+ * pipeline with no step for a kind reports "not configured" there, which the
+ * scorecard renders as such rather than as a failure.
  */
-
-interface CommandState {
-  command: string;
-  workingDir: string;
-  blocking: boolean;
-  enabled: boolean;
-}
-
-const EMPTY_COMMAND: CommandState = {
-  command: '',
-  workingDir: '',
-  blocking: true,
-  enabled: true,
-};
-
-/** Sensible starting points, shown as placeholders only. */
-const PLACEHOLDERS: Record<ValidationKind, string> = {
-  typecheck: 'npm run typecheck',
-  lint: 'npm run lint',
-  unit: 'npm test',
-  integration: 'npm run test:integration',
-  e2e: 'npx playwright test',
-  build: 'npm run build',
-};
 
 /**
  * A retention box back to a number of days.
@@ -135,31 +126,143 @@ export function ProjectForm({
       ? existing.effectivePermissionMode
       : null;
 
-  const [commands, setCommands] = useState<Record<ValidationKind, CommandState>>(() => {
-    const initial = {} as Record<ValidationKind, CommandState>;
-    for (const kind of VALIDATION_KINDS) {
-      const found = existing?.validationCommands.find((c) => c.kind === kind);
-      initial[kind] = found
-        ? {
-            command: found.command,
-            workingDir: found.workingDir ?? '',
-            blocking: found.blocking,
-            enabled: found.enabled,
-          }
-        : { ...EMPTY_COMMAND };
-    }
-    return initial;
-  });
+  const [steps, setSteps] = useState<StepState[]>(() =>
+    (existing?.validationSteps ?? []).map((step) => ({
+      key: step.key,
+      label: step.label,
+      kind: step.kind ?? '',
+      command: step.command,
+      workingDir: step.workingDir ?? '',
+      env: step.env.join('\n'),
+      timeoutMs: step.timeoutMs,
+      blocking: step.blocking,
+      enabled: step.enabled,
+      profiles: step.profiles.length > 0 ? step.profiles : [...PROFILE_NAMES],
+      runWhen: step.runWhen,
+      runWhenArg: step.runWhenArg ?? '',
+      retries: step.retries,
+      retryOn: step.retryOn,
+      expanded: false,
+    })),
+  );
+
+  /* Preview configuration. `developmentCommand` above is still the command. */
+  const [previewWorkingDir, setPreviewWorkingDir] = useState(
+    existing?.preview.workingDir ?? '',
+  );
+  const [previewEnv, setPreviewEnv] = useState(existing?.preview.env.join('\n') ?? '');
+  const [previewPortStrategy, setPreviewPortStrategy] = useState<PreviewPortStrategy>(
+    existing?.preview.portStrategy ?? 'auto',
+  );
+  const [previewFixedPort, setPreviewFixedPort] = useState(
+    existing?.preview.fixedPort ? String(existing.preview.fixedPort) : '',
+  );
+  const [previewReadyPath, setPreviewReadyPath] = useState(existing?.preview.readyPath ?? '/');
+  const [previewReadyTimeout, setPreviewReadyTimeout] = useState(
+    String(Math.round((existing?.preview.readyTimeoutMs ?? 120_000) / 1000)),
+  );
+  const [previewAutoStart, setPreviewAutoStart] = useState(
+    existing?.preview.autoStart ?? false,
+  );
+
+  const [aiConfigMode, setAiConfigMode] = useState<AiConfigMode>(
+    existing?.aiConfigMode ?? 'draft',
+  );
+
+  const updateStep = (index: number, patch: Partial<StepState>) => {
+    setSteps((prev) => prev.map((step, i) => (i === index ? { ...step, ...patch } : step)));
+  };
+
+  const addStep = (kind: ValidationKind | '' = '') => {
+    setSteps((prev) => [...prev, newStepFor(prev, kind)]);
+  };
+
+  const removeStep = (index: number) => {
+    setSteps((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  /** Order is the configuration, so moving a step is an edit like any other. */
+  const moveStep = (index: number, delta: number) => {
+    setSteps((prev) => {
+      const target = index + delta;
+      if (target < 0 || target >= prev.length) return prev;
+      const next = prev.slice();
+      const [moved] = next.splice(index, 1);
+      next.splice(target, 0, moved!);
+      return next;
+    });
+  };
 
   const [probe, setProbe] = useState<RepositoryProbe | null>(null);
   const [probing, setProbing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [advisor, setAdvisor] = useState('none');
+  const [advisor, setAdvisor] = useState(existing?.aiConfigProvider ?? 'none');
   const [suggesting, setSuggesting] = useState(false);
   const [suggestion, setSuggestion] = useState<SuggestedSetup | null>(null);
   const [suggestError, setSuggestError] = useState<string | null>(null);
+
+  const [probeState, setProbeState] = useState<ProbeRecordView | null>(null);
+  const [autoRunning, setAutoRunning] = useState(false);
+  const [autoError, setAutoError] = useState<string | null>(null);
+
+  /**
+   * Hands the project to the advisor to configure, save and verify.
+   *
+   * Only reachable in `auto` mode, and only for a saved project: a probe needs
+   * a repository path on disk and a row to write its progress against. The
+   * request returns a probe id straight away and this polls it, because
+   * installing dependencies and running a suite is minutes, not seconds.
+   */
+  const runAutoConfigure = async () => {
+    if (!existing) return;
+    setAutoRunning(true);
+    setAutoError(null);
+    setProbeState(null);
+    try {
+      const response = await fetch(`/api/projects/${existing.id}/auto-configure`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: advisor }),
+      });
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as { error?: string } | null;
+        setAutoError(body?.error ?? `Could not start (${response.status})`);
+        setAutoRunning(false);
+        return;
+      }
+      const { probeId } = (await response.json()) as { probeId: string };
+      await pollProbe(existing.id, probeId);
+    } catch (err) {
+      setAutoError(err instanceof Error ? err.message : 'Could not start.');
+      setAutoRunning(false);
+    }
+  };
+
+  const pollProbe = async (projectId: string, probeId: string) => {
+    // Bounded so a probe whose process died does not leave a spinner forever.
+    for (let tick = 0; tick < 600; tick += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+      try {
+        const response = await fetch(`/api/projects/${projectId}/probe/${probeId}`);
+        if (!response.ok) continue;
+        const { probe } = (await response.json()) as { probe: ProbeRecordView };
+        setProbeState(probe);
+        if (probe.status !== 'running') {
+          setAutoRunning(false);
+          // The configuration on screen is now stale: the server wrote a new
+          // one. A refresh is the honest way to show it.
+          router.refresh();
+          return;
+        }
+      } catch {
+        // A dropped poll is not a failed probe. Try again.
+      }
+    }
+    setAutoError('Stopped watching after 20 minutes. Reload to see where it got to.');
+    setAutoRunning(false);
+  };
 
   /**
    * Asks the server to draft the setup fields from the repository.
@@ -191,8 +294,23 @@ export function ProjectForm({
     }
   };
 
-  const applyValidationCommand = (kind: ValidationKind, command: string) => {
-    setCommands((prev) => ({ ...prev, [kind]: { ...prev[kind], command } }));
+  /** Takes one proposed step, replacing an existing one with the same key. */
+  const applyProposedStep = (proposed: SuggestedSetup['proposal']['validationSteps'][number]) => {
+    setSteps((prev) => {
+      const at = prev.findIndex((step) => step.key === proposed.key);
+      const next: StepState = {
+        ...(at >= 0 ? prev[at]! : blankStep(proposed.key, proposed.label)),
+        key: proposed.key,
+        label: proposed.label,
+        kind: proposed.kind ?? '',
+        command: proposed.command,
+        workingDir: proposed.workingDir ?? '',
+        blocking: proposed.blocking,
+        expanded: false,
+      };
+      if (at >= 0) return prev.map((step, i) => (i === at ? next : step));
+      return [...prev, next];
+    });
   };
 
   /**
@@ -213,17 +331,27 @@ export function ProjectForm({
     if (!linkPaths.trim() && proposal.linkPaths.length > 0) {
       setLinkPaths(proposal.linkPaths.join('\n'));
     }
-    setCommands((prev) => {
-      const next = { ...prev };
-      for (const proposed of proposal.validationCommands) {
-        if (next[proposed.kind].command.trim()) continue;
-        next[proposed.kind] = {
-          ...next[proposed.kind],
+    if (!previewReadyPath.trim() || previewReadyPath === '/') {
+      setPreviewReadyPath(proposal.preview.readyPath);
+    }
+    if (!previewWorkingDir.trim() && proposal.preview.workingDir) {
+      setPreviewWorkingDir(proposal.preview.workingDir);
+    }
+
+    // Only steps the pipeline does not already have. A step the user wrote is
+    // never overwritten by a draft; per-step Apply is the deliberate override.
+    setSteps((prev) => {
+      const taken = new Set(prev.map((step) => step.key));
+      const additions = proposal.validationSteps
+        .filter((proposed) => !taken.has(proposed.key))
+        .map((proposed) => ({
+          ...blankStep(proposed.key, proposed.label, proposed.kind ?? ''),
           command: proposed.command,
-          workingDir: proposed.workingDir ?? next[proposed.kind].workingDir,
-        };
-      }
-      return next;
+          workingDir: proposed.workingDir ?? '',
+          blocking: proposed.blocking,
+          expanded: false,
+        }));
+      return [...prev, ...additions];
     });
   };
 
@@ -280,13 +408,41 @@ export function ProjectForm({
       artifactRetentionDays: retentionOr(artifactRetentionDays, DEFAULT_ARTIFACT_RETENTION_DAYS),
       agentModel: agentModel || null,
       agentPermissionMode,
-      validationCommands: VALIDATION_KINDS.map((kind) => ({
-        kind,
-        command: commands[kind].command.trim(),
-        workingDir: commands[kind].workingDir.trim() || null,
-        blocking: commands[kind].blocking,
-        enabled: commands[kind].enabled,
-      })),
+      aiConfigMode,
+      aiConfigProvider: advisor === 'none' ? null : advisor,
+      preview: {
+        workingDir: previewWorkingDir.trim() || null,
+        env: splitLines(previewEnv),
+        portStrategy: previewPortStrategy,
+        fixedPort:
+          previewPortStrategy === 'fixed' && previewFixedPort.trim()
+            ? Number(previewFixedPort)
+            : null,
+        readyPath: previewReadyPath.trim() || '/',
+        readyTimeoutMs: Math.max(1, Number(previewReadyTimeout) || 120) * 1_000,
+        autoStart: previewAutoStart,
+      },
+      // Position is the array order. Sending it explicitly rather than relying
+      // on the server to infer it keeps "what I see is what runs" true.
+      validationSteps: steps
+        .filter((step) => step.command.trim())
+        .map((step, index) => ({
+          key: step.key,
+          label: step.label.trim() || step.key,
+          kind: step.kind || null,
+          command: step.command.trim(),
+          workingDir: step.workingDir.trim() || null,
+          env: splitLines(step.env),
+          timeoutMs: step.timeoutMs,
+          blocking: step.blocking,
+          enabled: step.enabled,
+          profiles: step.profiles,
+          position: index * 10,
+          runWhen: step.runWhen,
+          runWhenArg: step.runWhen === 'always' ? null : step.runWhenArg.trim() || null,
+          retries: step.retries,
+          retryOn: step.retryOn,
+        })),
     };
 
     try {
@@ -394,8 +550,73 @@ export function ProjectForm({
         </div>
       </section>
 
-      {/* Draft the setup */}
+      {/* How much the AI may do */}
       {advisors.length > 0 ? (
+        <section className="panel">
+          <div className="panel-head">
+            <h2 className="panel-title">AI configuration</h2>
+            <span className="text-[11px] text-ink-faint">per project</span>
+          </div>
+          <div className="space-y-3 px-3.5 py-3">
+            <div>
+              <label className="label" htmlFor="ai-config-mode">
+                What the advisor may do here
+              </label>
+              <select
+                id="ai-config-mode"
+                className="input"
+                value={aiConfigMode}
+                onChange={(e) => setAiConfigMode(e.target.value as AiConfigMode)}
+              >
+                {AI_CONFIG_MODES.map((mode) => (
+                  <option key={mode} value={mode}>
+                    {AI_CONFIG_MODE_LABELS[mode]}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {aiConfigMode === 'auto' ? (
+              <div className="space-y-2 rounded border border-warn/40 bg-warn/5 p-2.5">
+                <p className="text-[12px] text-ink-muted">
+                  <strong>Auto</strong> saves the drafted configuration and then runs it in a
+                  throwaway checkout under <span className="mono">data/probes/</span> — never your
+                  own. Whatever could not run is corrected once and saved again. A check that ran
+                  and <em>failed</em> is left alone: that is a real result about your code, not a
+                  configuration mistake.
+                </p>
+                <p className="text-[12px] text-ink-muted">
+                  This executes shell commands a model wrote, without you reading them first.
+                  Every save is preceded by a snapshot, so the previous pipeline is one click
+                  away under <strong>History</strong>.
+                </p>
+                {editing ? (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      disabled={autoRunning || existing?.aiConfigMode !== 'auto'}
+                      onClick={() => void runAutoConfigure()}
+                    >
+                      {autoRunning ? 'Configuring and verifying…' : 'Configure and verify now'}
+                    </button>
+                    {existing?.aiConfigMode !== 'auto' ? (
+                      <span className="hint">Save this setting first.</span>
+                    ) : null}
+                  </div>
+                ) : (
+                  <p className="hint">Save the project first, then run it from this panel.</p>
+                )}
+                {autoError ? <p className="hint text-fail">{autoError}</p> : null}
+                {probeState ? <ProbeSummary probe={probeState} /> : null}
+              </div>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
+
+      {/* Draft the setup */}
+      {advisors.length > 0 && aiConfigMode !== 'off' ? (
         <section className="panel">
           <div className="panel-head">
             <h2 className="panel-title">Draft the setup</h2>
@@ -465,12 +686,12 @@ export function ProjectForm({
                 ) : null}
 
                 <div className="divide-y divide-line">
-                  {suggestion.proposal.validationCommands.map((proposed) => (
+                  {suggestion.proposal.validationSteps.map((proposed) => (
                     <SuggestionRow
-                      key={proposed.kind}
-                      label={VALIDATION_KIND_LABELS[proposed.kind]}
+                      key={proposed.key}
+                      label={proposed.label}
                       value={proposed.command}
-                      onApply={() => applyValidationCommand(proposed.kind, proposed.command)}
+                      onApply={() => applyProposedStep(proposed)}
                     />
                   ))}
                   {suggestion.proposal.setupCommand ? (
@@ -498,7 +719,7 @@ export function ProjectForm({
                   ) : null}
                 </div>
 
-                {suggestion.proposal.validationCommands.length === 0 &&
+                {suggestion.proposal.validationSteps.length === 0 &&
                 !suggestion.proposal.setupCommand &&
                 !suggestion.proposal.developmentCommand ? (
                   <p className="hint">
@@ -519,64 +740,193 @@ export function ProjectForm({
       {/* Validation */}
       <section className="panel">
         <div className="panel-head">
-          <h2 className="panel-title">Validation commands</h2>
+          <h2 className="panel-title">Validation pipeline</h2>
           <span className="text-[11px] text-ink-faint">
-            leave blank for &ldquo;not configured&rdquo;
+            {steps.length === 0
+              ? 'nothing configured'
+              : `${steps.length} step${steps.length === 1 ? '' : 's'}, run top to bottom`}
           </span>
         </div>
-        <div className="divide-y divide-line">
-          {VALIDATION_KINDS.map((kind) => {
-            const state = commands[kind];
-            const set = (patch: Partial<CommandState>) =>
-              setCommands((prev) => ({ ...prev, [kind]: { ...prev[kind], ...patch } }));
 
-            return (
-              <div key={kind} className="px-3.5 py-2.5">
-                <div className="flex items-center gap-2.5">
-                  <span className="w-24 shrink-0 text-[12.5px] font-medium">
-                    {VALIDATION_KIND_LABELS[kind]}
-                  </span>
+        {steps.length === 0 ? (
+          <p className="px-3.5 py-3 text-[12px] text-ink-muted">
+            No steps yet. A project with no steps is reported as{' '}
+            <span className="mono">not configured</span>, never as failing — but nothing will
+            hold a broken run back either.
+          </p>
+        ) : (
+          <div className="divide-y divide-line">
+            {steps.map((step, index) => (
+              <StepEditor
+                key={step.key}
+                step={step}
+                index={index}
+                total={steps.length}
+                otherKeys={steps.filter((_, i) => i !== index).map((other) => other.key)}
+                onChange={(patch) => updateStep(index, patch)}
+                onRemove={() => removeStep(index)}
+                onMove={(delta) => moveStep(index, delta)}
+              />
+            ))}
+          </div>
+        )}
+
+        <div className="flex flex-wrap items-center gap-2 border-t border-line px-3.5 py-2.5">
+          <button type="button" className="btn btn-sm" onClick={() => addStep()}>
+            Add a step
+          </button>
+          <span className="text-[11px] text-ink-faint">or start from a kind:</span>
+          {VALIDATION_KINDS.map((kind) => (
+            <button
+              key={kind}
+              type="button"
+              className="btn btn-sm btn-ghost"
+              onClick={() => addStep(kind)}
+            >
+              {VALIDATION_KIND_LABELS[kind]}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      {/* Preview */}
+      <section className="panel">
+        <div className="panel-head">
+          <h2 className="panel-title">Preview</h2>
+          <span className="text-[11px] text-ink-faint">one per run</span>
+        </div>
+        <div className="space-y-3 px-3.5 py-3">
+          <div>
+            <label className="label" htmlFor="dev-command">
+              Development command
+            </label>
+            <input
+              id="dev-command"
+              className="input input-mono"
+              value={developmentCommand}
+              placeholder="npm run dev"
+              onChange={(e) => setDevelopmentCommand(e.target.value)}
+            />
+            <p className="hint">
+              Started from the run screen. Dev Cockpit sets <span className="mono">PORT</span>,{' '}
+              <span className="mono">HOST</span> and{' '}
+              <span className="mono">DEV_COCKPIT_PREVIEW_URL</span> for it.
+            </p>
+          </div>
+
+          {developmentCommand.trim() ? (
+            <>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <label className="label" htmlFor="preview-working-dir">
+                    Working directory
+                  </label>
                   <input
+                    id="preview-working-dir"
                     className="input input-mono"
-                    value={state.command}
-                    placeholder={PLACEHOLDERS[kind]}
-                    onChange={(e) => set({ command: e.target.value })}
-                    aria-label={`${VALIDATION_KIND_LABELS[kind]} command`}
+                    value={previewWorkingDir}
+                    placeholder="(worktree root)"
+                    onChange={(e) => setPreviewWorkingDir(e.target.value)}
                   />
                 </div>
-
-                {state.command.trim() ? (
-                  <div className="mt-2 flex flex-wrap items-center gap-4 pl-[6.5rem]">
-                    <input
-                      className="input input-mono max-w-56"
-                      value={state.workingDir}
-                      placeholder="working directory (optional)"
-                      onChange={(e) => set({ workingDir: e.target.value })}
-                      aria-label={`${VALIDATION_KIND_LABELS[kind]} working directory`}
-                    />
-                    <label className="flex cursor-pointer items-center gap-1.5 text-[11.5px] text-ink-muted">
-                      <input
-                        type="checkbox"
-                        className="accent-accent"
-                        checked={state.blocking}
-                        onChange={(e) => set({ blocking: e.target.checked })}
-                      />
-                      blocks readiness on failure
-                    </label>
-                    <label className="flex cursor-pointer items-center gap-1.5 text-[11.5px] text-ink-muted">
-                      <input
-                        type="checkbox"
-                        className="accent-accent"
-                        checked={state.enabled}
-                        onChange={(e) => set({ enabled: e.target.checked })}
-                      />
-                      enabled
-                    </label>
-                  </div>
-                ) : null}
+                <div>
+                  <label className="label" htmlFor="preview-ready-path">
+                    Ready path
+                  </label>
+                  <input
+                    id="preview-ready-path"
+                    className="input input-mono"
+                    value={previewReadyPath}
+                    placeholder="/"
+                    onChange={(e) => setPreviewReadyPath(e.target.value)}
+                  />
+                  <p className="hint">
+                    Requested until it answers. A health endpoint is a better signal than{' '}
+                    <span className="mono">/</span> when the home page needs a login.
+                  </p>
+                </div>
               </div>
-            );
-          })}
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <label className="label" htmlFor="preview-port-strategy">
+                    Port
+                  </label>
+                  <select
+                    id="preview-port-strategy"
+                    className="input"
+                    value={previewPortStrategy}
+                    onChange={(e) =>
+                      setPreviewPortStrategy(e.target.value as PreviewPortStrategy)
+                    }
+                  >
+                    {PREVIEW_PORT_STRATEGIES.map((strategy) => (
+                      <option key={strategy} value={strategy}>
+                        {strategy === 'auto' ? 'Automatic — any free port' : 'Fixed'}
+                      </option>
+                    ))}
+                  </select>
+                  {previewPortStrategy === 'fixed' ? (
+                    <input
+                      className="input input-mono mt-2"
+                      value={previewFixedPort}
+                      placeholder="3000"
+                      inputMode="numeric"
+                      onChange={(e) => setPreviewFixedPort(e.target.value)}
+                      aria-label="Fixed preview port"
+                    />
+                  ) : null}
+                  <p className="hint">
+                    Fixed is for a project whose own configuration hard-codes the URL. A clash is
+                    reported rather than worked around.
+                  </p>
+                </div>
+                <div>
+                  <label className="label" htmlFor="preview-ready-timeout">
+                    Give up waiting after (seconds)
+                  </label>
+                  <input
+                    id="preview-ready-timeout"
+                    className="input input-mono"
+                    value={previewReadyTimeout}
+                    inputMode="numeric"
+                    onChange={(e) => setPreviewReadyTimeout(e.target.value)}
+                  />
+                  <p className="hint">
+                    The process is left running when this elapses — a slow build is the usual
+                    cause, and its log is the thing worth reading.
+                  </p>
+                </div>
+              </div>
+
+              <div>
+                <label className="label" htmlFor="preview-env">
+                  Environment
+                </label>
+                <textarea
+                  id="preview-env"
+                  className="input input-mono min-h-16"
+                  value={previewEnv}
+                  placeholder={'ONE_PER_LINE=value'}
+                  onChange={(e) => setPreviewEnv(e.target.value)}
+                />
+                <p className="hint">
+                  One <span className="mono">KEY=VALUE</span> per line. Secret-looking values are
+                  masked in captured output.
+                </p>
+              </div>
+
+              <label className="flex cursor-pointer items-center gap-2 text-[12px] text-ink-muted">
+                <input
+                  type="checkbox"
+                  className="accent-accent"
+                  checked={previewAutoStart}
+                  onChange={(e) => setPreviewAutoStart(e.target.checked)}
+                />
+                Start the preview automatically when a run is ready for review
+              </label>
+            </>
+          ) : null}
         </div>
       </section>
 
@@ -621,19 +971,6 @@ export function ProjectForm({
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2">
-            <div>
-              <label className="label" htmlFor="dev-command">
-                Development command
-              </label>
-              <input
-                id="dev-command"
-                className="input input-mono"
-                value={developmentCommand}
-                placeholder="npm run dev"
-                onChange={(e) => setDevelopmentCommand(e.target.value)}
-              />
-                <p className="hint">Used by the run screen&apos;s Start preview action.</p>
-            </div>
             <div>
               <label className="label" htmlFor="open-command">
                 Open command
@@ -962,6 +1299,73 @@ function SuggestionRow({
       <button type="button" className="btn btn-sm btn-ghost" onClick={onApply}>
         Apply
       </button>
+    </div>
+  );
+}
+
+/**
+ * What a probe found, in the order a person asks about it.
+ *
+ * The distinction between a step that failed and one that could not run is the
+ * whole reason this panel is not a green tick or a red cross: a pipeline where
+ * every command ran and one suite failed is a *correct* configuration that
+ * found a real problem.
+ */
+function ProbeSummary({ probe }: { probe: ProbeRecordView }) {
+  if (probe.status === 'running') {
+    return <p className="hint">{probe.phase}&hellip;</p>;
+  }
+
+  if (probe.status === 'failed') {
+    return <p className="hint text-fail">{probe.error ?? 'The probe failed.'}</p>;
+  }
+
+  const report = probe.report;
+  if (!report) return <p className="hint">Finished, but the report could not be read.</p>;
+
+  const errored = report.steps.filter((step) => step.outcome === 'error');
+  const failed = report.steps.filter((step) => step.outcome === 'fail');
+  const passed = report.steps.filter((step) => step.outcome === 'pass');
+
+  return (
+    <div className="space-y-1.5">
+      <p className="text-[12px]">
+        <span className={report.configurationSound ? 'text-pass' : 'text-fail'}>
+          {report.configurationSound
+            ? 'Every command ran.'
+            : `${errored.length} command(s) could not run.`}
+        </span>{' '}
+        {passed.length} passed, {failed.length} failed.
+      </p>
+
+      {failed.length > 0 ? (
+        <p className="hint">
+          Failed, and left alone: {failed.map((step) => step.label).join(', ')}. These ran
+          correctly and found something in your code.
+        </p>
+      ) : null}
+
+      {errored.length > 0 ? (
+        <ul className="space-y-0.5">
+          {errored.map((step) => (
+            <li key={step.key} className="text-[11.5px] text-fail">
+              <span className="mono">{step.command}</span> &mdash; {step.error}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
+      {report.preview ? (
+        <p className="hint">
+          Preview {report.preview.ready ? 'came up.' : `did not come up: ${report.preview.error}`}
+        </p>
+      ) : null}
+
+      {report.notes.map((note) => (
+        <p key={note} className="hint">
+          {note}
+        </p>
+      ))}
     </div>
   );
 }

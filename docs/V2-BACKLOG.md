@@ -30,11 +30,12 @@ number is worth during a sweep, but computing it once for a Settings panel is
 cheap. That panel is the missing half: per-project totals for `worktrees/`,
 `landings/` and `artifacts/`, and a **Sweep now** button beside them.
 
-**Preview automation**
-Run previews can be started manually from a prepared worktree. What remains is
-policy: optional auto-start after a successful run, richer health checks beyond
-"the URL answered", and browser-capture integration that can register screenshots
-or Playwright reports against the preview URL.
+**Preview automation** — *mostly done*
+Auto-start on `READY`, a configurable ready path with a real timeout, restart,
+and a log tail all ship now. What remains is browser-capture integration that
+can register screenshots or Playwright reports against the preview URL, and a
+readiness check richer than "something answered" — parsing the dev server's own
+output for its bound URL would beat polling.
 
 **Host-side permission allowlist**
 ADR 0010 made runs skip permission checks entirely, so the implementer can now
@@ -110,7 +111,20 @@ yet. The run row can store it; the UI to set it is the missing part.
 **Validator plugins beyond shell commands**
 The `Validator` interface is the seam. `runValidation` constructs
 `CommandValidator` directly; a registry is a small piece of work when the second
-validator arrives.
+validator arrives. The pipeline is free-form now, so a non-command validator has
+somewhere to sit without displacing anything.
+
+**Proving `auto` mode against a live model** — *gap*
+The probe, the revision rule and the configuration history are tested with
+commands the tests write. What has not been exercised is a real advisor
+returning a proposal that a probe then corrects — the one path where a model's
+commands are saved and run without a human reading them first. Worth doing on a
+throwaway project before trusting it with a real one.
+
+**Probe cost accounting** — *gap*
+`auto` mode makes up to two advisor calls and neither is added to any total.
+`addRunCost` counts a run's spending and a probe has no run; a per-project
+figure is the missing half.
 
 **Request templates**
 Recurring request shapes ("add a migration for…", "fix the failing test in…")
