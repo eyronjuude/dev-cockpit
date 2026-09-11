@@ -10,7 +10,9 @@ import path from 'node:path';
  * The orchestrator already serialises landings correctly — that is covered in
  * `landing-assistance.test.ts`. What is asserted here is that the view built on
  * top reports the same order the orchestrator will actually run, and that a run
- * owed a landing nobody has asked for yet still shows up.
+ * entitled to land but never asked to does not show up here — only an actual
+ * landing request (`landRun`, `resolveLandingConflicts`, or a retry that
+ * resumes one) puts a run in this queue.
  */
 
 let dataDir: string;
@@ -134,27 +136,18 @@ function entriesOf(view: ReturnType<typeof landingQueue.projectLandingQueue>) {
 }
 
 describe('landing queue view', () => {
-  it('lists an approved run nobody has asked to land yet', async () => {
-    const repo = makeRepo('queue-pending');
+  it('does not list an approved run nobody has asked to land yet', async () => {
+    const repo = makeRepo('queue-unrequested');
     const project = await projectsService.createProject({
-      name: 'queue-pending',
+      name: 'queue-unrequested',
       repositoryPath: repo,
     });
-    const run = await makeApprovedRun(project, 'pending.txt', 'pending\n');
+    await makeApprovedRun(project, 'unrequested.txt', 'unrequested\n');
 
     const view = landingQueue.projectLandingQueue(project);
 
     expect(view.liveCount).toBe(0);
-    expect(view.pendingCount).toBe(1);
-    expect(view.branches).toHaveLength(1);
-    expect(view.branches[0]!.targetBranch).toBe('main');
-
-    const entry = view.branches[0]!.entries[0]!;
-    expect(entry.id).toBe(run.id);
-    expect(entry.state).toBe('pending');
-    expect(entry.position).toBeNull();
-    expect(entry.status).toBe('APPROVED');
-    expect(entry.stopped).toBe(false);
+    expect(view.branches).toHaveLength(0);
   });
 
   it('reports the landing run first and the queued one behind it', async () => {
@@ -171,7 +164,6 @@ describe('landing queue view', () => {
 
     const view = landingQueue.projectLandingQueue(project);
     expect(view.liveCount).toBe(2);
-    expect(view.pendingCount).toBe(0);
     expect(view.branches).toHaveLength(1);
 
     const [landingEntry, waitingEntry] = view.branches[0]!.entries;
@@ -187,14 +179,13 @@ describe('landing queue view', () => {
     await waitForIdle(first.id);
     await waitForIdle(second.id);
 
-    // Both landed, so neither is owed a landing any more.
+    // Both landed, so neither is in the queue any more.
     const after = landingQueue.projectLandingQueue(project);
     expect(after.liveCount).toBe(0);
-    expect(after.pendingCount).toBe(0);
     expect(after.branches).toHaveLength(0);
   });
 
-  it('returns a cancelled queued landing to the pending backlog', async () => {
+  it('drops a cancelled queued landing from the queue entirely', async () => {
     const repo = makeRepo('queue-cancel');
     const project = await projectsService.createProject({
       name: 'queue-cancel',
@@ -208,12 +199,9 @@ describe('landing queue view', () => {
     expect(orchestrator.cancelRun(second.id)).toBe(true);
 
     const view = landingQueue.projectLandingQueue(project);
-    const queued = entriesOf(view).find((entry) => entry.id === second.id);
-    expect(queued?.state).toBe('pending');
-    expect(queued?.position).toBeNull();
-    expect(queued?.status).toBe('APPROVED');
+    const cancelled = entriesOf(view).find((entry) => entry.id === second.id);
+    expect(cancelled).toBeUndefined();
     expect(view.liveCount).toBe(1);
-    expect(view.pendingCount).toBe(1);
 
     await waitForIdle(first.id);
   });
@@ -229,26 +217,28 @@ describe('landing queue view', () => {
     const onMain = await makeApprovedRun(project, 'main.txt', 'main\n');
     const onRelease = await makeApprovedRun(project, 'release.txt', 'release\n', 'release');
 
-    const view = landingQueue.projectLandingQueue(project);
-    expect(view.pendingCount).toBe(2);
-    expect(view.branches.map((branch) => branch.targetBranch)).toEqual(['main', 'release']);
-    expect(view.branches[0]!.entries.map((entry) => entry.id)).toEqual([onMain.id]);
-    expect(view.branches[1]!.entries.map((entry) => entry.id)).toEqual([onRelease.id]);
+    // Neither has been asked to land yet, so the queue is still empty.
+    const beforeLanding = landingQueue.projectLandingQueue(project);
+    expect(beforeLanding.liveCount).toBe(0);
+    expect(beforeLanding.branches).toHaveLength(0);
 
     // Different targets do not contend, so both land at once rather than one
     // waiting on the other.
     orchestrator.landRun(onMain.id);
     orchestrator.landRun(onRelease.id);
 
-    const live = landingQueue.projectLandingQueue(project);
-    expect(entriesOf(live).map((entry) => entry.state)).toEqual(['landing', 'landing']);
+    const view = landingQueue.projectLandingQueue(project);
+    expect(view.branches.map((branch) => branch.targetBranch)).toEqual(['main', 'release']);
+    expect(view.branches[0]!.entries.map((entry) => entry.id)).toEqual([onMain.id]);
+    expect(view.branches[1]!.entries.map((entry) => entry.id)).toEqual([onRelease.id]);
+    expect(entriesOf(view).map((entry) => entry.state)).toEqual(['landing', 'landing']);
 
     await waitForIdle(onMain.id);
     await waitForIdle(onRelease.id);
   });
 
   it('counts each project separately for the project list', async () => {
-    const withBacklog = await projectsService.createProject({
+    const withApprovedRun = await projectsService.createProject({
       name: 'queue-counts-a',
       repositoryPath: makeRepo('queue-counts-a'),
     });
@@ -256,10 +246,19 @@ describe('landing queue view', () => {
       name: 'queue-counts-b',
       repositoryPath: makeRepo('queue-counts-b'),
     });
-    await makeApprovedRun(withBacklog, 'a.txt', 'a\n');
+    const run = await makeApprovedRun(withApprovedRun, 'a.txt', 'a\n');
 
-    const counts = landingQueue.landingQueueCounts([withBacklog, empty]);
-    expect(counts.get(withBacklog.id)).toEqual({ live: 0, pending: 1, total: 1 });
-    expect(counts.get(empty.id)).toEqual({ live: 0, pending: 0, total: 0 });
+    // Approved but not asked to land: neither project counts it.
+    const beforeLanding = landingQueue.landingQueueCounts([withApprovedRun, empty]);
+    expect(beforeLanding.get(withApprovedRun.id)).toEqual({ live: 0 });
+    expect(beforeLanding.get(empty.id)).toEqual({ live: 0 });
+
+    orchestrator.landRun(run.id);
+
+    const afterLanding = landingQueue.landingQueueCounts([withApprovedRun, empty]);
+    expect(afterLanding.get(withApprovedRun.id)).toEqual({ live: 1 });
+    expect(afterLanding.get(empty.id)).toEqual({ live: 0 });
+
+    await waitForIdle(run.id);
   });
 });

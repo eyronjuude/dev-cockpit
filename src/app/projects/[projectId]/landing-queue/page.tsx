@@ -34,7 +34,7 @@ export default async function LandingQueuePage({
         </div>
         <h1 className="mt-0.5 text-[19px] font-semibold tracking-tight">Landing queue</h1>
         <p className="mt-0.5 text-[12.5px] text-ink-muted">
-          Every approved run that has not merged yet, grouped by the branch it lands on. Runs
+          Runs currently landing or waiting their turn, grouped by the branch they land on. Runs
           targeting the same branch land one at a time.
         </p>
       </header>
