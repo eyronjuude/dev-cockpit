@@ -51,8 +51,8 @@ export default function RunsPage() {
           </p>
         </div>
       ) : (
-        <div className="panel overflow-hidden">
-          <table className="w-full text-[12.5px]">
+        <div className="panel overflow-x-auto">
+          <table className="w-full table-fixed text-[12.5px]">
             <thead>
               <tr className="border-b border-line text-left text-[11px] uppercase tracking-wide text-ink-muted">
                 <th className="px-3.5 py-2 font-semibold">Run</th>
@@ -71,7 +71,10 @@ export default function RunsPage() {
                       <span className="block truncate font-medium hover:text-accent">
                         {run.title}
                       </span>
-                      <code className="mono text-ink-faint">
+                      <code
+                        className="mono block truncate text-ink-faint"
+                        title={run.branch ?? run.id}
+                      >
                         {run.branch ?? run.id} ·{' '}
                         {WORK_MODE_LABELS[effectiveWorkMode(run)].toLowerCase()}
                         {run.mode === 'auto' ? ' (auto)' : ''} · {run.profile}
@@ -123,7 +126,7 @@ function ValidationSummary({
     return <span className="text-ink-faint">—</span>;
   }
   return (
-    <span className="flex items-center gap-1.5 tabular-nums">
+    <span className="flex flex-wrap items-center gap-1.5 tabular-nums">
       {summary.passed > 0 ? <span className="text-pass">{summary.passed} pass</span> : null}
       {summary.failed > 0 ? <span className="text-fail">{summary.failed} fail</span> : null}
       {summary.running > 0 ? <span className="text-running">{summary.running} running</span> : null}
