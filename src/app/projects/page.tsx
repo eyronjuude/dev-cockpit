@@ -7,7 +7,7 @@ import { listProjects, projectRunCounts } from '@/services/projects';
 
 export const dynamic = 'force-dynamic';
 
-const NO_LANDINGS = { live: 0, pending: 0, total: 0 };
+const NO_LANDINGS = { live: 0 };
 
 export default function ProjectsPage() {
   const projects = listProjects();
@@ -93,12 +93,8 @@ export default function ProjectsPage() {
                   </Link>
                   <Link href={`/projects/${project.id}/landing-queue`} className="btn btn-sm">
                     Landing queue
-                    {landing.total > 0 ? (
-                      <span
-                        className={`badge ${landing.live > 0 ? 'badge-running' : 'badge-idle'}`}
-                      >
-                        {landing.total}
-                      </span>
+                    {landing.live > 0 ? (
+                      <span className="badge badge-running">{landing.live}</span>
                     ) : null}
                   </Link>
                 </div>

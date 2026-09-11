@@ -12,9 +12,7 @@
 export type LandingQueueState =
   | 'landing'
   /** In the live queue, behind something else landing to the same branch. */
-  | 'waiting'
-  /** Entitled to land, but no landing has been asked for yet. */
-  | 'pending';
+  | 'waiting';
 
 /** What a landing does when its turn comes. */
 export type LandingModeKind = 'land' | 'resolve_conflicts';

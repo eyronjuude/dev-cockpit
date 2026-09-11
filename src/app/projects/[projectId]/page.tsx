@@ -8,7 +8,7 @@ import { landingQueueCounts } from '@/services/landing-queue';
 import { getProject, recentRunSummaries } from '@/services/projects';
 import type { RunStatus } from '@/domain/types';
 
-const NO_LANDINGS = { live: 0, pending: 0, total: 0 };
+const NO_LANDINGS = { live: 0 };
 
 export const dynamic = 'force-dynamic';
 
@@ -46,11 +46,7 @@ export default async function ProjectPage({
         <div className="flex shrink-0 items-center gap-1.5">
           <Link href={`/projects/${project.id}/landing-queue`} className="btn">
             Landing queue
-            {landing.total > 0 ? (
-              <span className={`badge ${landing.live > 0 ? 'badge-running' : 'badge-idle'}`}>
-                {landing.total}
-              </span>
-            ) : null}
+            {landing.live > 0 ? <span className="badge badge-running">{landing.live}</span> : null}
           </Link>
           <Link href={`/projects/${project.id}/new-task`} className="btn btn-primary">
             New task

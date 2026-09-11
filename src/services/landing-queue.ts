@@ -1,27 +1,23 @@
 import 'server-only';
 
-import { asc, eq, inArray } from 'drizzle-orm';
+import { inArray } from 'drizzle-orm';
 
 import { getDb } from '@/db/client';
 import { runs } from '@/db/schema';
-import {
-  landingTargetBranch,
-  type LandingModeKind,
-  type LandingQueueState,
-} from '@/domain/landing';
-import { isLandableStatus, type Disposition, type RunStatus } from '@/domain/types';
-import { landingQueueSnapshot } from '@/orchestrator/orchestrator';
+import type { LandingModeKind, LandingQueueState } from '@/domain/landing';
+import type { RunStatus } from '@/domain/types';
+import { landingQueueSnapshot, type LandingQueueEntry } from '@/orchestrator/orchestrator';
 import type { ProjectView } from '@/services/projects';
 
 /**
- * What a project still owes its target branches.
+ * Who is landing right now, and who is behind them.
  *
- * The orchestrator's queue answers only "who is landing right now, and who is
- * behind them", which is empty except during the seconds two landings contend.
- * On its own that is not something anyone can keep track of. What is worth
- * seeing is every run entitled to land and not yet landed — the approved ones
- * nobody has pressed Land on, and the ones whose landing stopped on a conflict
- * — with the live queue sitting on top of it in execution order.
+ * This mirrors the orchestrator's in-memory queue exactly: a run appears here
+ * only once its landing has actually been asked for — "Land on {branch}",
+ * "Resolve conflicts with AI", or a Retry that resumes a stopped landing.
+ * Nothing shows up here just because it is entitled to land; that entitlement
+ * is what makes the Land button available on the run itself, not what fills
+ * this list.
  */
 
 export interface LandingQueueRun {
@@ -33,16 +29,10 @@ export interface LandingQueueRun {
   /** The branch this run's landing merges into. */
   targetBranch: string;
   state: LandingQueueState;
-  /** Place in the live queue; null for a run that has not asked to land. */
-  position: number | null;
+  /** 0 for the run currently landing, then 1 upwards for those behind it. */
+  position: number;
   /** What the queued landing will do when its turn comes. */
-  mode: LandingModeKind | null;
-  /**
-   * True when a previous attempt left a landing worktree behind, so pressing
-   * Land resumes rather than starts. `MERGE_CONFLICT` and `LANDING_FAILED`
-   * both hold one.
-   */
-  stopped: boolean;
+  mode: LandingModeKind;
   createdAt: string;
   updatedAt: string;
 }
@@ -59,8 +49,6 @@ export interface LandingQueueView {
   branches: LandingQueueBranch[];
   /** Landing right now, plus everything queued behind it. Drives polling. */
   liveCount: number;
-  /** Entitled to land, no landing asked for yet. */
-  pendingCount: number;
 }
 
 interface QueueRow {
@@ -68,84 +56,66 @@ interface QueueRow {
   projectId: string;
   title: string;
   status: string;
-  disposition: string | null;
   branch: string | null;
-  baseBranch: string | null;
   createdAt: string;
   updatedAt: string;
 }
-
-/** Statuses that kept a landing worktree from an attempt that stopped. */
-const STOPPED_STATUSES: readonly RunStatus[] = ['MERGE_CONFLICT', 'LANDING_FAILED'];
 
 const QUEUE_COLUMNS = {
   id: runs.id,
   projectId: runs.projectId,
   title: runs.title,
   status: runs.status,
-  disposition: runs.disposition,
   branch: runs.branch,
-  baseBranch: runs.baseBranch,
   createdAt: runs.createdAt,
   updatedAt: runs.updatedAt,
 } as const;
 
-const isLandable = (row: QueueRow): boolean =>
-  isLandableStatus(row.status as RunStatus, row.disposition as Disposition | null);
-
 /**
- * Every run this project still owes a landing, live queue first.
+ * Every run actually queued to land for this project, live queue order.
  *
- * Live entries are resolved back through the database and any run belonging to
- * another project is dropped. The queue is keyed by repository path rather than
- * by project id, and nothing stops a second project being registered against a
- * repository an archived one already holds, so "same repository" is not a safe
- * proxy for "same project".
+ * The queue is keyed by repository path rather than by project id, and
+ * nothing stops a second project being registered against a repository an
+ * archived one already holds, so entries are resolved back through the
+ * database and any run belonging to another project is dropped.
  */
 export function projectLandingQueue(project: ProjectView): LandingQueueView {
-  const db = getDb();
-
-  const landable: QueueRow[] = db
-    .select(QUEUE_COLUMNS)
-    .from(runs)
-    .where(eq(runs.projectId, project.id))
-    .orderBy(asc(runs.createdAt))
-    .all()
-    .filter(isLandable);
-
   const live = landingQueueSnapshot(project.repositoryPath);
 
-  // A run that is landing has already left APPROVED for LANDING, so it is not
-  // in the landable set above and has to be fetched by id.
-  const known = new Set(landable.map((row) => row.id));
-  const missingIds = live.map((entry) => entry.runId).filter((id) => !known.has(id));
-  const extra: QueueRow[] =
-    missingIds.length === 0
+  const rows: QueueRow[] =
+    live.length === 0
       ? []
-      : db.select(QUEUE_COLUMNS).from(runs).where(inArray(runs.id, missingIds)).all();
+      : getDb()
+          .select(QUEUE_COLUMNS)
+          .from(runs)
+          .where(
+            inArray(
+              runs.id,
+              live.map((entry) => entry.runId),
+            ),
+          )
+          .all();
 
-  const rows = new Map(
-    [...landable, ...extra]
-      .filter((row) => row.projectId === project.id)
-      .map((row) => [row.id, row] as const),
-  );
-
-  const liveByRun = new Map(
-    live.filter((entry) => rows.has(entry.runId)).map((entry) => [entry.runId, entry] as const),
+  const rowById = new Map(
+    rows.filter((row) => row.projectId === project.id).map((row) => [row.id, row] as const),
   );
 
   const byBranch = new Map<string, LandingQueueRun[]>();
-  for (const row of rows.values()) {
-    const entry = toQueueRun(row, liveByRun.get(row.id), project.defaultBranch);
+  let liveCount = 0;
+  for (const entry of live) {
+    const row = rowById.get(entry.runId);
+    if (!row) continue;
+    liveCount += 1;
+    const queueRun = toQueueRun(row, entry);
     const bucket = byBranch.get(entry.targetBranch);
-    if (bucket) bucket.push(entry);
-    else byBranch.set(entry.targetBranch, [entry]);
+    if (bucket) bucket.push(queueRun);
+    else byBranch.set(entry.targetBranch, [queueRun]);
   }
 
   const branches = [...byBranch.entries()]
     .map(([targetBranch, entries]) => ({
       targetBranch,
-      entries: entries.sort(compareEntries),
+      entries: entries.sort((a, b) => a.position - b.position),
     }))
     // The default branch first — it is where most landings go — then the rest
     // alphabetically, so the order does not shuffle between polls.
@@ -160,50 +130,27 @@ export function projectLandingQueue(project: ProjectView): LandingQueueView {
     projectId: project.id,
     defaultBranch: project.defaultBranch,
     branches,
-    liveCount: liveByRun.size,
-    pendingCount: rows.size - liveByRun.size,
+    liveCount,
   };
 }
 
-function toQueueRun(
-  row: QueueRow,
-  entry: { targetBranch: string; state: LandingQueueState; position: number; mode: LandingModeKind } | undefined,
-  defaultBranch: string,
-): LandingQueueRun {
-  const status = row.status as RunStatus;
+function toQueueRun(row: QueueRow, entry: LandingQueueEntry): LandingQueueRun {
   return {
     id: row.id,
     title: row.title,
     branch: row.branch,
-    status,
-    targetBranch: entry?.targetBranch ?? landingTargetBranch(row.baseBranch, defaultBranch),
-    state: entry?.state ?? 'pending',
-    position: entry?.position ?? null,
-    mode: entry?.mode ?? null,
-    stopped: STOPPED_STATUSES.includes(status),
+    status: row.status as RunStatus,
+    targetBranch: entry.targetBranch,
+    state: entry.state,
+    position: entry.position,
+    mode: entry.mode,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
 }
 
-/**
- * Queue order first, then oldest request first.
- *
- * Live entries carry a real position, so they sort by it. Everything else has
- * no position because nothing has claimed a turn for it; those fall back to
- * age, which is the order they would land in if you worked through them.
- */
-function compareEntries(a: LandingQueueRun, b: LandingQueueRun): number {
-  if (a.position !== null && b.position !== null) return a.position - b.position;
-  if (a.position !== null) return -1;
-  if (b.position !== null) return 1;
-  return a.createdAt.localeCompare(b.createdAt);
-}
-
 export interface LandingQueueCount {
   live: number;
-  pending: number;
-  total: number;
 }
 
 /**
@@ -220,12 +167,7 @@ export function landingQueueCounts(
 
   const db = getDb();
   const rows = db
-    .select({
-      id: runs.id,
-      projectId: runs.projectId,
-      status: runs.status,
-      disposition: runs.disposition,
-    })
+    .select({ id: runs.id, projectId: runs.projectId })
     .from(runs)
     .where(
       inArray(
@@ -235,25 +177,14 @@ export function landingQueueCounts(
     )
     .all();
 
-  const landableByProject = new Map<string, Set<string>>();
-  const runProject = new Map<string, string>();
-  for (const row of rows) {
-    runProject.set(row.id, row.projectId);
-    if (!isLandableStatus(row.status as RunStatus, row.disposition as Disposition | null)) continue;
-    const bucket = landableByProject.get(row.projectId);
-    if (bucket) bucket.add(row.id);
-    else landableByProject.set(row.projectId, new Set([row.id]));
-  }
+  const runProject = new Map(rows.map((row) => [row.id, row.projectId] as const));
 
   for (const project of projects) {
-    const pendingIds = new Set(landableByProject.get(project.id) ?? []);
     let live = 0;
     for (const entry of landingQueueSnapshot(project.repositoryPath)) {
-      if (runProject.get(entry.runId) !== project.id) continue;
-      live += 1;
-      pendingIds.delete(entry.runId);
+      if (runProject.get(entry.runId) === project.id) live += 1;
     }
-    counts.set(project.id, { live, pending: pendingIds.size, total: live + pendingIds.size });
+    counts.set(project.id, { live });
   }
 
   return counts;
