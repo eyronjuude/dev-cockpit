@@ -1254,10 +1254,14 @@ function assessReadOnlyReadiness(run: RunView, mode: ResolvedWorkMode): Readines
   }
 
   if (run.changedFiles.length > 0) {
+    // Not necessarily this iteration's doing — a run that was Build before
+    // switching here can carry changes from that earlier pass. Worded
+    // without attributing them to the mode in effect now, which may not be
+    // the one that made them.
     reasons.push(
-      `${WORK_MODE_LABELS[mode]} mode changed ${run.changedFiles.length} file${
+      `This run has ${run.changedFiles.length} changed file${
         run.changedFiles.length === 1 ? '' : 's'
-      }, and it should have changed none`,
+      }, and ${WORK_MODE_LABELS[mode]} mode should leave them alone`,
     );
   }
 
