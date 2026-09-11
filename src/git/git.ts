@@ -140,6 +140,28 @@ export async function isDirty(dir: string): Promise<boolean> {
   return res.stdout.trim().length > 0;
 }
 
+export interface GitIdentity {
+  name: string;
+  email: string;
+}
+
+/**
+ * The identity `git commit` would resolve on its own in this directory, or
+ * null when neither `user.name` nor `user.email` is set anywhere.
+ *
+ * `git config --get` (no `--local`/`--global` flag) walks the same
+ * resolution order — system, global, local, any `includeIf` — that a plain
+ * `git commit` in this directory would use, so a caller that only commits
+ * when this returns non-null never diverges from what git itself would do.
+ */
+export async function localGitIdentity(dir: string): Promise<GitIdentity | null> {
+  const name = await git(dir, ['config', '--get', 'user.name'], { allowFailure: true });
+  const email = await git(dir, ['config', '--get', 'user.email'], { allowFailure: true });
+  const trimmedName = name.stdout.trim();
+  const trimmedEmail = email.stdout.trim();
+  return trimmedName && trimmedEmail ? { name: trimmedName, email: trimmedEmail } : null;
+}
+
 /**
  * Default branch guess: the configured HEAD of origin, else the first of
  * main/master that exists, else the current branch.

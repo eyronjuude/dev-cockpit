@@ -64,6 +64,13 @@
       "when": 1789090348713,
       "tag": "0008_foamy_overlord",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1789096180820,
+      "tag": "0009_curved_jigsaw",
+      "breakpoints": true
     }
   ]
 }

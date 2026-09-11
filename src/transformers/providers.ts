@@ -6,13 +6,17 @@ import { claudeQuery } from '@/agents/claude-query';
 import { checkCodexAvailable, codexQuery } from '@/agents/codex-query';
 import { ClaudeCodeAgent } from '@/agents/claude-code';
 import {
+  COMMIT_MESSAGE_SYSTEM_PROMPT,
   SPEC_JSON_SCHEMA,
   SPEC_SYSTEM_PROMPT,
   SUMMARY_SYSTEM_PROMPT,
+  commitMessageUserPrompt,
   specUserPrompt,
   summaryUserPrompt,
 } from './prompts';
 import type {
+  CommitMessageInput,
+  CommitMessageResult,
   ProviderAvailability,
   SummariseInput,
   SummariseResult,
@@ -128,6 +132,27 @@ export class ClaudeCliTransformer implements TransformerProvider {
       costUsd: result.costUsd,
     };
   }
+
+  async formatCommitMessage(input: CommitMessageInput): Promise<CommitMessageResult> {
+    const result = await claudeQuery({
+      prompt: commitMessageUserPrompt(input),
+      systemPrompt: COMMIT_MESSAGE_SYSTEM_PROMPT,
+      model: this.model,
+      effort: 'low',
+      timeoutMs: 60_000,
+      signal: input.signal,
+    });
+
+    if (!result.ok || !result.text) {
+      throw new Error(result.error ?? 'Commit-message query failed');
+    }
+
+    return {
+      subject: result.text.trim().split('\n')[0] ?? '',
+      provider: this.id,
+      durationMs: result.durationMs ?? 0,
+    };
+  }
 }
 
 /* ------------------------------------------------------------------ *
@@ -223,6 +248,28 @@ export class AnthropicApiTransformer implements TransformerProvider {
       durationMs: Date.now() - start,
     };
   }
+
+  async formatCommitMessage(input: CommitMessageInput): Promise<CommitMessageResult> {
+    if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY is not set');
+    const start = Date.now();
+    const client = await this.client();
+
+    const response = await client.messages.create(
+      {
+        model: this.model,
+        max_tokens: 200,
+        system: COMMIT_MESSAGE_SYSTEM_PROMPT,
+        output_config: { effort: 'low' },
+        messages: [{ role: 'user', content: commitMessageUserPrompt(input) }],
+      } as never,
+      input.signal ? { signal: input.signal } : undefined,
+    );
+
+    const subject = extractText(response).trim().split('\n')[0] ?? '';
+    if (!subject) throw new Error('Anthropic API returned an empty commit subject');
+
+    return { subject, provider: this.id, durationMs: Date.now() - start };
+  }
 }
 
 function extractText(response: unknown): string {
@@ -310,6 +357,27 @@ export class CodexCliTransformer implements TransformerProvider {
     }
 
     return { summary: result.text.trim(), provider: this.id, durationMs: result.durationMs ?? 0 };
+  }
+
+  async formatCommitMessage(input: CommitMessageInput): Promise<CommitMessageResult> {
+    const result = await codexQuery({
+      prompt: commitMessageUserPrompt(input),
+      instructions: COMMIT_MESSAGE_SYSTEM_PROMPT,
+      model: this.model,
+      effort: 'low',
+      timeoutMs: 60_000,
+      signal: input.signal,
+    });
+
+    if (!result.ok || !result.text) {
+      throw new Error(result.error ?? 'Codex commit-message query failed');
+    }
+
+    return {
+      subject: result.text.trim().split('\n')[0] ?? '',
+      provider: this.id,
+      durationMs: result.durationMs ?? 0,
+    };
   }
 }
 
@@ -404,5 +472,25 @@ export class OpenAiTransformer implements TransformerProvider {
     if (!summary) throw new Error('OpenAI returned an empty summary');
 
     return { summary, provider: this.id, durationMs: Date.now() - start };
+  }
+
+  async formatCommitMessage(input: CommitMessageInput): Promise<CommitMessageResult> {
+    if (!process.env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY is not set');
+    const start = Date.now();
+    const client = await this.client();
+
+    const response = await client.responses.create(
+      {
+        model: this.model,
+        instructions: COMMIT_MESSAGE_SYSTEM_PROMPT,
+        input: commitMessageUserPrompt(input),
+      },
+      input.signal ? { signal: input.signal } : undefined,
+    );
+
+    const subject = response.output_text.trim().split('\n')[0] ?? '';
+    if (!subject) throw new Error('OpenAI returned an empty commit subject');
+
+    return { subject, provider: this.id, durationMs: Date.now() - start };
   }
 }

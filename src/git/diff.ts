@@ -1,7 +1,7 @@
 import 'server-only';
 
 import type { ChangeType } from '@/domain/types';
-import { git } from './git';
+import { git, type GitIdentity } from './git';
 
 export interface FileChange {
   path: string;
@@ -215,23 +215,22 @@ function devNull(): string {
  * Commits everything in the worktree onto the run branch. Only ever called
  * from the explicit approval action, and never touches a protected branch:
  * the run branch is created by the worktree module and is per-run.
+ *
+ * `author: null` means "don't override" — the commit uses whatever identity
+ * git itself resolves from config in this directory. A non-null author is
+ * forced onto the commit via `-c`, which today only happens as a fallback
+ * when nothing is configured at all.
  */
 export async function commitAll(
   worktree: string,
   message: string,
-  author: { name: string; email: string },
+  author: GitIdentity | null,
 ): Promise<string> {
   await git(worktree, ['add', '--all']);
-  await git(worktree, [
-    '-c',
-    `user.name=${author.name}`,
-    '-c',
-    `user.email=${author.email}`,
-    'commit',
-    '--no-verify',
-    '-m',
-    message,
-  ]);
+  const identityArgs = author
+    ? ['-c', `user.name=${author.name}`, '-c', `user.email=${author.email}`]
+    : [];
+  await git(worktree, [...identityArgs, 'commit', '--no-verify', '-m', message]);
   const res = await git(worktree, ['rev-parse', 'HEAD']);
   return res.stdout.trim();
 }

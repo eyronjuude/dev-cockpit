@@ -100,6 +100,8 @@ export const EVENT_TYPES = [
   'run.cancelled',
   'run.commit_created',
   'run.worktree_missing',
+  'run.commit_subject_lint_failed',
+  'run.commit_subject_ai_failed',
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
