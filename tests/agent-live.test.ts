@@ -62,7 +62,7 @@ describe('ClaudeCodeAgent availability', () => {
     }
   });
 
-  it('reports a missing binary as unavailable rather than crashing', async () => {
+  it('reports a missing binary as unavailable with actionable guidance', async () => {
     const original = process.env.DEV_COCKPIT_CLAUDE_BIN;
     process.env.DEV_COCKPIT_CLAUDE_BIN = 'claude-does-not-exist-zzz';
     try {
@@ -71,11 +71,59 @@ describe('ClaudeCodeAgent availability', () => {
       expect(availability.available).toBe(false);
       expect(availability.version).toBeNull();
       expect(availability.detail).toContain('claude-does-not-exist-zzz');
+      // A genuinely-missing CLI should tell the user how to fix it, not just
+      // echo the raw Node spawn error.
+      expect(availability.detail).toContain('Could not find');
+      expect(availability.detail).toContain('Install it');
     } finally {
       if (original === undefined) delete process.env.DEV_COCKPIT_CLAUDE_BIN;
       else process.env.DEV_COCKPIT_CLAUDE_BIN = original;
     }
   });
+
+  // Windows-only: builds a `.cmd` stand-in for the CLI that fails once and
+  // then succeeds, the same shape as the reported intermittent bug (a file
+  // that was transiently unspawnable). Proves the retry is wired into the
+  // real checkAvailability path, not just the helper in isolation.
+  it.runIf(process.platform === 'win32')(
+    'recovers when the CLI fails once and then succeeds',
+    async () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cockpit-retry-'));
+      const scriptPath = path.join(tmpDir, 'flaky-claude.cmd');
+      const counterPath = path.join(tmpDir, 'attempts.txt');
+      fs.writeFileSync(
+        scriptPath,
+        [
+          '@echo off',
+          'set /a n=0',
+          `if exist "${counterPath}" set /p n=<"${counterPath}"`,
+          'set /a n+=1',
+          `>"${counterPath}" echo %n%`,
+          'if %n% GEQ 2 goto ok',
+          'echo simulated transient failure 1>&2',
+          'exit /b 1',
+          ':ok',
+          'echo 9.9.9-test',
+          'exit /b 0',
+        ].join('\r\n'),
+      );
+
+      const original = process.env.DEV_COCKPIT_CLAUDE_BIN;
+      process.env.DEV_COCKPIT_CLAUDE_BIN = scriptPath;
+      try {
+        const agent = new agentModule.ClaudeCodeAgent();
+        const availability = await agent.checkAvailability();
+        expect(availability.available).toBe(true);
+        expect(availability.version).toBe('9.9.9-test');
+        // Two attempts were made: the first failed, the retry recovered.
+        expect(fs.readFileSync(counterPath, 'utf8').trim()).toBe('2');
+      } finally {
+        if (original === undefined) delete process.env.DEV_COCKPIT_CLAUDE_BIN;
+        else process.env.DEV_COCKPIT_CLAUDE_BIN = original;
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it('reports no running process for an unknown iteration', () => {
     const agent = new agentModule.ClaudeCodeAgent();

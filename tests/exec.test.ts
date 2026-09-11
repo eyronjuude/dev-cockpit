@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { planSpawn, quoteWindowsArg, resolveExecutable } from '@/process/exec';
+import {
+  describeUnavailable,
+  planSpawn,
+  quoteWindowsArg,
+  resolveExecutable,
+  withRetries,
+} from '@/process/exec';
 
 describe('quoteWindowsArg', () => {
   it('leaves a simple argument alone', () => {
@@ -150,5 +156,67 @@ describe('planSpawn', () => {
       windowsHide: true,
     });
     expect(stdout).toBe(tricky);
+  });
+});
+
+describe('withRetries', () => {
+  it('returns the first success without waiting for a retry', async () => {
+    let calls = 0;
+    const result = await withRetries(async () => {
+      calls += 1;
+      return 'ok';
+    });
+    expect(result).toBe('ok');
+    expect(calls).toBe(1);
+  });
+
+  it('recovers when an earlier attempt fails but a later one succeeds', async () => {
+    // This is the exact shape of the intermittent bug: a transient failure
+    // (a file that briefly wasn't there) followed by a successful attempt.
+    let calls = 0;
+    const result = await withRetries(
+      async () => {
+        calls += 1;
+        if (calls === 1) throw new Error('transient ENOENT');
+        return 'ok';
+      },
+      { delayMs: 1 },
+    );
+    expect(result).toBe('ok');
+    expect(calls).toBe(2);
+  });
+
+  it('throws the last error once every attempt fails', async () => {
+    let calls = 0;
+    await expect(
+      withRetries(
+        async () => {
+          calls += 1;
+          throw new Error(`fail ${calls}`);
+        },
+        { attempts: 3, delayMs: 1 },
+      ),
+    ).rejects.toThrow('fail 3');
+    expect(calls).toBe(3);
+  });
+});
+
+describe('describeUnavailable', () => {
+  it('offers install guidance when nothing is found on PATH', () => {
+    const message = describeUnavailable(
+      'definitely-not-installed-zzz',
+      new Error('spawn definitely-not-installed-zzz ENOENT'),
+      'npm install -g some-package',
+    );
+    expect(message).toContain('Could not find "definitely-not-installed-zzz" on PATH');
+    expect(message).toContain('npm install -g some-package');
+  });
+
+  it('suggests a retry when a resolvable executable failed to run', () => {
+    // node exists on every machine that can run this test, so this exercises
+    // the "found but could not run it" branch rather than the "not found" one.
+    const message = describeUnavailable('node', new Error('boom'), 'irrelevant here');
+    expect(message).toContain('but could not run it: boom');
+    expect(message).toContain('try again');
   });
 });

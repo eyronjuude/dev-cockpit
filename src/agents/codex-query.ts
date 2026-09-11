@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { redactText } from '@/core/redact';
-import { planSpawn, resolveExecutable } from '@/process/exec';
+import { describeUnavailable, planSpawn, resolveExecutable, withRetries } from '@/process/exec';
 import { killTree } from '@/process/spawn';
 
 /**
@@ -71,49 +71,49 @@ export interface CodexAvailability {
   version: string | null;
 }
 
+async function attemptCodexVersion(bin: string): Promise<string> {
+  // Recomputed on every attempt, not just once: if what changed between a
+  // failure and a retry is the resolved path itself (an update rewriting the
+  // binary mid-check), re-resolving is what lets the retry actually recover.
+  const plan = planSpawn(bin, ['--version']);
+  const child = spawn(plan.file, plan.args, {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
+    windowsVerbatimArguments: plan.windowsVerbatimArguments,
+  });
+
+  const out: string[] = [];
+  child.stdout?.setEncoding('utf8');
+  child.stdout?.on('data', (c: string) => out.push(c));
+  child.stderr?.setEncoding('utf8');
+  child.stderr?.on('data', (c: string) => out.push(c));
+
+  const timer = setTimeout(() => killTree(child, 'SIGKILL'), 20_000);
+  let spawnError: string | null = null;
+  child.on('error', (err) => {
+    spawnError ??= err.message;
+  });
+
+  const [code] = (await once(child, 'close')) as [number | null];
+  clearTimeout(timer);
+
+  if (spawnError || code !== 0) {
+    throw new Error(spawnError ?? `exit ${code}`);
+  }
+  return out.join('').trim().split('\n')[0] ?? '';
+}
+
 export async function checkCodexAvailable(): Promise<CodexAvailability> {
   const bin = codexBinary();
-  const plan = planSpawn(bin, ['--version']);
 
   try {
-    const child = spawn(plan.file, plan.args, {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      windowsHide: true,
-      windowsVerbatimArguments: plan.windowsVerbatimArguments,
-    });
-
-    const out: string[] = [];
-    child.stdout?.setEncoding('utf8');
-    child.stdout?.on('data', (c: string) => out.push(c));
-    child.stderr?.setEncoding('utf8');
-    child.stderr?.on('data', (c: string) => out.push(c));
-
-    const timer = setTimeout(() => killTree(child, 'SIGKILL'), 20_000);
-    let spawnError: string | null = null;
-    child.on('error', (err) => {
-      spawnError ??= err.message;
-    });
-
-    const [code] = (await once(child, 'close')) as [number | null];
-    clearTimeout(timer);
-
-    if (spawnError || code !== 0) {
-      return {
-        available: false,
-        detail: `Could not run "${bin} --version": ${spawnError ?? `exit ${code}`}`,
-        version: null,
-      };
-    }
-
-    const version = out.join('').trim().split('\n')[0] ?? '';
+    const version = await withRetries(() => attemptCodexVersion(bin));
     const resolved = resolveExecutable(bin).resolvedPath ?? bin;
     return { available: true, detail: `${resolved} — ${version}`, version: version || null };
   } catch (err) {
     return {
       available: false,
-      detail: `Could not run "${bin} --version": ${
-        err instanceof Error ? err.message : String(err)
-      }`,
+      detail: describeUnavailable(bin, err, 'npm install -g @openai/codex'),
       version: null,
     };
   }

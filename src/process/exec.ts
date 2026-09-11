@@ -182,6 +182,44 @@ export function quoteWindowsArg(arg: string): string {
   return quoted;
 }
 
+/**
+ * Retries a transient failure a couple of times before giving up.
+ *
+ * `resolveExecutable` confirms a file exists and then a separate process
+ * spawns it; between those two steps the file can genuinely be gone (a CLI
+ * self-update rewriting it, an antivirus scan locking it). That window is
+ * short, so a couple of quick retries recovers from it without materially
+ * slowing down the case where nothing is actually wrong.
+ */
+export async function withRetries<T>(
+  attempt: () => Promise<T>,
+  { attempts = 2, delayMs = 400 }: { attempts?: number; delayMs?: number } = {},
+): Promise<T> {
+  let lastError: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await attempt();
+    } catch (err) {
+      lastError = err;
+      if (i < attempts - 1) await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+  throw lastError;
+}
+
+/**
+ * Turns a failed version-check into a message the user can act on, instead
+ * of a bare Node error. Distinguishes "never found on PATH" (install it)
+ * from "found but could not run it" (may be a transient one-off).
+ */
+export function describeUnavailable(bin: string, err: unknown, installHint: string): string {
+  const message = err instanceof Error ? err.message : String(err);
+  const resolvedPath = resolveExecutable(bin).resolvedPath;
+  return resolvedPath === null
+    ? `Could not find "${bin}" on PATH. Install it (${installHint}) or point its env override at the full path. (${message})`
+    : `Found "${resolvedPath}" but could not run it: ${message}. If this was a one-off, it may have been mid-update — try again.`;
+}
+
 export interface SpawnPlan {
   file: string;
   args: string[];
