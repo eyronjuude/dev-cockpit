@@ -9,6 +9,27 @@
  * is correct" — that judgement belongs to the validation engine and the user.
  */
 
+/**
+ * Token usage for one agent iteration, as the provider reported it.
+ *
+ * Recorded because cost alone cannot explain itself. An iteration that spent
+ * most of its money re-reading its own transcript and one that spent it
+ * thinking look identical on a dollar figure and want opposite fixes.
+ *
+ * Every field is nullable: a provider that does not report usage records
+ * nothing rather than a misleading zero.
+ */
+export interface TokenUsage {
+  /** Uncached input. Small in an agent loop; the prompt is cached after turn one. */
+  inputTokens: number | null;
+  outputTokens: number | null;
+  /** Part of `outputTokens`, not additional to it. */
+  thinkingTokens: number | null;
+  /** The transcript re-sent on every turn. Usually the largest number here. */
+  cacheReadTokens: number | null;
+  cacheCreationTokens: number | null;
+}
+
 export interface AgentStartInput {
   runId: string;
   iterationId: string;
@@ -52,6 +73,7 @@ export type AgentStreamEvent =
       numTurns: number | null;
       durationMs: number | null;
       costUsd: number | null;
+      usage: TokenUsage | null;
       errorMessage: string | null;
       /** Tool names the provider refused, e.g. Bash under a restrictive mode. */
       deniedTools: string[];
@@ -66,6 +88,8 @@ export interface AgentOutcome {
   numTurns: number | null;
   durationMs: number | null;
   costUsd: number | null;
+  /** Token counts behind `costUsd`, when the provider reported them. */
+  usage: TokenUsage | null;
   errorMessage: string | null;
   cancelled: boolean;
   timedOut: boolean;

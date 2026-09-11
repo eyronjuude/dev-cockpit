@@ -1,4 +1,4 @@
-import type { AgentStreamEvent } from './types';
+import type { AgentStreamEvent, TokenUsage } from './types';
 
 /**
  * Parser for Claude Code's `--output-format stream-json` protocol.
@@ -19,6 +19,27 @@ interface WireUsage {
   output_tokens?: number;
   cache_read_input_tokens?: number;
   cache_creation_input_tokens?: number;
+  /** Thinking is a subset of `output_tokens`, reported separately since 2.1. */
+  output_tokens_details?: { thinking_tokens?: number };
+}
+
+/**
+ * Normalises the wire usage block, or returns null when nothing usable is on it.
+ *
+ * Null rather than a zeroed record: "the provider did not say" and "the run
+ * used no tokens" are different facts, and only one of them is ever true here.
+ */
+function toTokenUsage(usage: WireUsage | undefined): TokenUsage | null {
+  if (!usage) return null;
+  const num = (value: unknown): number | null => (typeof value === 'number' ? value : null);
+  const normalised: TokenUsage = {
+    inputTokens: num(usage.input_tokens),
+    outputTokens: num(usage.output_tokens),
+    thinkingTokens: num(usage.output_tokens_details?.thinking_tokens),
+    cacheReadTokens: num(usage.cache_read_input_tokens),
+    cacheCreationTokens: num(usage.cache_creation_input_tokens),
+  };
+  return Object.values(normalised).some((v) => v !== null) ? normalised : null;
 }
 
 interface WireTextBlock {
@@ -97,6 +118,7 @@ interface WireResultMessage {
   api_error_status?: string | null;
   terminal_reason?: string;
   permission_denials?: unknown[];
+  usage?: WireUsage;
 }
 
 type WireMessage =
@@ -306,6 +328,7 @@ export function parseStreamMessage(raw: unknown): ParsedLine {
         numTurns: typeof result.num_turns === 'number' ? result.num_turns : null,
         durationMs: typeof result.duration_ms === 'number' ? result.duration_ms : null,
         costUsd: typeof result.total_cost_usd === 'number' ? result.total_cost_usd : null,
+        usage: toTokenUsage(result.usage),
         errorMessage: failed
           ? (apiError ?? result.terminal_reason ?? result.subtype ?? 'agent reported an error')
           : null,

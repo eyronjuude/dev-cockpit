@@ -87,6 +87,7 @@ function outcome(overrides: Partial<AgentOutcome> = {}): AgentOutcome {
     numTurns: 1,
     durationMs: 5,
     costUsd: 0.25,
+    usage: null,
     errorMessage: null,
     cancelled: false,
     timedOut: false,

@@ -51,6 +51,15 @@ function seedDatabaseThatSkippedRunExpiryMigration(dbFile: string): void {
         id integer PRIMARY KEY,
         run_id text NOT NULL
       );
+
+      -- Present since 0000, so a database that reached 0004 has it. Seeded
+      -- because later additive migrations target it, and a fixture missing a
+      -- table that has always existed tests a state no real database is in.
+      CREATE TABLE "iterations" (
+        id text PRIMARY KEY,
+        run_id text NOT NULL,
+        ordinal integer NOT NULL
+      );
     `);
   } finally {
     sqlite.close();
@@ -74,6 +83,7 @@ describe('database client startup repair', () => {
 
     expect(columns(dbFile, 'projects')).toContain('worktree_retention_days');
     expect(columns(dbFile, 'artifacts')).toContain('expired_at');
+    expect(columns(dbFile, 'iterations')).toContain('cache_read_tokens');
 
     closeDb?.();
     closeDb = null;

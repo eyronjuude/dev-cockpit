@@ -162,6 +162,50 @@ describe('parseStreamMessage', () => {
     expect(event.errorMessage).toBeNull();
   });
 
+  it('reads the token split off the result message', () => {
+    const { events } = parseStreamMessage({
+      ...RESULT_SUCCESS,
+      usage: {
+        input_tokens: 302,
+        output_tokens: 150_080,
+        cache_read_input_tokens: 40_589_472,
+        cache_creation_input_tokens: 372_404,
+        output_tokens_details: { thinking_tokens: 49_572 },
+      },
+    });
+    const event = events[0] as Extract<AgentStreamEvent, { kind: 'result' }>;
+    expect(event.usage).toEqual({
+      inputTokens: 302,
+      outputTokens: 150_080,
+      thinkingTokens: 49_572,
+      cacheReadTokens: 40_589_472,
+      cacheCreationTokens: 372_404,
+    });
+  });
+
+  it('reports no usage rather than zeroes when the result omits it', () => {
+    // Older CLI builds and Codex report nothing. Zeroes would claim the
+    // iteration used no tokens, which is never true.
+    const { events } = parseStreamMessage(RESULT_SUCCESS);
+    const event = events[0] as Extract<AgentStreamEvent, { kind: 'result' }>;
+    expect(event.usage).toBeNull();
+  });
+
+  it('keeps the fields a partial usage block does report', () => {
+    const { events } = parseStreamMessage({
+      ...RESULT_SUCCESS,
+      usage: { output_tokens: 12 },
+    });
+    const event = events[0] as Extract<AgentStreamEvent, { kind: 'result' }>;
+    expect(event.usage).toEqual({
+      inputTokens: null,
+      outputTokens: 12,
+      thinkingTokens: null,
+      cacheReadTokens: null,
+      cacheCreationTokens: null,
+    });
+  });
+
   it('reports an error result as not ok, with the api error status', () => {
     const { events } = parseStreamMessage({
       ...RESULT_SUCCESS,

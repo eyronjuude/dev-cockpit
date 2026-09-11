@@ -225,6 +225,36 @@ export const iterations = sqliteTable(
     exitCode: integer('exit_code'),
     numTurns: integer('num_turns'),
     costUsd: real('cost_usd'),
+
+    /**
+     * The settings actually in force for this iteration.
+     *
+     * Recorded rather than looked up, because both sources move. `profiles.ts`
+     * holds the effort for a profile name, so editing it silently re-labels
+     * every past run; and `runs.agent_model` is written back from the session's
+     * init message, which is what the provider chose rather than what was
+     * asked for. Attributing a cost change to a settings change needs the
+     * settings as they were.
+     */
+    model: text('model'),
+    effort: text('effort'),
+    permissionMode: text('permission_mode'),
+
+    /**
+     * Token counts behind `cost_usd`, as the provider reported them.
+     *
+     * Null where the provider does not report them (Codex) — distinct from
+     * zero, which would claim the iteration used none. Held on the row rather
+     * than left in the raw stream artifact because artifacts expire and the
+     * question "did that change help" outlives them.
+     */
+    inputTokens: integer('input_tokens'),
+    outputTokens: integer('output_tokens'),
+    /** A subset of `output_tokens`, not additional to it. */
+    thinkingTokens: integer('thinking_tokens'),
+    cacheReadTokens: integer('cache_read_tokens'),
+    cacheCreationTokens: integer('cache_creation_tokens'),
+
     /** The agent's own closing message, verbatim. Never rewritten. */
     finalText: text('final_text'),
     /**

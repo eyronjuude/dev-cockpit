@@ -32,6 +32,14 @@ export interface TransformRequestResult {
   title: string | null;
   provider: string;
   durationMs: number;
+  /**
+   * What the call cost, where the provider reports it.
+   *
+   * Optional because most do not: a Codex or OpenAI call bills elsewhere and
+   * returns nothing to add up. Null and absent both mean "unknown", which is
+   * the honest answer and different from zero.
+   */
+  costUsd?: number | null;
 }
 
 export interface SummariseInput {
@@ -48,6 +56,8 @@ export interface SummariseResult {
   summary: string;
   provider: string;
   durationMs: number;
+  /** As on `TransformRequestResult`: reported where the provider knows it. */
+  costUsd?: number | null;
 }
 
 export interface ProviderAvailability {

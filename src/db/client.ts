@@ -70,22 +70,54 @@ function columnExists(sqlite: Database.Database, table: string, column: string):
 }
 
 /**
+ * A missing table is not a table missing a column.
+ *
+ * `PRAGMA table_info` returns nothing for both, so without this the repair
+ * would try to `ALTER` a table that does not exist yet and take the whole
+ * database open down with it.
+ */
+function tableExists(sqlite: Database.Database, table: string): boolean {
+  const row = sqlite
+    .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`)
+    .get(table);
+  return row !== undefined;
+}
+
+/**
  * Migration 0006 was created with a timestamp older than migrations already
  * present in some local databases. Drizzle compares pending migrations against
  * the latest `created_at`, so those databases can skip the file even though the
  * schema still needs these additive columns.
  */
 function repairSkippedAdditiveMigrations(sqlite: Database.Database): void {
-  if (!columnExists(sqlite, 'artifacts', 'expired_at')) {
+  if (tableExists(sqlite, 'artifacts') && !columnExists(sqlite, 'artifacts', 'expired_at')) {
     sqlite.prepare('ALTER TABLE "artifacts" ADD "expired_at" text').run();
   }
 
-  if (!columnExists(sqlite, 'projects', 'worktree_retention_days')) {
+  if (tableExists(sqlite, 'projects') && !columnExists(sqlite, 'projects', 'worktree_retention_days')) {
     sqlite
       .prepare(
         'ALTER TABLE "projects" ADD "worktree_retention_days" integer DEFAULT 7 NOT NULL',
       )
       .run();
+  }
+
+  // 0007. Additive and nullable throughout, so adding a column that migration
+  // already applied is the only thing this has to avoid.
+  if (!tableExists(sqlite, 'iterations')) return;
+  for (const column of [
+    'model',
+    'effort',
+    'permission_mode',
+    'input_tokens',
+    'output_tokens',
+    'thinking_tokens',
+    'cache_read_tokens',
+    'cache_creation_tokens',
+  ]) {
+    if (columnExists(sqlite, 'iterations', column)) continue;
+    const type = column.endsWith('_tokens') ? 'integer' : 'text';
+    sqlite.prepare(`ALTER TABLE "iterations" ADD "${column}" ${type}`).run();
   }
 }
 

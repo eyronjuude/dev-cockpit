@@ -22,6 +22,11 @@ import {
   runWorktreeDir,
 } from '@/core/paths';
 import {
+  describeRunImpact,
+  settingsChanged,
+  summariseRunImpact,
+} from '@/domain/impact';
+import {
   landingTargetBranch,
   type LandingModeKind,
   type LandingQueueState,
@@ -72,6 +77,7 @@ import { stopRunPreview } from '@/services/previews';
 import { requireProject, type ProjectView } from '@/services/projects';
 import { cleanUpFinishedRunWorktrees, cleanUpRunWorktrees } from '@/services/worktrees';
 import {
+  addRunCost,
   assessReadiness,
   createIteration,
   finishIteration,
@@ -79,6 +85,8 @@ import {
   latestIteration,
   latestValidationAttempt,
   nextReviewAttempt,
+  previousRunProfile,
+  previousRunSettings,
   replaceChangedFiles,
   requireRun,
   resetRunForRestart,
@@ -1392,6 +1400,7 @@ async function phaseTransform(
       specProvider: result.provider,
       ...(result.title ? { title: result.title } : {}),
     });
+    addRunCost(run.id, result.costUsd);
 
     await writeTextArtifact({
       runId: run.id,
@@ -1676,6 +1685,10 @@ async function phaseImplement(
       prompt,
       sessionId: resumeSessionId,
       resumed: resumeSessionId !== null,
+      // The resolved settings, not the names they were resolved from. A
+      // profile's effort can be edited later; what this iteration ran with
+      // cannot.
+      settings: { model, effort: profile.agentEffort, permissionMode },
     });
 
     appendEvent({
@@ -1733,14 +1746,12 @@ async function phaseImplement(
       exitCode: outcome.exitCode,
       numTurns: outcome.numTurns,
       costUsd: outcome.costUsd,
+      usage: outcome.usage,
       finalText: outcome.finalText,
       error: outcome.errorMessage,
     });
 
-    if (outcome.costUsd !== null) {
-      const fresh = requireRun(run.id);
-      updateRunFields(run.id, { costUsd: (fresh.costUsd ?? 0) + outcome.costUsd });
-    }
+    addRunCost(run.id, outcome.costUsd);
 
     const capacityReason =
       outcome.ok || outcome.cancelled ? null : capacityExhaustionReason(outcome.errorMessage);
@@ -1987,6 +1998,7 @@ async function phaseSummarise(
     if (!summary) throw new Error('The provider returned an empty summary');
 
     setIterationSummary(iterationId, summary, result.provider);
+    addRunCost(run.id, result.costUsd);
 
     await writeTextArtifact({
       runId: run.id,
@@ -2321,6 +2333,10 @@ async function phaseReview(
       agentSummary: lastIteration?.finalText ?? null,
       signal,
     });
+
+    // The reviewer is a model call like any other. Its cost was being
+    // discarded, which made the run's total a subset that did not say so.
+    addRunCost(run.id, result.costUsd);
 
     const attempt = nextReviewAttempt(run.id);
     const stored = insertFindings(run.id, attempt, result.provider, result.findings);
@@ -2870,6 +2886,11 @@ async function runLandingAgentIteration(input: {
     prompt,
     sessionId: null,
     resumed: false,
+    settings: {
+      model: run.agentModel ?? project.agentModel,
+      effort: profile.agentEffort,
+      permissionMode: project.effectivePermissionMode,
+    },
   });
 
   appendEvent({
@@ -2916,6 +2937,7 @@ async function runLandingAgentIteration(input: {
     exitCode: outcome.exitCode,
     numTurns: outcome.numTurns,
     costUsd: outcome.costUsd,
+    usage: outcome.usage,
     finalText: outcome.finalText,
     error: outcome.errorMessage,
   });
@@ -2923,10 +2945,7 @@ async function runLandingAgentIteration(input: {
   if (outcome.sessionId) {
     updateRunFields(run.id, { agentSessionId: outcome.sessionId });
   }
-  if (outcome.costUsd !== null) {
-    const fresh = requireRun(run.id);
-    updateRunFields(run.id, { costUsd: (fresh.costUsd ?? 0) + outcome.costUsd });
-  }
+  addRunCost(run.id, outcome.costUsd);
 
   if (outcome.deniedTools.length > 0) {
     const denied = outcome.deniedTools.join(', ');
@@ -3248,6 +3267,71 @@ function quotePosix(value: string): string {
  * findings, and the project's policies decide. The working mode changes what
  * counts as evidence, never who decides.
  */
+/**
+ * Writes the run's impact report into the event log.
+ *
+ * Assembled from stored state only — the same rule the verdict follows. The
+ * latest attempt of validation and review is used, matching what the run
+ * screen shows; an older attempt is history, not the outcome.
+ *
+ * Never throws. A report is a description of the run, and failing to describe
+ * a run must not change what happened to it.
+ */
+function reportRunImpact(run: RunView): void {
+  try {
+    const validationAttempt = run.validations.reduce((acc, v) => Math.max(acc, v.attempt), 0);
+    const findingAttempt = run.findings.reduce((acc, f) => Math.max(acc, f.attempt), 0);
+
+    const impact = summariseRunImpact({
+      profile: run.profile,
+      costUsd: run.costUsd,
+      iterations: run.iterations.map((it) => ({
+        kind: it.kind,
+        status: it.status,
+        numTurns: it.numTurns,
+        costUsd: it.costUsd,
+        settings: it.settings,
+        usage: it.usage,
+      })),
+      changedFiles: run.changedFiles.map((f) => ({
+        additions: f.additions,
+        deletions: f.deletions,
+      })),
+      validations: run.validations
+        .filter((v) => v.attempt === validationAttempt)
+        .map((v) => ({ outcome: v.outcome, blocking: v.blocking })),
+      findings: run.findings
+        .filter((f) => f.attempt === findingAttempt)
+        .map((f) => ({ severity: f.severity })),
+    });
+
+    const priorSettings = previousRunSettings(run);
+    const changed = settingsChanged(
+      impact.settings,
+      priorSettings
+        ? { ...priorSettings, profile: previousRunProfile(run) ?? impact.settings.profile }
+        : null,
+    );
+
+    const lines = describeRunImpact(impact, changed);
+
+    appendEvent({
+      runId: run.id,
+      type: 'run.impact',
+      message: lines.join(' — '),
+      payload: { impact, changed, lines },
+    });
+  } catch (err) {
+    appendEvent({
+      runId: run.id,
+      type: 'agent.notice',
+      level: 'debug',
+      message: `Could not summarise this run's impact: ${errorMessage(err)}`,
+      payload: { iterationId: '', text: errorMessage(err) },
+    });
+  }
+}
+
 async function phaseDecide(
   run: RunView,
   project: ProjectView,
@@ -3257,6 +3341,11 @@ async function phaseDecide(
   const assessment = assessReadiness(fresh, project);
 
   const deliverable = WORK_MODE_WORDING[workMode.id].deliverable;
+
+  // Written before the verdict, so the numbers are in the log whichever way
+  // the verdict goes. A run that ends NEEDS_CHANGES is exactly the one whose
+  // cost most wants explaining.
+  reportRunImpact(fresh);
 
   if (assessment.ready) {
     setStatus(fresh.id, 'READY', {

@@ -103,6 +103,7 @@ export class ClaudeCliTransformer implements TransformerProvider {
       title: parsed.data.title,
       provider: this.id,
       durationMs: result.durationMs ?? 0,
+      costUsd: result.costUsd,
     };
   }
 
@@ -120,7 +121,12 @@ export class ClaudeCliTransformer implements TransformerProvider {
       throw new Error(result.error ?? 'Summary query failed');
     }
 
-    return { summary: result.text.trim(), provider: this.id, durationMs: result.durationMs ?? 0 };
+    return {
+      summary: result.text.trim(),
+      provider: this.id,
+      durationMs: result.durationMs ?? 0,
+      costUsd: result.costUsd,
+    };
   }
 }
 

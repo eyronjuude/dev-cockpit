@@ -1,4 +1,5 @@
 import type { ExpiryTarget } from './expiry';
+import type { RunImpact, SettingChange } from './impact';
 import type { ResolvedWorkMode, WorkMode } from './modes';
 import type { RetryStage } from './retry';
 import type {
@@ -88,6 +89,7 @@ export const EVENT_TYPES = [
   'landing.applied',
   'landing.failed',
 
+  'run.impact',
   'run.ready',
   'run.needs_changes',
   'run.approved',
@@ -339,6 +341,17 @@ export interface EventPayloads {
   'landing.applied': { targetBranch: string; commitSha: string };
   'landing.failed': { error: string };
 
+  /**
+   * What the run changed and what it cost, written once when it settles.
+   *
+   * The payload is the whole report rather than a rendered string, so the run
+   * screen can lay it out and a later comparison can read the numbers back.
+   */
+  'run.impact': {
+    impact: RunImpact;
+    changed: SettingChange[];
+    lines: string[];
+  };
   'run.ready': { validationsPassed: number; blockingFindings: number };
   'run.needs_changes': { reasons: string[] };
   'run.approved': { note: string | null; commitSha: string | null };
