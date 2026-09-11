@@ -413,6 +413,52 @@ export const artifacts = sqliteTable(
 );
 
 /* ------------------------------------------------------------------ *
+ * Commits
+ * ------------------------------------------------------------------ */
+
+/**
+ * One row per commit found on a run's branch since its base commit.
+ *
+ * Recorded rather than derived live on every read: a run's worktree and branch
+ * are reclaimed once it lands or is rejected, and a reviewer still needs to
+ * see what shipped after that happens. The patch itself lives in an
+ * `artifacts` row of kind `commit_diff`, for the same reason `changedFiles`
+ * keeps a rollup instead of re-diffing on request.
+ */
+export const commits = sqliteTable(
+  'commits',
+  {
+    id: text('id').primaryKey(),
+    runId: text('run_id')
+      .notNull()
+      .references(() => runs.id, { onDelete: 'cascade' }),
+    sha: text('sha').notNull(),
+    shortSha: text('short_sha').notNull(),
+    subject: text('subject').notNull(),
+    authorName: text('author_name').notNull(),
+    /** ISO-8601, the commit's own author date rather than when this was recorded. */
+    authorDate: text('author_date').notNull(),
+    additions: integer('additions').notNull().default(0),
+    deletions: integer('deletions').notNull().default(0),
+    filesChanged: integer('files_changed').notNull().default(0),
+    /** The commit's own patch, as an `artifacts` row of kind `commit_diff`. */
+    diffArtifactId: text('diff_artifact_id'),
+    /**
+     * Set once this run's branch has been merged into its target branch by the
+     * landing flow. There is no push or remote in this app, so "landed" is the
+     * closest analogue to "shipped" that a commit can reach.
+     */
+    landed: integer('landed', { mode: 'boolean' }).notNull().default(false),
+    landedAt: text('landed_at'),
+    createdAt: text('created_at').notNull().default(now),
+  },
+  (t) => [
+    index('commits_run_idx').on(t.runId),
+    uniqueIndex('commits_run_sha_idx').on(t.runId, t.sha),
+  ],
+);
+
+/* ------------------------------------------------------------------ *
  * Request attachments
  * ------------------------------------------------------------------ */
 
@@ -493,3 +539,4 @@ export type ArtifactRow = typeof artifacts.$inferSelect;
 export type AttachmentRow = typeof attachments.$inferSelect;
 export type NewAttachmentRow = typeof attachments.$inferInsert;
 export type ReviewFindingRow = typeof reviewFindings.$inferSelect;
+export type CommitRow = typeof commits.$inferSelect;
