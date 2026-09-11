@@ -130,8 +130,8 @@ describe('working mode vocabulary', () => {
     expect(RESOLVED_WORK_MODES).not.toContain('auto');
   });
 
-  it('defaults to build, so nothing changes for a run that says nothing', () => {
-    expect(DEFAULT_WORK_MODE).toBe('build');
+  it('defaults to plan, so an unconfigured task changes nothing until confirmed', () => {
+    expect(DEFAULT_WORK_MODE).toBe('plan');
     expect(workModeSchema.parse('ask')).toBe('ask');
     expect(workModeSchema.safeParse('planning').success).toBe(false);
   });

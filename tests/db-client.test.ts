@@ -52,6 +52,43 @@ function seedDatabaseThatSkippedRunExpiryMigration(dbFile: string): void {
         run_id text NOT NULL
       );
 
+      -- Present since 0000, with mode/resolved_mode added by 0002 — both
+      -- before the out-of-order 0006 timestamp, so a database "at 0004" has
+      -- every column below. Seeded in full because a later migration that
+      -- rebuilds this table (SQLite has no ALTER COLUMN, so a default change
+      -- recreates it) selects every column by name.
+      CREATE TABLE "runs" (
+        id text PRIMARY KEY,
+        project_id text NOT NULL,
+        title text NOT NULL,
+        request text NOT NULL,
+        spec text,
+        spec_provider text,
+        status text DEFAULT 'DRAFT' NOT NULL,
+        status_reason text,
+        profile text DEFAULT 'standard' NOT NULL,
+        mode text DEFAULT 'build' NOT NULL,
+        resolved_mode text,
+        base_branch text,
+        base_commit text,
+        branch text,
+        worktree_path text,
+        commit_sha text,
+        agent_provider text DEFAULT 'claude-code' NOT NULL,
+        agent_session_id text,
+        agent_model text,
+        transformer_provider text DEFAULT 'none' NOT NULL,
+        reviewer_provider text DEFAULT 'none' NOT NULL,
+        disposition text,
+        disposition_note text,
+        error text,
+        cost_usd real,
+        created_at text NOT NULL,
+        updated_at text NOT NULL,
+        started_at text,
+        finished_at text
+      );
+
       -- Present since 0000, so a database that reached 0004 has it. Seeded
       -- because later additive migrations target it, and a fixture missing a
       -- table that has always existed tests a state no real database is in.

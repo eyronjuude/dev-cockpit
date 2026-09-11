@@ -152,7 +152,7 @@ export const runs = sqliteTable(
      * unchanged for the life of the run, so what was asked for stays readable
      * after a mode switch.
      */
-    mode: text('mode').notNull().default('build'),
+    mode: text('mode').notNull().default('plan'),
     /**
      * The mode the run is executing in — `plan` or `build`, never `auto`.
      * Written when the run is created and again if the mode is switched

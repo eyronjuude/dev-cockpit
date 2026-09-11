@@ -28,13 +28,13 @@ export type ResolvedWorkMode = (typeof RESOLVED_WORK_MODES)[number];
 export const resolvedWorkModeSchema = z.enum(RESOLVED_WORK_MODES);
 
 /**
- * Build, deliberately.
+ * Plan, deliberately.
  *
- * Every run that existed before modes were added was a build run, and a
- * keyword heuristic quietly turning a change request into a document is a worse
- * surprise than the reverse. Auto is opt-in.
+ * A run that stops to write a plan instead of the change nobody confirmed is
+ * the safer surprise: nothing gets touched, and the plan is there to approve
+ * or correct before anything runs for real. Auto is opt-in.
  */
-export const DEFAULT_WORK_MODE: WorkMode = 'build';
+export const DEFAULT_WORK_MODE: WorkMode = 'plan';
 
 export const WORK_MODE_LABELS: Record<WorkMode, string> = {
   ask: 'Ask',

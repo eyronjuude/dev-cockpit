@@ -199,6 +199,7 @@ async function runToCompletion(name: string) {
   const run = runsService.createRun({
     projectId: project.id,
     request: `Add a marker file for ${name}`,
+    mode: 'build',
   });
   const calls: AgentCall[] = [];
 
@@ -221,6 +222,7 @@ describe('selecting implementation agents', () => {
     const created = runsService.createRun({
       projectId: project.id,
       request: 'Add a marker file.',
+      mode: 'build',
       agentProvider: 'codex-code',
       agentModel: 'gpt-5-codex',
     });
@@ -347,6 +349,7 @@ describe('retrying a failed run', () => {
     const created = runsService.createRun({
       projectId: project.id,
       request: 'Add a marker file.',
+      mode: 'build',
     });
 
     // An unavailable agent fails the run after the worktree is prepared, which
@@ -401,6 +404,7 @@ describe('retrying a failed run', () => {
     const created = runsService.createRun({
       projectId: project.id,
       request: 'Add a marker file.',
+      mode: 'build',
     });
 
     const claudeCalls: AgentCall[] = [];
@@ -459,6 +463,7 @@ describe('retrying a failed run', () => {
     const created = runsService.createRun({
       projectId: project.id,
       request: 'Add a marker file.',
+      mode: 'build',
     });
 
     const exhaustedClaude = orchestrator.registerAgent(
@@ -581,6 +586,7 @@ describe('retrying a failed run', () => {
     const created = runsService.createRun({
       projectId: project.id,
       request: 'Add a marker file.',
+      mode: 'build',
     });
     // Stands in for a transformer that ran before the failure.
     runsService.updateRunFields(created.id, { spec: '# Spec\nWritten once.', specProvider: 'test' });
@@ -655,6 +661,7 @@ describe('retrying a failed run', () => {
     const created = runsService.createRun({
       projectId: project.id,
       request: 'Add a marker file.',
+      mode: 'build',
     });
 
     let invocations = 0;
@@ -795,6 +802,7 @@ describe('retrying the current iteration', () => {
     const created = runsService.createRun({
       projectId: project.id,
       request: 'Add a marker file.',
+      mode: 'build',
     });
     runsService.setStatus(created.id, 'FAILED', { reason: 'test' });
 
@@ -915,6 +923,7 @@ describe('forced restart', () => {
     const created = runsService.createRun({
       projectId: project.id,
       request: 'Add a marker file.',
+      mode: 'build',
     });
 
     // An agent that only returns once its signal is aborted, so the restart

@@ -118,12 +118,12 @@ describe('persistence', () => {
     expect(run.spec).toBeNull();
   });
 
-  it('creates a build run by default, so nothing changes for a request that says nothing', async () => {
+  it('creates a plan run by default, so nothing changes for a request that says nothing', async () => {
     const project = await makeProject('persist-mode-default');
     const run = runs.createRun({ projectId: project.id, request: 'Add a health endpoint.' });
 
-    expect(run.mode).toBe('build');
-    expect(run.resolvedMode).toBe('build');
+    expect(run.mode).toBe('plan');
+    expect(run.resolvedMode).toBe('plan');
   });
 
   it('records the requested mode and the mode it resolved to', async () => {
@@ -277,7 +277,7 @@ describe('persistence', () => {
 describe('assessReadiness', () => {
   it('is not ready when nothing changed', async () => {
     const project = await makeProject('ready-nochange');
-    const run = runs.createRun({ projectId: project.id, request: 'x' });
+    const run = runs.createRun({ projectId: project.id, request: 'x', mode: 'build' });
     seedValidation(run.id, 1, [{ kind: 'unit', outcome: 'pass' }]);
 
     const assessment = runs.assessReadiness(runs.requireRun(run.id), project);
@@ -290,7 +290,7 @@ describe('assessReadiness', () => {
     projectsService.upsertValidationCommand(project.id, { kind: 'unit', command: 'npm test' });
     const withCommand = projectsService.requireProject(project.id);
 
-    const run = runs.createRun({ projectId: project.id, request: 'x' });
+    const run = runs.createRun({ projectId: project.id, request: 'x', mode: 'build' });
     runs.replaceChangedFiles(run.id, [
       {
         path: 'src/app.ts',
@@ -314,7 +314,7 @@ describe('assessReadiness', () => {
     projectsService.upsertValidationCommand(project.id, { kind: 'unit', command: 'npm test' });
     const withCommand = projectsService.requireProject(project.id);
 
-    const run = runs.createRun({ projectId: project.id, request: 'x' });
+    const run = runs.createRun({ projectId: project.id, request: 'x', mode: 'build' });
     runs.replaceChangedFiles(run.id, [
       { path: 'a.ts', previousPath: null, changeType: 'modified', additions: 1, deletions: 0, binary: false },
     ]);
@@ -331,7 +331,7 @@ describe('assessReadiness', () => {
     projectsService.upsertValidationCommand(project.id, { kind: 'build', command: 'nope' });
     const withCommand = projectsService.requireProject(project.id);
 
-    const run = runs.createRun({ projectId: project.id, request: 'x' });
+    const run = runs.createRun({ projectId: project.id, request: 'x', mode: 'build' });
     runs.replaceChangedFiles(run.id, [
       { path: 'a.ts', previousPath: null, changeType: 'modified', additions: 1, deletions: 0, binary: false },
     ]);
@@ -352,7 +352,7 @@ describe('assessReadiness', () => {
     projectsService.upsertValidationCommand(project.id, { kind: 'unit', command: 'npm test' });
     const withCommand = projectsService.requireProject(project.id);
 
-    const run = runs.createRun({ projectId: project.id, request: 'x' });
+    const run = runs.createRun({ projectId: project.id, request: 'x', mode: 'build' });
     runs.replaceChangedFiles(run.id, [
       { path: 'a.ts', previousPath: null, changeType: 'modified', additions: 1, deletions: 0, binary: false },
     ]);
@@ -370,7 +370,7 @@ describe('assessReadiness', () => {
     projectsService.upsertValidationCommand(project.id, { kind: 'unit', command: 'npm test' });
     const withCommand = projectsService.requireProject(project.id);
 
-    const run = runs.createRun({ projectId: project.id, request: 'x' });
+    const run = runs.createRun({ projectId: project.id, request: 'x', mode: 'build' });
     runs.replaceChangedFiles(run.id, [
       { path: 'a.ts', previousPath: null, changeType: 'modified', additions: 1, deletions: 0, binary: false },
     ]);
@@ -390,7 +390,7 @@ describe('assessReadiness', () => {
     projectsService.upsertValidationCommand(project.id, { kind: 'unit', command: 'npm test' });
     const withCommand = projectsService.requireProject(project.id);
 
-    const run = runs.createRun({ projectId: project.id, request: 'x' });
+    const run = runs.createRun({ projectId: project.id, request: 'x', mode: 'build' });
     runs.replaceChangedFiles(run.id, [
       { path: 'a.ts', previousPath: null, changeType: 'modified', additions: 1, deletions: 0, binary: false },
     ]);
@@ -407,7 +407,7 @@ describe('assessReadiness', () => {
     const withCommand = projectsService.requireProject(project.id);
     expect(withCommand.requireValidation).toBe(true);
 
-    const run = runs.createRun({ projectId: project.id, request: 'x' });
+    const run = runs.createRun({ projectId: project.id, request: 'x', mode: 'build' });
     runs.replaceChangedFiles(run.id, [
       { path: 'a.ts', previousPath: null, changeType: 'modified', additions: 1, deletions: 0, binary: false },
     ]);
@@ -420,7 +420,7 @@ describe('assessReadiness', () => {
 
   it('says so when a project requires validation but configured none', async () => {
     const project = await makeProject('ready-nocommands');
-    const run = runs.createRun({ projectId: project.id, request: 'x' });
+    const run = runs.createRun({ projectId: project.id, request: 'x', mode: 'build' });
     runs.replaceChangedFiles(run.id, [
       { path: 'a.ts', previousPath: null, changeType: 'modified', additions: 1, deletions: 0, binary: false },
     ]);
@@ -440,7 +440,7 @@ describe('assessReadiness', () => {
     projectsService.upsertValidationCommand(project.id, { kind: 'unit', command: 'npm test' });
     const withCommand = projectsService.requireProject(project.id);
 
-    const run = runs.createRun({ projectId: project.id, request: 'x' });
+    const run = runs.createRun({ projectId: project.id, request: 'x', mode: 'build' });
     runs.replaceChangedFiles(run.id, [
       {
         path: 'src/components/Button.tsx',
@@ -469,7 +469,7 @@ describe('assessReadiness', () => {
     projectsService.upsertValidationCommand(project.id, { kind: 'unit', command: 'npm test' });
     const withCommand = projectsService.requireProject(project.id);
 
-    const run = runs.createRun({ projectId: project.id, request: 'x' });
+    const run = runs.createRun({ projectId: project.id, request: 'x', mode: 'build' });
     runs.replaceChangedFiles(run.id, [
       {
         path: 'src/lib/math.ts',
@@ -491,7 +491,7 @@ describe('assessReadiness', () => {
     projectsService.upsertValidationCommand(project.id, { kind: 'unit', command: 'npm test' });
     const withCommand = projectsService.requireProject(project.id);
 
-    const run = runs.createRun({ projectId: project.id, request: 'x' });
+    const run = runs.createRun({ projectId: project.id, request: 'x', mode: 'build' });
     runs.replaceChangedFiles(run.id, [
       { path: 'a.ts', previousPath: null, changeType: 'modified', additions: 1, deletions: 0, binary: false },
     ]);
@@ -509,7 +509,7 @@ describe('assessReadiness', () => {
     const withCommand = projectsService.requireProject(project.id);
     expect(withCommand.reviewBlocksReady).toBe(false);
 
-    const run = runs.createRun({ projectId: project.id, request: 'x' });
+    const run = runs.createRun({ projectId: project.id, request: 'x', mode: 'build' });
     runs.replaceChangedFiles(run.id, [
       { path: 'a.ts', previousPath: null, changeType: 'modified', additions: 1, deletions: 0, binary: false },
     ]);
@@ -536,7 +536,7 @@ describe('assessReadiness', () => {
     projectsService.upsertValidationCommand(project.id, { kind: 'unit', command: 'npm test' });
     const withCommand = projectsService.requireProject(project.id);
 
-    const run = runs.createRun({ projectId: project.id, request: 'x' });
+    const run = runs.createRun({ projectId: project.id, request: 'x', mode: 'build' });
     runs.replaceChangedFiles(run.id, [
       { path: 'a.ts', previousPath: null, changeType: 'modified', additions: 1, deletions: 0, binary: false },
     ]);
@@ -555,7 +555,7 @@ describe('assessReadiness', () => {
     projectsService.upsertValidationCommand(project.id, { kind: 'unit', command: 'npm test' });
     const withCommand = projectsService.requireProject(project.id);
 
-    const run = runs.createRun({ projectId: project.id, request: 'x' });
+    const run = runs.createRun({ projectId: project.id, request: 'x', mode: 'build' });
     runs.replaceChangedFiles(run.id, [
       { path: 'a.ts', previousPath: null, changeType: 'modified', additions: 1, deletions: 0, binary: false },
     ]);

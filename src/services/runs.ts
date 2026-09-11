@@ -16,6 +16,7 @@ import { newIterationId, newRunId, runBranchName } from '@/core/ids';
 import { notFound } from '@/core/errors';
 import type { TokenUsage } from '@/agents/types';
 import {
+  DEFAULT_WORK_MODE,
   effectiveWorkMode,
   resolveWorkMode,
   WORK_MODE_LABELS,
@@ -67,7 +68,7 @@ export const createRunSchema = z.object({
    */
   model: z.string().trim().max(120).optional(),
   /** Working mode: `plan`, `build`, or `auto` to decide from the request. */
-  mode: workModeSchema.default('build'),
+  mode: workModeSchema.default(DEFAULT_WORK_MODE),
   /** Implementation agent provider id. */
   agentProvider: z.string().trim().max(60).optional(),
   /**
