@@ -39,6 +39,7 @@ const ICON: Partial<Record<EventType, string>> = {
   'run.mode_selected': '◈',
   'run.mode_switched': '◈',
   'run.agent_changed': '◈',
+  'run.transformer_changed': '◈',
   'run.retried': '↻',
   'run.restarted': '↺',
   'run.paused': '!',

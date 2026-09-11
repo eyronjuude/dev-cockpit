@@ -13,6 +13,7 @@ import { getRunPreview } from '@/services/previews';
 import { getProject, retentionPolicy } from '@/services/projects';
 import { assessReadiness, getRun } from '@/services/runs';
 import { runWorktrees } from '@/services/worktrees';
+import { transformerOptions } from '@/transformers/registry';
 
 export const dynamic = 'force-dynamic';
 
@@ -42,6 +43,7 @@ export default async function RunPage({ params }: { params: Promise<{ runId: str
     worktrees: runWorktrees(run, project),
     expiry: planExpiry(run, retentionPolicy(project)),
     implementationAgents: implementationAgentOptions(),
+    transformers: transformerOptions(),
     attachmentsMutable: canModifyAttachments(runId) && !active,
     configuredValidations: project.validationSteps
       .filter((step) => step.enabled && step.command.trim().length > 0)

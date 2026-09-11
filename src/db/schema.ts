@@ -135,6 +135,18 @@ export const projects = sqliteTable(
     agentAddDirs: text('agent_add_dirs'),
 
     /**
+     * Standing defaults for which provider a new run picks for each role.
+     * Null means "no project default" — New Task falls back to the built-in
+     * preference order, exactly today's behaviour. These only seed what a new
+     * run starts with; the per-run and per-iteration overrides (`runs.agent_provider`,
+     * `runs.transformer_provider`, and the mid-run override paths) still let a
+     * single run deviate from them.
+     */
+    defaultAgentProvider: text('default_agent_provider'),
+    defaultTransformerProvider: text('default_transformer_provider'),
+    defaultReviewerProvider: text('default_reviewer_provider'),
+
+    /**
      * Whether Dev Cockpit's own generated commits (run approval, landing
      * repair) get a Conventional Commits type prefix. On by default; merge
      * commits are never touched regardless of this setting.

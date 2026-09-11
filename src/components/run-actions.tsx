@@ -130,6 +130,9 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
   const [deleteBranches, setDeleteBranches] = useState(true);
   const [selectedAgentProvider, setSelectedAgentProvider] = useState(run.agentProvider);
   const [selectedAgentModel, setSelectedAgentModel] = useState(run.agentModel ?? '');
+  const [selectedTransformerProvider, setSelectedTransformerProvider] = useState(
+    run.transformerProvider,
+  );
 
   const active = live.active;
   const targetBranch = run.baseBranch ?? 'the target branch';
@@ -142,6 +145,9 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
   const agentSelectionBody = () => ({
     agentProvider: selectedAgentProvider,
     agentModel: agentModel || null,
+    // No session to lose here, unlike the implementer: sent every time so a
+    // deliberate switch takes effect from the very next iteration.
+    transformerProvider: selectedTransformerProvider,
   });
   const selectAgentProvider = (provider: string) => {
     setSelectedAgentProvider(provider);
@@ -154,6 +160,7 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
     }
     setSelectedAgentProvider(run.agentProvider);
     setSelectedAgentModel(run.agentModel ?? '');
+    setSelectedTransformerProvider(run.transformerProvider);
     setDialog(target);
   };
 
@@ -498,6 +505,9 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
             model={selectedAgentModel}
             onProviderChange={selectAgentProvider}
             onModelChange={setSelectedAgentModel}
+            transformers={snapshot.transformers}
+            transformerProvider={selectedTransformerProvider}
+            onTransformerChange={setSelectedTransformerProvider}
           />
           <div className="mt-2.5 flex justify-end gap-1.5">
             <button type="button" className="btn btn-ghost" onClick={() => setDialog('none')}>
@@ -529,6 +539,9 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
             model={selectedAgentModel}
             onProviderChange={selectAgentProvider}
             onModelChange={setSelectedAgentModel}
+            transformers={snapshot.transformers}
+            transformerProvider={selectedTransformerProvider}
+            onTransformerChange={setSelectedTransformerProvider}
           />
           <p className="hint">
             {willResumeSelectedAgentSession && retryPlan.resumesSession
@@ -570,6 +583,9 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
             model={selectedAgentModel}
             onProviderChange={selectAgentProvider}
             onModelChange={setSelectedAgentModel}
+            transformers={snapshot.transformers}
+            transformerProvider={selectedTransformerProvider}
+            onTransformerChange={setSelectedTransformerProvider}
           />
           <p className="hint">
             {willResumeSelectedAgentSession
@@ -635,6 +651,9 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
             model={selectedAgentModel}
             onProviderChange={selectAgentProvider}
             onModelChange={setSelectedAgentModel}
+            transformers={snapshot.transformers}
+            transformerProvider={selectedTransformerProvider}
+            onTransformerChange={setSelectedTransformerProvider}
           />
           <p className="hint">
             {willResumeSelectedAgentSession
@@ -714,6 +733,9 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
             model={selectedAgentModel}
             onProviderChange={selectAgentProvider}
             onModelChange={setSelectedAgentModel}
+            transformers={snapshot.transformers}
+            transformerProvider={selectedTransformerProvider}
+            onTransformerChange={setSelectedTransformerProvider}
           />
 
           <div className="mt-2.5 flex justify-end gap-1.5">
@@ -764,6 +786,9 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
             model={selectedAgentModel}
             onProviderChange={selectAgentProvider}
             onModelChange={setSelectedAgentModel}
+            transformers={snapshot.transformers}
+            transformerProvider={selectedTransformerProvider}
+            onTransformerChange={setSelectedTransformerProvider}
           />
           <p className="hint">
             {willResumeSelectedAgentSession
@@ -1075,6 +1100,9 @@ function AgentControls({
   model,
   onProviderChange,
   onModelChange,
+  transformers,
+  transformerProvider,
+  onTransformerChange,
 }: {
   idPrefix: string;
   agents: RunSnapshot['implementationAgents'];
@@ -1082,40 +1110,70 @@ function AgentControls({
   model: string;
   onProviderChange: (value: string) => void;
   onModelChange: (value: string) => void;
+  transformers: RunSnapshot['transformers'];
+  transformerProvider: string;
+  onTransformerChange: (value: string) => void;
 }) {
-  if (agents.length === 0) return null;
+  if (agents.length === 0 && transformers.length === 0) return null;
 
   return (
-    <div className="mt-2.5 grid gap-2 sm:grid-cols-2">
-      <div>
-        <label className="label" htmlFor={`${idPrefix}-agent-provider`}>
-          Implementation agent
-        </label>
-        <select
-          id={`${idPrefix}-agent-provider`}
-          className="select"
-          value={provider}
-          onChange={(e) => onProviderChange(e.target.value)}
-        >
-          {agents.map((agent) => (
-            <option key={agent.id} value={agent.id}>
-              {agent.label}
-            </option>
-          ))}
-        </select>
-      </div>
-      <div>
-        <label className="label" htmlFor={`${idPrefix}-agent-model`}>
-          Model
-        </label>
-        <input
-          id={`${idPrefix}-agent-model`}
-          className="input input-mono"
-          value={model}
-          placeholder="provider default"
-          onChange={(e) => onModelChange(e.target.value)}
-        />
-      </div>
+    <div className="mt-2.5 space-y-2">
+      {agents.length > 0 ? (
+        <div className="grid gap-2 sm:grid-cols-2">
+          <div>
+            <label className="label" htmlFor={`${idPrefix}-agent-provider`}>
+              Implementation agent
+            </label>
+            <select
+              id={`${idPrefix}-agent-provider`}
+              className="select"
+              value={provider}
+              onChange={(e) => onProviderChange(e.target.value)}
+            >
+              {agents.map((agent) => (
+                <option key={agent.id} value={agent.id}>
+                  {agent.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="label" htmlFor={`${idPrefix}-agent-model`}>
+              Model
+            </label>
+            <input
+              id={`${idPrefix}-agent-model`}
+              className="input input-mono"
+              value={model}
+              placeholder="provider default"
+              onChange={(e) => onModelChange(e.target.value)}
+            />
+          </div>
+        </div>
+      ) : null}
+      {transformers.length > 0 ? (
+        <div>
+          <label className="label" htmlFor={`${idPrefix}-transformer-provider`}>
+            Transformer
+          </label>
+          <select
+            id={`${idPrefix}-transformer-provider`}
+            className="select"
+            value={transformerProvider}
+            onChange={(e) => onTransformerChange(e.target.value)}
+          >
+            {transformers.map((transformer) => (
+              <option key={transformer.id} value={transformer.id}>
+                {transformer.label}
+              </option>
+            ))}
+          </select>
+          <p className="hint">
+            Writes this and later iterations&rsquo; summaries. No session to lose, so this takes
+            effect immediately &mdash; it does not affect the implementer.
+          </p>
+        </div>
+      ) : null}
     </div>
   );
 }

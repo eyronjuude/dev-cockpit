@@ -6,6 +6,9 @@ import { ProjectForm } from '@/components/project-form';
 import { formatRelative, RunStatusBadge } from '@/components/status';
 import { landingQueueCounts } from '@/services/landing-queue';
 import { getProject, recentRunSummaries } from '@/services/projects';
+import { implementationAgentStatuses } from '@/orchestrator/orchestrator';
+import { reviewerStatuses } from '@/reviewers/registry';
+import { transformerStatuses } from '@/transformers/registry';
 import type { RunStatus } from '@/domain/types';
 
 const NO_LANDINGS = { live: 0 };
@@ -23,7 +26,12 @@ export default async function ProjectPage({
 
   const runs = recentRunSummaries(projectId, 12);
   const landing = landingQueueCounts([project]).get(project.id) ?? NO_LANDINGS;
-  const advisors = await advisorStatuses();
+  const [advisors, implementers, transformers, reviewers] = await Promise.all([
+    advisorStatuses(),
+    implementationAgentStatuses(),
+    transformerStatuses(),
+    reviewerStatuses(),
+  ]);
 
   return (
     <div className="mx-auto max-w-5xl px-6 py-6">
@@ -87,7 +95,13 @@ export default async function ProjectPage({
       </section>
 
       <h2 className="mb-2.5 text-[14px] font-semibold">Configuration</h2>
-      <ProjectForm existing={project} advisors={advisors} />
+      <ProjectForm
+        existing={project}
+        advisors={advisors}
+        implementers={implementers}
+        transformers={transformers}
+        reviewers={reviewers}
+      />
     </div>
   );
 }

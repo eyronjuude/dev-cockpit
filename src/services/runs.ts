@@ -533,7 +533,11 @@ export function createRun(input: CreateRunInput): RunView {
   // choice between the other two modes, not a third behaviour, so nothing
   // downstream ever has to handle it.
   const resolution = resolveWorkMode(parsed.mode, parsed.request);
-  const agentProvider = parsed.agentProvider?.trim() || CLAUDE_CODE_PROVIDER;
+  // A caller that names no provider gets the project's own standing default
+  // before the hard-coded one — set in the project's settings, same as New
+  // Task already prefers it.
+  const agentProvider =
+    parsed.agentProvider?.trim() || project.defaultAgentProvider || CLAUDE_CODE_PROVIDER;
 
   /**
    * Resolved at creation and written down, rather than derived at each phase.
@@ -571,8 +575,8 @@ export function createRun(input: CreateRunInput): RunView {
       branch: runBranchName(id),
       agentProvider,
       agentModel: model.model,
-      transformerProvider: parsed.transformer ?? 'none',
-      reviewerProvider: parsed.reviewer ?? 'none',
+      transformerProvider: parsed.transformer ?? project.defaultTransformerProvider ?? 'none',
+      reviewerProvider: parsed.reviewer ?? project.defaultReviewerProvider ?? 'none',
     })
     .run();
 
@@ -731,6 +735,7 @@ export function updateRunFields(
     agentProvider: string;
     agentSessionId: string | null;
     agentModel: string | null;
+    transformerProvider: string;
     commitSha: string | null;
     costUsd: number | null;
     disposition: Disposition | null;

@@ -24,6 +24,7 @@ export const EVENT_TYPES = [
   'run.mode_selected',
   'run.mode_switched',
   'run.agent_changed',
+  'run.transformer_changed',
   'run.retried',
   'run.restarted',
   'run.paused',
@@ -142,6 +143,15 @@ export interface EventPayloads {
     fromModel: string | null;
     toModel: string | null;
     sessionCleared: boolean;
+    reason: string;
+  };
+  /**
+   * The transformer was switched, mid-run. Unlike `run.agent_changed` there
+   * is no session to clear: every transformer call is stateless.
+   */
+  'run.transformer_changed': {
+    fromProvider: string;
+    toProvider: string;
     reason: string;
   };
   /** A stopped run was picked back up. `stage` says where it resumed. */
