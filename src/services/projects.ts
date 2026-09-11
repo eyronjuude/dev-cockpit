@@ -73,6 +73,10 @@ export const createProjectSchema = z.object({
   agentModel: z.string().trim().max(120).nullable().optional(),
   agentPermissionMode: agentPermissionModeSchema.optional(),
   agentAddDirs: z.array(z.string()).optional(),
+  conventionalCommits: z.boolean().optional(),
+  commitConvention: z.enum(['conventional', 'custom']).optional(),
+  customCommitTypes: z.array(z.string()).optional(),
+  aiFormatsCommitMessages: z.boolean().optional(),
   validationCommands: z.array(validationCommandInputSchema).optional(),
 });
 
@@ -141,6 +145,14 @@ export interface ProjectView {
    */
   effectivePermissionMode: string;
   agentAddDirs: string[];
+  /** Whether Dev Cockpit's own generated commits get a Conventional Commits prefix. */
+  conventionalCommits: boolean;
+  /** `'conventional'` uses the built-in type list; `'custom'` uses `customCommitTypes`. */
+  commitConvention: string;
+  /** The type allow-list when `commitConvention` is `'custom'`. Empty falls back to the built-in list. */
+  customCommitTypes: string[];
+  /** Asks the project's transformer to write the commit subject instead of a fixed fallback. */
+  aiFormatsCommitMessages: boolean;
   createdAt: string;
   updatedAt: string;
   validationCommands: ValidationCommandView[];
@@ -183,6 +195,10 @@ function toProjectView(row: ProjectRow, commands: ValidationCommandRow[]): Proje
     agentPermissionMode: row.agentPermissionMode,
     effectivePermissionMode: resolvePermissionMode(row.agentPermissionMode),
     agentAddDirs: fromLines(row.agentAddDirs),
+    conventionalCommits: row.conventionalCommits,
+    commitConvention: row.commitConvention,
+    customCommitTypes: fromLines(row.customCommitTypes),
+    aiFormatsCommitMessages: row.aiFormatsCommitMessages,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     validationCommands: commands
@@ -356,6 +372,10 @@ export async function createProject(input: CreateProjectInput): Promise<ProjectV
       agentModel: parsed.agentModel ?? null,
       agentPermissionMode: parsed.agentPermissionMode ?? DEFAULT_AGENT_PERMISSION_MODE,
       agentAddDirs: toLines(parsed.agentAddDirs) ?? null,
+      conventionalCommits: parsed.conventionalCommits ?? true,
+      commitConvention: parsed.commitConvention ?? 'conventional',
+      customCommitTypes: toLines(parsed.customCommitTypes) ?? null,
+      aiFormatsCommitMessages: parsed.aiFormatsCommitMessages ?? false,
     })
     .run();
 
@@ -404,6 +424,12 @@ export function updateProject(id: string, input: UpdateProjectInput): ProjectVie
       agentModel: parsed.agentModel === undefined ? existing.agentModel : parsed.agentModel,
       agentPermissionMode: parsed.agentPermissionMode ?? existing.agentPermissionMode,
       agentAddDirs: toLines(parsed.agentAddDirs) ?? existing.agentAddDirs.join('\n'),
+      conventionalCommits: parsed.conventionalCommits ?? existing.conventionalCommits,
+      commitConvention: parsed.commitConvention ?? existing.commitConvention,
+      customCommitTypes:
+        toLines(parsed.customCommitTypes) ?? existing.customCommitTypes.join('\n'),
+      aiFormatsCommitMessages:
+        parsed.aiFormatsCommitMessages ?? existing.aiFormatsCommitMessages,
       updatedAt: new Date().toISOString(),
     })
     .where(eq(projects.id, id))

@@ -38,7 +38,12 @@ import {
   WORK_MODE_WORDING,
   type ResolvedWorkMode,
 } from '@/domain/modes';
-import { CLAUDE_CODE_PROVIDER, modelForProvider, resolveAgentEffort } from '@/domain/models';
+import {
+  agentModelLabel,
+  CLAUDE_CODE_PROVIDER,
+  modelForProvider,
+  resolveAgentEffort,
+} from '@/domain/models';
 import {
   ITERATION_RETRYABLE_STATUSES,
   lastImplementationIteration,
@@ -55,8 +60,21 @@ import {
   type Disposition,
   type IterationKind,
 } from '@/domain/types';
+import {
+  lintCommitSubject,
+  resolveCommitConvention,
+  withConventionalType,
+  type CommitConvention,
+} from '@/git/commit-message';
 import { collectRunDiff, commitAll } from '@/git/diff';
-import { commitInfo, isDirty, refExists, resolveCommit } from '@/git/git';
+import {
+  commitInfo,
+  isDirty,
+  localGitIdentity,
+  refExists,
+  resolveCommit,
+  type GitIdentity,
+} from '@/git/git';
 import {
   applyLandingToTarget,
   completeMergeIfResolved,
@@ -102,6 +120,7 @@ import {
   type RunView,
 } from '@/services/runs';
 import { getTransformer } from '@/transformers/registry';
+import type { TransformerProvider } from '@/transformers/types';
 import { formatDuration, runValidation, type ValidationRunSummary } from '@/validation/engine';
 import { effectivePermissionMode, getWorkMode, type WorkModeBehaviour } from './modes';
 import { buildChangeRequestPrompt, buildInitialPrompt, readableAttachments } from './prompt';
@@ -546,6 +565,143 @@ function modelForAgent(
       (run.agentProvider === CLAUDE_CODE_PROVIDER ? project.agentModel : null),
     recommended: recommendedModelFor(profile, agentId),
   });
+}
+
+/* ------------------------------------------------------------------ *
+ * Commit attribution
+ * ------------------------------------------------------------------ */
+
+/**
+ * Used only when nothing is configured at all. Without some identity, git
+ * refuses to commit ("Author identity unknown"), so this exists purely as a
+ * last resort — it is never the default path.
+ */
+const FALLBACK_COMMIT_AUTHOR: GitIdentity = {
+  name: 'Dev Cockpit',
+  email: 'dev-cockpit@localhost',
+};
+
+/**
+ * Whether to force an identity onto a commit, or let git resolve its own.
+ *
+ * null means "don't override" — the commit ends up with exactly the identity
+ * a person would get committing by hand in this repository. A concrete
+ * identity is only returned when nothing is configured anywhere, so the
+ * commit does not fail outright.
+ */
+async function resolveCommitAuthorOverride(project: ProjectView): Promise<GitIdentity | null> {
+  const configured = await localGitIdentity(project.repositoryPath);
+  return configured ? null : FALLBACK_COMMIT_AUTHOR;
+}
+
+/**
+ * Which model to credit, and under what name/address, per implementation
+ * provider. A provider absent from this table gets no trailer at all rather
+ * than a guessed one.
+ */
+const MODEL_ATTRIBUTION: Record<string, { name: string; email: string }> = {
+  'claude-code': { name: 'Claude', email: 'noreply@anthropic.com' },
+  'codex-code': { name: 'Codex', email: 'noreply@openai.com' },
+};
+
+/** `Co-Authored-By:` trailer for whichever model produced a commit's changes. */
+function modelCoAuthorTrailer(
+  provider: string,
+  modelId: string | null | undefined,
+): string | null {
+  const attribution = MODEL_ATTRIBUTION[provider];
+  if (!attribution) return null;
+  const modelLabel = agentModelLabel(modelId);
+  const name = modelLabel ? `${attribution.name} ${modelLabel}` : attribution.name;
+  return `Co-Authored-By: ${name} <${attribution.email}>`;
+}
+
+/** Appends a trailer to a commit message, blank-line separated per git convention. */
+function withCoAuthorTrailer(message: string, trailer: string | null): string {
+  return trailer ? `${message}\n\n${trailer}` : message;
+}
+
+/**
+ * Formats a commit subject under the project's active convention.
+ *
+ * When `aiFormatsCommitMessages` is on, asks the run's transformer to write
+ * the subject and validates the result against the same convention, with one
+ * bounded retry that feeds the linter's own errors back in. Any failure —
+ * the provider is unavailable, both attempts fail to lint, an unexpected
+ * error — falls back to the deterministic `type: subject` prefix. The
+ * linter is a quality signal, never a gate that can block a commit: an
+ * invalid fallback subject still commits, with a notice event recording why.
+ */
+async function buildCommitSubject(
+  rawSubject: string,
+  fallbackType: string,
+  kind: 'run' | 'landing_repair',
+  run: RunView,
+  project: ProjectView,
+): Promise<string> {
+  const convention = resolveCommitConvention(project);
+
+  if (project.aiFormatsCommitMessages) {
+    const transformer = getTransformer(run.transformerProvider);
+    if (typeof transformer.formatCommitMessage === 'function') {
+      const aiSubject = await tryAiCommitSubject(
+        transformer,
+        rawSubject,
+        kind,
+        convention,
+        run.id,
+      );
+      if (aiSubject) return aiSubject;
+    }
+  }
+
+  const fallback = withConventionalType(rawSubject, fallbackType);
+  const lint = lintCommitSubject(fallback, convention);
+  if (!lint.valid) {
+    appendEvent({
+      runId: run.id,
+      type: 'run.commit_subject_lint_failed',
+      level: 'notice',
+      message: 'Generated commit subject did not pass the active convention; committing it anyway.',
+      payload: { subject: fallback, errors: lint.errors },
+    });
+  }
+  return fallback;
+}
+
+/** One attempt, then one retry with the linter's errors fed back in. Null falls back. */
+async function tryAiCommitSubject(
+  transformer: TransformerProvider,
+  rawSubject: string,
+  kind: 'run' | 'landing_repair',
+  convention: CommitConvention,
+  runId: string,
+): Promise<string | null> {
+  let priorErrors: readonly string[] | undefined;
+
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      const result = await transformer.formatCommitMessage!({
+        subject: rawSubject,
+        kind,
+        allowedTypes: convention.types,
+        priorErrors,
+      });
+      const lint = lintCommitSubject(result.subject, convention);
+      if (lint.valid) return result.subject;
+      priorErrors = lint.errors;
+    } catch (err) {
+      appendEvent({
+        runId,
+        type: 'run.commit_subject_ai_failed',
+        level: 'notice',
+        message: `${transformer.label} could not write a commit subject (${errorMessage(err)}); using the deterministic prefix instead.`,
+        payload: { provider: transformer.id, attempt },
+      });
+      return null;
+    }
+  }
+  return null;
 }
 
 export interface AgentRunOptions {
@@ -1312,10 +1468,11 @@ async function executeLanding(
       return;
     }
 
-    const completed = await completeMergeIfResolved(landing.worktreePath, {
-      name: 'Dev Cockpit',
-      email: 'dev-cockpit@localhost',
-    });
+    const completed = await completeMergeIfResolved(
+      landing.worktreePath,
+      await resolveCommitAuthorOverride(project),
+      modelCoAuthorTrailer(run.agentProvider, modelForAgent(run.agentProvider, run, project, profile)),
+    );
     if (!completed.completed) {
       await finishLandingConflict(run.id, completed.conflicts, {
         run,
@@ -1331,6 +1488,8 @@ async function executeLanding(
       completed.commitSha ?? (await resolveCommit(landing.worktreePath, 'HEAD'));
     const manualRepairCommit = await commitLandingWorktreeChangesIfDirty({
       run,
+      project,
+      profile,
       landingPath: landing.worktreePath,
       landingBranch: landing.branch,
       reason: 'Manual landing worktree changes were present before validation.',
@@ -1421,6 +1580,8 @@ async function executeLanding(
 
       await commitLandingWorktreeChangesIfDirty({
         run,
+        project,
+        profile,
         landingPath: landing.worktreePath,
         landingBranch: landing.branch,
         reason: 'AI landing repair after validation failure.',
@@ -2737,12 +2898,32 @@ async function ensureRunBranchCommitted(
   );
 
   if (hasInspectableWorktree && run.worktreePath && (await isDirty(run.worktreePath))) {
-    const message =
-      commitMessage?.trim() || `${run.title}\n\nApproved by Dev Cockpit run ${run.id}.`;
-    commitSha = await commitAll(run.worktreePath, message, {
-      name: 'Dev Cockpit',
-      email: 'dev-cockpit@localhost',
-    });
+    // An explicit message is the user's own words, typed in the approve
+    // dialog — left exactly as given, never reformatted. Only the default
+    // (app-generated) subject goes through Conventional Commits formatting.
+    const explicit = commitMessage?.trim();
+    let message: string;
+    if (explicit) {
+      message = explicit;
+    } else {
+      const subject = project.conventionalCommits
+        ? await buildCommitSubject(run.title, 'feat', 'run', run, project)
+        : run.title;
+      message = `${subject}\n\nApproved by Dev Cockpit run ${run.id}.`;
+    }
+
+    const profile = getProfile(run.profile);
+    const trailer = modelCoAuthorTrailer(
+      run.agentProvider,
+      modelForAgent(run.agentProvider, run, project, profile),
+    );
+    message = withCoAuthorTrailer(message, trailer);
+
+    commitSha = await commitAll(
+      run.worktreePath,
+      message,
+      await resolveCommitAuthorOverride(project),
+    );
     appendEvent({
       runId: run.id,
       type: 'run.commit_created',
@@ -2895,10 +3076,14 @@ async function refreshLandingFromTargetIfNeeded(input: {
     return { result: conflictResolution, targetCommit, commitSha: null };
   }
 
-  const completed = await completeMergeIfResolved(input.landingPath, {
-    name: 'Dev Cockpit',
-    email: 'dev-cockpit@localhost',
-  });
+  const completed = await completeMergeIfResolved(
+    input.landingPath,
+    await resolveCommitAuthorOverride(input.project),
+    modelCoAuthorTrailer(
+      input.run.agentProvider,
+      modelForAgent(input.run.agentProvider, input.run, input.project, input.profile),
+    ),
+  );
   if (!completed.completed) {
     await finishLandingConflict(input.run.id, completed.conflicts, {
       run: input.run,
@@ -2974,6 +3159,8 @@ async function tryRepairLandingValidation(input: {
 
 async function commitLandingWorktreeChangesIfDirty(input: {
   run: RunView;
+  project: ProjectView;
+  profile: ExecutionProfile;
   landingPath: string;
   landingBranch: string;
   reason: string;
@@ -2981,15 +3168,34 @@ async function commitLandingWorktreeChangesIfDirty(input: {
   if (await mergeInProgress(input.landingPath)) return null;
   if (!(await isDirty(input.landingPath))) return null;
 
-  const message = `Repair landing for ${input.run.title}
+  const subject = input.project.conventionalCommits
+    ? await buildCommitSubject(
+        `Repair landing for ${input.run.title}`,
+        'chore',
+        'landing_repair',
+        input.run,
+        input.project,
+      )
+    : `Repair landing for ${input.run.title}`;
+
+  let message = `${subject}
 
 ${input.reason}
 
 Dev Cockpit run ${input.run.id}.`;
-  const commitSha = await commitAll(input.landingPath, message, {
-    name: 'Dev Cockpit',
-    email: 'dev-cockpit@localhost',
-  });
+  message = withCoAuthorTrailer(
+    message,
+    modelCoAuthorTrailer(
+      input.run.agentProvider,
+      modelForAgent(input.run.agentProvider, input.run, input.project, input.profile),
+    ),
+  );
+
+  const commitSha = await commitAll(
+    input.landingPath,
+    message,
+    await resolveCommitAuthorOverride(input.project),
+  );
   appendEvent({
     runId: input.run.id,
     type: 'landing.repair_committed',
@@ -3709,10 +3915,10 @@ export async function approveRun(runId: string, options: ApproveOptions = {}): P
   let commitSha: string | null = run.commitSha;
 
   if (options.createCommit ?? true) {
-    const message =
-      options.commitMessage?.trim() ||
-      `${run.title}\n\nImplemented by Dev Cockpit run ${run.id}.`;
-    const committed = await ensureRunBranchCommitted(run, project, message);
+    // No message here means "use the default" — ensureRunBranchCommitted
+    // builds and formats that itself. An explicit message is passed through
+    // untouched, exactly as the user typed it.
+    const committed = await ensureRunBranchCommitted(run, project, options.commitMessage);
     commitSha = committed.commitSha;
   }
 

@@ -6,7 +6,7 @@ import path from 'node:path';
 
 import { AppError } from '@/core/errors';
 import { ensureDir, isInside, landingsDir } from '@/core/paths';
-import { currentBranch, git, isDirty, refExists, resolveCommit } from './git';
+import { currentBranch, git, isDirty, refExists, resolveCommit, type GitIdentity } from './git';
 
 export interface LandingWorktreeInput {
   repositoryPath: string;
@@ -234,9 +234,36 @@ export async function refMergedIntoLanding(
   return res.exitCode === 0;
 }
 
+/**
+ * Appends a trailer to the merge commit message a `--no-edit` commit is
+ * about to reuse.
+ *
+ * A worktree has its own `MERGE_MSG`, separate from the main repository's —
+ * `git rev-parse --git-dir` resolves to that worktree's own admin directory
+ * (e.g. `.git/worktrees/<name>`) rather than the shared `.git` — so editing
+ * the file at that path affects only this worktree's pending merge commit.
+ */
+async function appendMergeMessageTrailer(worktreePath: string, trailer: string): Promise<void> {
+  const gitDirRes = await git(worktreePath, ['rev-parse', '--git-dir'], { allowFailure: true });
+  if (gitDirRes.exitCode !== 0) return;
+  const gitDir = path.isAbsolute(gitDirRes.stdout.trim())
+    ? gitDirRes.stdout.trim()
+    : path.join(worktreePath, gitDirRes.stdout.trim());
+  const mergeMsgPath = path.join(gitDir, 'MERGE_MSG');
+
+  let current: string;
+  try {
+    current = await fsp.readFile(mergeMsgPath, 'utf8');
+  } catch {
+    return; // No MERGE_MSG to amend; leave the default subject alone.
+  }
+  await fsp.writeFile(mergeMsgPath, `${current.trimEnd()}\n\n${trailer}\n`);
+}
+
 export async function completeMergeIfResolved(
   worktreePath: string,
-  author: { name: string; email: string },
+  author: GitIdentity | null,
+  coAuthorTrailer?: string | null,
 ): Promise<{
   completed: boolean;
   conflicts: string[];
@@ -257,17 +284,15 @@ export async function completeMergeIfResolved(
 
   if (await mergeInProgress(worktreePath)) {
     await git(worktreePath, ['add', '--all']);
+    if (coAuthorTrailer) {
+      await appendMergeMessageTrailer(worktreePath, coAuthorTrailer);
+    }
+    const identityArgs = author
+      ? ['-c', `user.name=${author.name}`, '-c', `user.email=${author.email}`]
+      : [];
     const res = await git(
       worktreePath,
-      [
-        '-c',
-        `user.name=${author.name}`,
-        '-c',
-        `user.email=${author.email}`,
-        'commit',
-        '--no-edit',
-        '--no-verify',
-      ],
+      [...identityArgs, 'commit', '--no-edit', '--no-verify'],
       { allowFailure: true },
     );
     if (res.exitCode !== 0) {

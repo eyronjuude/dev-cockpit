@@ -88,3 +88,31 @@ Agent's closing message:
 ${input.agentText}
 """`;
 }
+
+export const COMMIT_MESSAGE_SYSTEM_PROMPT = `You write a single Conventional Commits-style commit subject line.
+
+Rules:
+- Output exactly one line: "type: description" or "type(scope): description".
+- The type must be one of the allowed types given to you. Never invent one.
+- Description is imperative mood, lowercase, no trailing period, under 70 characters.
+- No preamble, no quotes, no code fences, no body — the subject line only.`;
+
+export function commitMessageUserPrompt(input: {
+  subject: string;
+  kind: 'run' | 'landing_repair';
+  allowedTypes: readonly string[];
+  priorErrors?: readonly string[];
+}): string {
+  const context =
+    input.kind === 'run'
+      ? 'This commit lands the change a coding agent just implemented.'
+      : "This commit is Dev Cockpit's own repair of the landing worktree, not the requested feature.";
+  const retry = input.priorErrors?.length
+    ? `\n\nThe previous attempt failed: ${input.priorErrors.join('; ')}. Fix it.`
+    : '';
+
+  return `${context}
+
+Working title: ${input.subject}
+Allowed types: ${input.allowedTypes.join(', ')}${retry}`;
+}

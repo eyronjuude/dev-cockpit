@@ -104,6 +104,18 @@ export function ProjectForm({
   const [cleanUpWorktreeOnFinish, setCleanUpWorktreeOnFinish] = useState(
     existing?.cleanUpWorktreeOnFinish ?? true,
   );
+  const [conventionalCommits, setConventionalCommits] = useState(
+    existing?.conventionalCommits ?? true,
+  );
+  const [commitConvention, setCommitConvention] = useState(
+    existing?.commitConvention ?? 'conventional',
+  );
+  const [customCommitTypes, setCustomCommitTypes] = useState(
+    (existing?.customCommitTypes ?? []).join('\n'),
+  );
+  const [aiFormatsCommitMessages, setAiFormatsCommitMessages] = useState(
+    existing?.aiFormatsCommitMessages ?? false,
+  );
   // Held as strings so clearing the box does not snap back to a number the
   // user did not type. Parsed on submit; a blank falls back to the default.
   const [worktreeRetentionDays, setWorktreeRetentionDays] = useState(
@@ -260,6 +272,10 @@ export function ProjectForm({
       reviewBlocksReady,
       allowAgentCommit,
       cleanUpWorktreeOnFinish,
+      conventionalCommits,
+      commitConvention,
+      customCommitTypes: splitLines(customCommitTypes),
+      aiFormatsCommitMessages,
       worktreeRetentionDays: retentionOr(worktreeRetentionDays, DEFAULT_WORKTREE_RETENTION_DAYS),
       artifactRetentionDays: retentionOr(artifactRetentionDays, DEFAULT_ARTIFACT_RETENTION_DAYS),
       agentModel: agentModel || null,
@@ -674,6 +690,55 @@ export function ProjectForm({
             label="Remove a run's worktrees once it lands or is rejected"
             hint="Never forces: a worktree with uncommitted changes, or a branch with unmerged commits, is kept and the reason recorded."
           />
+          <Toggle
+            checked={conventionalCommits}
+            onChange={setConventionalCommits}
+            label="Format Dev Cockpit's own commits as Conventional Commits"
+            hint="Prefixes the run and landing-repair commit subjects with a type, e.g. feat: or chore:. Merge commits are left as git generates them. A subject that already looks conventional is left alone."
+          />
+          {conventionalCommits ? (
+            <div className="ml-6 space-y-3 border-l border-line pl-3">
+              <div>
+                <label className="label" htmlFor="commit-convention">
+                  Type vocabulary
+                </label>
+                <select
+                  id="commit-convention"
+                  className="select"
+                  value={commitConvention}
+                  onChange={(e) => setCommitConvention(e.target.value)}
+                >
+                  <option value="conventional">Conventional Commits (feat, fix, chore, …)</option>
+                  <option value="custom">Custom</option>
+                </select>
+              </div>
+              {commitConvention === 'custom' ? (
+                <div>
+                  <label className="label" htmlFor="custom-commit-types">
+                    Custom commit types
+                  </label>
+                  <textarea
+                    id="custom-commit-types"
+                    className="textarea input-mono"
+                    rows={3}
+                    value={customCommitTypes}
+                    placeholder={'feature\nfixup\nmaint'}
+                    onChange={(e) => setCustomCommitTypes(e.target.value)}
+                  />
+                  <p className="hint">
+                    One per line. Replaces the built-in type list; left empty, the built-in list
+                    is used instead.
+                  </p>
+                </div>
+              ) : null}
+              <Toggle
+                checked={aiFormatsCommitMessages}
+                onChange={setAiFormatsCommitMessages}
+                label="Let the project's transformer write the commit subject"
+                hint="Optional and off by default: costs one extra model call per commit. Falls back to the deterministic type prefix if the transformer is unavailable or its subject doesn't fit the convention."
+              />
+            </div>
+          ) : null}
 
           <div className="grid gap-3 sm:grid-cols-2">
             <div>

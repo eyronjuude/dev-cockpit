@@ -87,6 +87,27 @@ export const projects = sqliteTable(
     /** Extra directories the agent may touch, newline-separated. */
     agentAddDirs: text('agent_add_dirs'),
 
+    /**
+     * Whether Dev Cockpit's own generated commits (run approval, landing
+     * repair) get a Conventional Commits type prefix. On by default; merge
+     * commits are never touched regardless of this setting.
+     */
+    conventionalCommits: integer('conventional_commits', { mode: 'boolean' })
+      .notNull()
+      .default(true),
+    /** `'conventional'` uses the built-in type list; `'custom'` uses the one below. */
+    commitConvention: text('commit_convention').notNull().default('conventional'),
+    /** The type allow-list when `commitConvention` is `'custom'`, newline-separated. */
+    customCommitTypes: text('custom_commit_types'),
+    /**
+     * Asks the project's transformer to write the commit subject instead of
+     * the fixed feat/chore fallback. Off by default: an extra model call per
+     * commit is a real cost/latency trade-off, not something to default on.
+     */
+    aiFormatsCommitMessages: integer('ai_formats_commit_messages', { mode: 'boolean' })
+      .notNull()
+      .default(false),
+
     createdAt: text('created_at').notNull().default(now),
     updatedAt: text('updated_at').notNull().default(now),
     archivedAt: text('archived_at'),

@@ -65,6 +65,24 @@ export interface ProviderAvailability {
   detail: string;
 }
 
+export interface CommitMessageInput {
+  /** The run/repair's own subject before formatting, e.g. the run's title. */
+  subject: string;
+  /** Sets tone: a landed feature/fix vs. Dev Cockpit's own repair action. */
+  kind: 'run' | 'landing_repair';
+  /** The active convention's allowed types, so the model only picks from real options. */
+  allowedTypes: readonly string[];
+  /** Present only on the one retry, so the model can correct itself. */
+  priorErrors?: readonly string[];
+  signal?: AbortSignal;
+}
+
+export interface CommitMessageResult {
+  subject: string;
+  provider: string;
+  durationMs: number;
+}
+
 export interface TransformerProvider {
   readonly id: string;
   readonly label: string;
@@ -77,4 +95,7 @@ export interface TransformerProvider {
 
   /** Optional: providers that cannot summarise may omit this. */
   summariseOutcome?(input: SummariseInput): Promise<SummariseResult>;
+
+  /** Optional: providers that cannot author a commit subject may omit this. */
+  formatCommitMessage?(input: CommitMessageInput): Promise<CommitMessageResult>;
 }
