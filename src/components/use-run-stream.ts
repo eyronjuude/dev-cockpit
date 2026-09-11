@@ -39,6 +39,8 @@ export interface RunSnapshot {
   expiry: ExpiryPlan;
   /** Implementation providers the user may choose for the next agent pass. */
   implementationAgents: ImplementationAgentOption[];
+  /** Transformers the user may choose for this and later iterations' summaries. */
+  transformers: ImplementationAgentOption[];
   /**
    * Whether the attachment list can still be added to or removed from.
    *

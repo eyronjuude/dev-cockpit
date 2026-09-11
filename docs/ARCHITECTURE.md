@@ -414,12 +414,40 @@ a missed notification costs nothing.
 
 ## Implementation agents
 
-The run stores one preferred `agentProvider`, defaulting to `claude-code` for
-new runs unless the user chooses another implementation provider. When a
-fallback provider successfully implements the run, the run's provider is moved
-to that agent so later change requests do not try to resume a session with the
-wrong CLI. Provider-specific model names are only forwarded to the matching
-adapter.
+The run stores one preferred `agentProvider`, defaulting to a project's own
+`defaultAgentProvider` when one is set, or `claude-code` otherwise, unless the
+user chooses another implementation provider for that run. When a fallback
+provider successfully implements the run, the run's provider is moved to that
+agent so later change requests do not try to resume a session with the wrong
+CLI. Provider-specific model names are only forwarded to the matching adapter.
+
+### Switching agents between iterations
+
+"Request changes", "Retry", "Retry iteration" and "Force restart" all accept
+an optional `agentProvider`/`agentModel` override (`AgentRunOptions` /
+`RequestChangesOptions`, `orchestrator.ts`), applied by `applyAgentOverride`
+before the next iteration starts — this is how one iteration can run on
+Codex CLI and the next on Claude Code, or vice versa. Switching provider
+clears `agentSessionId`: a native CLI session belongs to one vendor's process
+and cannot be resumed by another. The replacement agent still starts with
+full context, though — the next prompt is built with the previous iteration's
+closing message spliced in (`buildChangeRequestPrompt`) whenever there is no
+session to resume, on top of the same worktree, git history, and stored spec
+every iteration already shares. Nothing about the task itself is lost; only
+the CLI's own turn-by-turn memory is.
+
+The transformer (below) has the same override shape (`transformerProvider`)
+but none of the session cost: every transformer call is stateless, so
+`applyTransformerOverride` just updates `runs.transformer_provider` and the
+next call — a spec, a summary, a commit subject — uses the new provider with
+nothing to carry over.
+
+A project's `defaultAgentProvider` / `defaultTransformerProvider` /
+`defaultReviewerProvider` (all nullable; null follows the built-in preference
+order) only seed what New Task preselects and what `createRun` falls back to
+when a caller names no provider. They do not constrain the per-run and
+per-iteration overrides above — a project default is a starting point, not a
+ceiling.
 
 ### Claude Code integration
 

@@ -19,6 +19,8 @@ const schema = z.object({
   /** Implementation agent/model for this next pass. */
   agentProvider: z.string().trim().max(60).optional(),
   agentModel: z.string().trim().max(120).nullable().optional(),
+  /** Transformer for this and later iterations' summaries. */
+  transformerProvider: z.string().trim().max(60).optional(),
 });
 
 /**
@@ -33,9 +35,11 @@ export function POST(request: Request, { params }: Params) {
   return handle(async () => {
     assertLocalRequest(request);
     const { runId } = await params;
-    const { feedback, mode, agentProvider, agentModel } = schema.parse(await readJson(request));
+    const { feedback, mode, agentProvider, agentModel, transformerProvider } = schema.parse(
+      await readJson(request),
+    );
     const run = requireRun(runId);
-    requestChanges(run.id, feedback, { mode, agentProvider, agentModel });
+    requestChanges(run.id, feedback, { mode, agentProvider, agentModel, transformerProvider });
 
     const selectedProvider = agentProvider?.trim() || run.agentProvider;
     return {

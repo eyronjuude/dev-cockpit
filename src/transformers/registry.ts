@@ -30,6 +30,16 @@ export function listTransformers(): readonly TransformerProvider[] {
   return PROVIDERS;
 }
 
+export interface TransformerOption {
+  id: string;
+  label: string;
+}
+
+/** The plain id/label list a run screen offers for a mid-run transformer switch. */
+export function transformerOptions(): TransformerOption[] {
+  return PROVIDERS.map((provider) => ({ id: provider.id, label: provider.label }));
+}
+
 export function getTransformer(id: string | null | undefined): TransformerProvider {
   if (!id) return PROVIDERS[0] as TransformerProvider;
   return PROVIDERS.find((p) => p.id === id) ?? (PROVIDERS[0] as TransformerProvider);

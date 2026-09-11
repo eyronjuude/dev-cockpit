@@ -11,6 +11,7 @@ import { getRunPreview } from '@/services/previews';
 import { requireProject, retentionPolicy } from '@/services/projects';
 import { assessReadiness, requireRun } from '@/services/runs';
 import { runWorktrees } from '@/services/worktrees';
+import { transformerOptions } from '@/transformers/registry';
 
 export const dynamic = 'force-dynamic';
 
@@ -45,6 +46,7 @@ export function GET(_request: Request, { params }: Params) {
       // cached one would be wrong the moment they did.
       expiry: planExpiry(run, retentionPolicy(project)),
       implementationAgents: implementationAgentOptions(),
+      transformers: transformerOptions(),
       attachmentsMutable: canModifyAttachments(runId) && !active,
       // Needed so the scorecard can distinguish a kind the project never
       // configured from one that is configured but has not run yet.

@@ -2,11 +2,19 @@ import Link from 'next/link';
 
 import { advisorStatuses } from '@/advisors/registry';
 import { ProjectForm } from '@/components/project-form';
+import { implementationAgentStatuses } from '@/orchestrator/orchestrator';
+import { reviewerStatuses } from '@/reviewers/registry';
+import { transformerStatuses } from '@/transformers/registry';
 
 export const dynamic = 'force-dynamic';
 
 export default async function NewProjectPage() {
-  const advisors = await advisorStatuses();
+  const [advisors, implementers, transformers, reviewers] = await Promise.all([
+    advisorStatuses(),
+    implementationAgentStatuses(),
+    transformerStatuses(),
+    reviewerStatuses(),
+  ]);
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-6">
@@ -25,7 +33,12 @@ export default async function NewProjectPage() {
         </p>
       </header>
 
-      <ProjectForm advisors={advisors} />
+      <ProjectForm
+        advisors={advisors}
+        implementers={implementers}
+        transformers={transformers}
+        reviewers={reviewers}
+      />
     </div>
   );
 }

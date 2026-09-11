@@ -11,6 +11,7 @@ type Params = { params: Promise<{ runId: string }> };
 const schema = z.object({
   agentProvider: z.string().trim().max(60).optional(),
   agentModel: z.string().trim().max(120).nullable().optional(),
+  transformerProvider: z.string().trim().max(60).optional(),
 });
 
 /** Re-runs the run's last implementation prompt, unchanged. */

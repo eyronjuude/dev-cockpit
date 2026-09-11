@@ -61,10 +61,19 @@ function retentionOr(value: string, fallback: number): number {
 export function ProjectForm({
   existing,
   advisors = [],
+  implementers = [],
+  transformers = [],
+  reviewers = [],
 }: {
   existing?: ProjectView;
   /** Setup advisors that can draft the fields. Empty hides the control. */
   advisors?: ProviderOption[];
+  /** Implementation agents New Task can offer. Empty hides the default picker. */
+  implementers?: ProviderOption[];
+  /** Transformers New Task can offer. Empty hides the default picker. */
+  transformers?: ProviderOption[];
+  /** Reviewers New Task can offer. Empty hides the default picker. */
+  reviewers?: ProviderOption[];
 }) {
   const router = useRouter();
   const editing = existing !== undefined;
@@ -118,6 +127,17 @@ export function ProjectForm({
   const [agentModel, setAgentModel] = useState(existing?.agentModel ?? '');
   const [agentPermissionMode, setAgentPermissionMode] = useState<string>(
     existing?.agentPermissionMode ?? DEFAULT_AGENT_PERMISSION_MODE,
+  );
+  // Empty string means "no project default" — New Task falls back to its own
+  // built-in preference order, exactly what an unset project does today.
+  const [defaultAgentProvider, setDefaultAgentProvider] = useState(
+    existing?.defaultAgentProvider ?? '',
+  );
+  const [defaultTransformerProvider, setDefaultTransformerProvider] = useState(
+    existing?.defaultTransformerProvider ?? '',
+  );
+  const [defaultReviewerProvider, setDefaultReviewerProvider] = useState(
+    existing?.defaultReviewerProvider ?? '',
   );
 
   // Set on the server, so it can disagree with whatever the select shows.
@@ -408,6 +428,9 @@ export function ProjectForm({
       artifactRetentionDays: retentionOr(artifactRetentionDays, DEFAULT_ARTIFACT_RETENTION_DAYS),
       agentModel: agentModel || null,
       agentPermissionMode,
+      defaultAgentProvider: defaultAgentProvider || null,
+      defaultTransformerProvider: defaultTransformerProvider || null,
+      defaultReviewerProvider: defaultReviewerProvider || null,
       aiConfigMode,
       aiConfigProvider: advisor === 'none' ? null : advisor,
       preview: {
@@ -1149,6 +1172,78 @@ export function ProjectForm({
           <h2 className="panel-title">Implementation agent</h2>
         </div>
         <div className="grid gap-3 px-3.5 py-3 sm:grid-cols-2">
+          {implementers.length > 0 ? (
+            <div>
+              <label className="label" htmlFor="default-implementer">
+                Default implementer
+              </label>
+              <select
+                id="default-implementer"
+                className="select"
+                value={defaultAgentProvider}
+                onChange={(e) => setDefaultAgentProvider(e.target.value)}
+              >
+                <option value="">Follow New Task&rsquo;s built-in preference order</option>
+                {implementers.map((option) => (
+                  <option key={option.id} value={option.id} disabled={!option.available}>
+                    {option.label}
+                    {option.available ? '' : ' — unavailable'}
+                  </option>
+                ))}
+              </select>
+              <p className="hint">
+                What New Task preselects for this project. A run or a single iteration can
+                still choose a different agent — this only sets the starting point.
+              </p>
+            </div>
+          ) : null}
+          {transformers.length > 0 ? (
+            <div>
+              <label className="label" htmlFor="default-transformer">
+                Default transformer
+              </label>
+              <select
+                id="default-transformer"
+                className="select"
+                value={defaultTransformerProvider}
+                onChange={(e) => setDefaultTransformerProvider(e.target.value)}
+              >
+                <option value="">Follow New Task&rsquo;s built-in preference order</option>
+                {transformers.map((option) => (
+                  <option key={option.id} value={option.id} disabled={!option.available}>
+                    {option.label}
+                    {option.available ? '' : ' — unavailable'}
+                  </option>
+                ))}
+              </select>
+              <p className="hint">
+                Rewrites the request into a spec and the implementer&rsquo;s closing message into
+                plain language. A run can still switch transformers mid-run.
+              </p>
+            </div>
+          ) : null}
+          {reviewers.length > 0 ? (
+            <div>
+              <label className="label" htmlFor="default-reviewer">
+                Default reviewer
+              </label>
+              <select
+                id="default-reviewer"
+                className="select"
+                value={defaultReviewerProvider}
+                onChange={(e) => setDefaultReviewerProvider(e.target.value)}
+              >
+                <option value="">Follow New Task&rsquo;s built-in preference order</option>
+                {reviewers.map((option) => (
+                  <option key={option.id} value={option.id} disabled={!option.available}>
+                    {option.label}
+                    {option.available ? '' : ' — unavailable'}
+                  </option>
+                ))}
+              </select>
+              <p className="hint">Read-only code review. Optional; off by default.</p>
+            </div>
+          ) : null}
           <div>
             <label className="label" htmlFor="agent-model">
               Model

@@ -29,19 +29,39 @@ export default async function NewTaskPage({
   // Default to whatever is actually usable on this machine: an optional layer
   // that cannot run should not be preselected. Preference order matters —
   // for the reviewer, a different vendor from the implementer is worth more
-  // than a familiar one, so codex-cli is tried first.
+  // than a familiar one, so codex-cli is tried first. A project's own saved
+  // default (set in its settings) is tried before any of that: it is a
+  // deliberate choice, and the built-in order only stands in for one that was
+  // never made.
   const firstAvailable = (
     candidates: readonly { id: string; available: boolean }[],
     order: readonly string[],
-  ): string => order.find((id) => candidates.some((c) => c.id === id && c.available)) ?? 'none';
+    projectDefault?: string | null,
+  ): string => {
+    const preferred = projectDefault?.trim();
+    if (preferred && candidates.some((c) => c.id === preferred && c.available)) return preferred;
+    return order.find((id) => candidates.some((c) => c.id === id && c.available)) ?? 'none';
+  };
 
-  const preferredImplementer = firstAvailable(implementers, ['claude-code', 'codex-code']);
+  const preferredImplementer = firstAvailable(
+    implementers,
+    ['claude-code', 'codex-code'],
+    project.defaultAgentProvider,
+  );
   const defaultImplementer =
     preferredImplementer === 'none'
       ? (implementers[0]?.id ?? 'claude-code')
       : preferredImplementer;
-  const defaultTransformer = firstAvailable(transformers, ['codex-cli', 'claude-cli']);
-  const defaultReviewer = firstAvailable(reviewers, ['codex-cli', 'claude-cli']);
+  const defaultTransformer = firstAvailable(
+    transformers,
+    ['codex-cli', 'claude-cli'],
+    project.defaultTransformerProvider,
+  );
+  const defaultReviewer = firstAvailable(
+    reviewers,
+    ['codex-cli', 'claude-cli'],
+    project.defaultReviewerProvider,
+  );
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-6">

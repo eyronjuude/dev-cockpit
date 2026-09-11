@@ -121,7 +121,7 @@ import {
   type RunView,
 } from '@/services/runs';
 import { isUnresolvedBackgroundWait } from '@/transformers/prompts';
-import { getTransformer } from '@/transformers/registry';
+import { getTransformer, listTransformers } from '@/transformers/registry';
 import type { TransformerProvider } from '@/transformers/types';
 import { formatDuration, runValidation, type ValidationRunSummary } from '@/validation/engine';
 import { effectivePermissionMode, getWorkMode, type WorkModeBehaviour } from './modes';
@@ -709,6 +709,13 @@ async function tryAiCommitSubject(
 export interface AgentRunOptions {
   agentProvider?: string;
   agentModel?: string | null;
+  /**
+   * Run this and every later iteration's summary/commit-subject calls with a
+   * different transformer. Unlike the implementer there is no session to
+   * lose: every transformer call is stateless, so switching mid-run costs
+   * nothing but takes effect from the next call onward.
+   */
+  transformerProvider?: string;
 }
 
 interface AgentOverride {
@@ -772,6 +779,56 @@ function applyAgentOverride(
   return requireRun(run.id);
 }
 
+/**
+ * Validates and trims a transformer override, or returns null for "no change".
+ *
+ * `getTransformer` fails open — an unknown id silently falls back to the
+ * first registered provider (`transformers/registry.ts`) — which is the
+ * right behaviour for a stored value that predates a removed provider, but
+ * the wrong one for a value someone just typed: a bad id should be rejected,
+ * not quietly swapped for something else. `getAgent` already throws for the
+ * implementer for the same reason; this checks explicitly since
+ * `getTransformer` will not.
+ */
+function normaliseTransformerOverride(options: { transformerProvider?: string }): string | null {
+  const provider = options.transformerProvider?.trim();
+  if (!provider) return null;
+  if (provider !== 'none' && !listTransformers().some((t) => t.id === provider)) {
+    throw new AppError(`Unknown transformer: ${provider}`);
+  }
+  return provider;
+}
+
+/**
+ * Switches the transformer a run uses from the next call onward.
+ *
+ * No session to clear: every transformer call (`transformRequest`,
+ * `summariseOutcome`, `formatCommitMessage`) takes its whole input as plain
+ * arguments, and `phaseSummarise` re-reads `run.transformerProvider` fresh
+ * before every iteration's summary. So unlike `applyAgentOverride`, this is
+ * pure bookkeeping — there is nothing provider-specific to lose.
+ */
+function applyTransformerOverride(
+  run: RunView,
+  toProvider: string | null | undefined,
+  reason: string,
+): RunView {
+  if (!toProvider || toProvider === run.transformerProvider) return run;
+
+  const fromProvider = run.transformerProvider;
+  updateRunFields(run.id, { transformerProvider: toProvider });
+
+  appendEvent({
+    runId: run.id,
+    type: 'run.transformer_changed',
+    level: 'notice',
+    message: `Transformer changed from ${fromProvider} to ${toProvider}`,
+    payload: { fromProvider, toProvider, reason },
+  });
+
+  return requireRun(run.id);
+}
+
 /* ------------------------------------------------------------------ *
  * Start
  * ------------------------------------------------------------------ */
@@ -786,8 +843,9 @@ function applyAgentOverride(
  */
 export function startRun(runId: string, options: AgentRunOptions = {}): void {
   const agentOverride = normaliseAgentOverride(options);
+  const transformerOverride = normaliseTransformerOverride(options);
   begin(runId, 'preparing', (signal) =>
-    execute(runId, signal, { kind: 'initial', agentOverride }),
+    execute(runId, signal, { kind: 'initial', agentOverride, transformerOverride }),
   );
 }
 
@@ -804,6 +862,8 @@ export interface RequestChangesOptions {
   agentProvider?: string;
   /** Run the next implementation attempt with a different model. Null uses the provider default. */
   agentModel?: string | null;
+  /** Write this and later iterations' summaries with a different transformer. */
+  transformerProvider?: string;
 }
 
 /** Continues an existing run with user feedback, resuming the agent session. */
@@ -815,6 +875,7 @@ export function requestChanges(
   const trimmed = feedback.trim();
   if (!trimmed) throw new AppError('Describe what should change.');
   const agentOverride = normaliseAgentOverride(options);
+  const transformerOverride = normaliseTransformerOverride(options);
 
   begin(runId, 'implementing', (signal) =>
     execute(runId, signal, {
@@ -822,6 +883,7 @@ export function requestChanges(
       feedback: trimmed,
       switchTo: options.mode ?? null,
       agentOverride,
+      transformerOverride,
     }),
   );
 }
@@ -1021,6 +1083,13 @@ export function retryRun(runId: string, options: AgentRunOptions = {}): RetryPla
       { code: 'wrong_stage' },
     );
   }
+  const transformerOverride = normaliseTransformerOverride(options);
+  if (transformerOverride && plan.stage !== 'prepare' && plan.stage !== 'implement') {
+    throw new AppError(
+      'This retry does not run a new iteration, so there is no transformer summary to switch.',
+      { code: 'wrong_stage' },
+    );
+  }
   const selectedProvider = agentOverride?.provider ?? run.agentProvider;
   const resumesSession = plan.resumesSession && selectedProvider === run.agentProvider;
   const appliedPlan: RetryPlan = { ...plan, resumesSession };
@@ -1056,7 +1125,7 @@ export function retryRun(runId: string, options: AgentRunOptions = {}): RetryPla
       break;
     case 'implement':
       begin(runId, 'implementing', (signal) =>
-        execute(runId, signal, { kind: 'retry_iteration', agentOverride }),
+        execute(runId, signal, { kind: 'retry_iteration', agentOverride, transformerOverride }),
       );
       break;
     case 'validate':
@@ -1085,6 +1154,7 @@ export function retryIteration(
 ): { ordinal: number; resuming: boolean } {
   const run = requireRun(runId);
   const agentOverride = normaliseAgentOverride(options);
+  const transformerOverride = normaliseTransformerOverride(options);
 
   if (isRunActive(runId)) {
     throw new AppError(
@@ -1128,7 +1198,7 @@ export function retryIteration(
   });
 
   begin(runId, 'implementing', (signal) =>
-    execute(runId, signal, { kind: 'retry_iteration', agentOverride }),
+    execute(runId, signal, { kind: 'retry_iteration', agentOverride, transformerOverride }),
   );
 
   return { ordinal: iteration.ordinal, resuming };
@@ -1166,6 +1236,7 @@ export async function restartRun(
   options: AgentRunOptions = {},
 ): Promise<RestartResult> {
   normaliseAgentOverride(options);
+  normaliseTransformerOverride(options);
   const run = requireRun(runId);
   const project = requireProject(run.projectId);
 
@@ -1249,7 +1320,10 @@ async function nextAttemptBranch(repositoryPath: string, runId: string): Promise
   );
 }
 
-type ExecuteMode = { agentOverride?: AgentOverride | null } & (
+type ExecuteMode = {
+  agentOverride?: AgentOverride | null;
+  transformerOverride?: string | null;
+} & (
   | { kind: 'initial' }
   | { kind: 'change_request'; feedback: string; switchTo: ResolvedWorkMode | null }
   | { kind: 'retry_iteration' }
@@ -1267,6 +1341,11 @@ async function execute(runId: string, signal: AbortSignal, mode: ExecuteMode): P
     run = applyAgentOverride(
       run,
       mode.agentOverride,
+      mode.kind === 'initial' ? 'selected for this run' : 'selected for this iteration',
+    );
+    run = applyTransformerOverride(
+      run,
+      mode.transformerOverride,
       mode.kind === 'initial' ? 'selected for this run' : 'selected for this iteration',
     );
 

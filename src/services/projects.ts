@@ -139,6 +139,10 @@ export const createProjectSchema = z.object({
   agentModel: z.string().trim().max(120).nullable().optional(),
   agentPermissionMode: agentPermissionModeSchema.optional(),
   agentAddDirs: z.array(z.string()).optional(),
+  /** Standing default provider for new runs. Null follows the built-in preference order. */
+  defaultAgentProvider: z.string().trim().max(60).nullable().optional(),
+  defaultTransformerProvider: z.string().trim().max(60).nullable().optional(),
+  defaultReviewerProvider: z.string().trim().max(60).nullable().optional(),
   conventionalCommits: z.boolean().optional(),
   commitConvention: z.enum(['conventional', 'custom']).optional(),
   customCommitTypes: z.array(z.string()).optional(),
@@ -239,6 +243,15 @@ export interface ProjectView {
    */
   effectivePermissionMode: string;
   agentAddDirs: string[];
+  /**
+   * Standing defaults for which provider a new run picks for each role. Null
+   * means "no project default" — New Task falls back to the built-in
+   * preference order. A run or iteration may still override its own choice;
+   * this only seeds what a new run starts with.
+   */
+  defaultAgentProvider: string | null;
+  defaultTransformerProvider: string | null;
+  defaultReviewerProvider: string | null;
   /** Whether Dev Cockpit's own generated commits get a Conventional Commits prefix. */
   conventionalCommits: boolean;
   /** `'conventional'` uses the built-in type list; `'custom'` uses `customCommitTypes`. */
@@ -315,6 +328,9 @@ function toProjectView(row: ProjectRow, steps: ValidationStepRow[]): ProjectView
     agentPermissionMode: row.agentPermissionMode,
     effectivePermissionMode: resolvePermissionMode(row.agentPermissionMode),
     agentAddDirs: fromLines(row.agentAddDirs),
+    defaultAgentProvider: row.defaultAgentProvider,
+    defaultTransformerProvider: row.defaultTransformerProvider,
+    defaultReviewerProvider: row.defaultReviewerProvider,
     conventionalCommits: row.conventionalCommits,
     commitConvention: row.commitConvention,
     customCommitTypes: fromLines(row.customCommitTypes),
@@ -488,6 +504,9 @@ export async function createProject(input: CreateProjectInput): Promise<ProjectV
       agentModel: parsed.agentModel ?? null,
       agentPermissionMode: parsed.agentPermissionMode ?? DEFAULT_AGENT_PERMISSION_MODE,
       agentAddDirs: toLines(parsed.agentAddDirs) ?? null,
+      defaultAgentProvider: parsed.defaultAgentProvider ?? null,
+      defaultTransformerProvider: parsed.defaultTransformerProvider ?? null,
+      defaultReviewerProvider: parsed.defaultReviewerProvider ?? null,
       conventionalCommits: parsed.conventionalCommits ?? true,
       commitConvention: parsed.commitConvention ?? 'conventional',
       customCommitTypes: toLines(parsed.customCommitTypes) ?? null,
@@ -609,6 +628,18 @@ export function updateProject(id: string, input: UpdateProjectInput): ProjectVie
       agentModel: parsed.agentModel === undefined ? existing.agentModel : parsed.agentModel,
       agentPermissionMode: parsed.agentPermissionMode ?? existing.agentPermissionMode,
       agentAddDirs: toLines(parsed.agentAddDirs) ?? existing.agentAddDirs.join('\n'),
+      defaultAgentProvider:
+        parsed.defaultAgentProvider === undefined
+          ? existing.defaultAgentProvider
+          : parsed.defaultAgentProvider,
+      defaultTransformerProvider:
+        parsed.defaultTransformerProvider === undefined
+          ? existing.defaultTransformerProvider
+          : parsed.defaultTransformerProvider,
+      defaultReviewerProvider:
+        parsed.defaultReviewerProvider === undefined
+          ? existing.defaultReviewerProvider
+          : parsed.defaultReviewerProvider,
       conventionalCommits: parsed.conventionalCommits ?? existing.conventionalCommits,
       commitConvention: parsed.commitConvention ?? existing.commitConvention,
       customCommitTypes:
