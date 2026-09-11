@@ -56,23 +56,35 @@ async function makeProject(
   });
 }
 
+/**
+ * Seeds validation rows.
+ *
+ * `key` defaults to the kind, which is what the migration does to every row
+ * written before a project could run two steps of one kind — so a test that
+ * names only a kind exercises the same shape those rows have.
+ */
 function seedValidation(
   runId: string,
   attempt: number,
   entries: {
-    kind: import('@/domain/types').ValidationKind;
+    kind: import('@/domain/types').ValidationKind | null;
+    key?: string;
+    label?: string;
     outcome: import('@/domain/types').ValidationOutcome;
     blocking?: boolean;
     exitCode?: number | null;
   }[],
 ) {
   for (const entry of entries) {
+    const key = entry.key ?? entry.kind ?? 'step';
     runs.upsertValidationResult({
-      id: `val_${runId}_${attempt}_${entry.kind}`,
+      id: `val_${runId}_${attempt}_${key}`,
       runId,
       attempt,
+      stepKey: key,
+      stepLabel: entry.label ?? null,
       kind: entry.kind,
-      command: entry.outcome === 'not_configured' ? null : `run ${entry.kind}`,
+      command: entry.outcome === 'not_configured' ? null : `run ${key}`,
       workingDir: null,
       outcome: entry.outcome,
       blocking: entry.blocking ?? true,
@@ -81,11 +93,37 @@ function seedValidation(
   }
 }
 
+/**
+ * Adds one check to a project's pipeline, keyed by its kind.
+ *
+ * Most of these tests predate free-form steps and care only that a kind is
+ * configured, so the key is the kind — which is also what the migration gives
+ * every pipeline that existed before steps did.
+ */
+function configureCheck(
+  projectId: string,
+  input: {
+    kind: import('@/domain/types').ValidationKind;
+    command: string;
+    blocking?: boolean;
+    enabled?: boolean;
+  },
+) {
+  projectsService.upsertValidationStep(projectId, {
+    key: input.kind,
+    label: input.kind,
+    kind: input.kind,
+    command: input.command,
+    blocking: input.blocking,
+    enabled: input.enabled,
+  });
+}
+
 describe('persistence', () => {
   it('creates a project, applies migrations and reads it back', async () => {
     const project = await makeProject('persist-basic');
     expect(project.id).toMatch(/^prj_/);
-    expect(project.validationCommands).toEqual([]);
+    expect(project.validationSteps).toEqual([]);
     expect(fs.existsSync(path.join(dataDir, 'cockpit.db'))).toBe(true);
 
     const reloaded = projectsService.getProject(project.id);
@@ -94,16 +132,19 @@ describe('persistence', () => {
     expect(reloaded?.protectedBranches).toContain(reloaded?.defaultBranch);
   });
 
-  it('records a validation command and clears it with an empty string', async () => {
+  it('records a validation step and drops it when the command is blank', async () => {
     const project = await makeProject('persist-commands');
-    projectsService.upsertValidationCommand(project.id, {
-      kind: 'unit',
-      command: 'npm test',
-    });
-    expect(projectsService.getProject(project.id)?.validationCommands).toHaveLength(1);
+    projectsService.replaceValidationSteps(project.id, [
+      { key: 'unit', label: 'Unit', kind: 'unit', command: 'npm test' },
+    ]);
+    expect(projectsService.getProject(project.id)?.validationSteps).toHaveLength(1);
 
-    projectsService.upsertValidationCommand(project.id, { kind: 'unit', command: '' });
-    expect(projectsService.getProject(project.id)?.validationCommands).toHaveLength(0);
+    // A blank command means "not configured", never "failed" — the same
+    // convention the per-kind upsert used before steps existed.
+    projectsService.replaceValidationSteps(project.id, [
+      { key: 'unit', label: 'Unit', kind: 'unit', command: '   ' },
+    ]);
+    expect(projectsService.getProject(project.id)?.validationSteps).toHaveLength(0);
   });
 
   it('creates a run in DRAFT with the request stored verbatim', async () => {
@@ -287,7 +328,7 @@ describe('assessReadiness', () => {
 
   it('is ready when the only configured check passes and files changed', async () => {
     const project = await makeProject('ready-pass');
-    projectsService.upsertValidationCommand(project.id, { kind: 'unit', command: 'npm test' });
+    configureCheck(project.id, { kind: 'unit', command: 'npm test' });
     const withCommand = projectsService.requireProject(project.id);
 
     const run = runs.createRun({ projectId: project.id, request: 'x' });
@@ -311,7 +352,7 @@ describe('assessReadiness', () => {
 
   it('blocks on a failing check and says which one', async () => {
     const project = await makeProject('ready-fail');
-    projectsService.upsertValidationCommand(project.id, { kind: 'unit', command: 'npm test' });
+    configureCheck(project.id, { kind: 'unit', command: 'npm test' });
     const withCommand = projectsService.requireProject(project.id);
 
     const run = runs.createRun({ projectId: project.id, request: 'x' });
@@ -328,7 +369,7 @@ describe('assessReadiness', () => {
 
   it('treats a command that could not start as an error, not a test failure', async () => {
     const project = await makeProject('ready-error');
-    projectsService.upsertValidationCommand(project.id, { kind: 'build', command: 'nope' });
+    configureCheck(project.id, { kind: 'build', command: 'nope' });
     const withCommand = projectsService.requireProject(project.id);
 
     const run = runs.createRun({ projectId: project.id, request: 'x' });
@@ -344,12 +385,12 @@ describe('assessReadiness', () => {
 
   it('does not block on a non-blocking check that failed', async () => {
     const project = await makeProject('ready-advisory');
-    projectsService.upsertValidationCommand(project.id, {
+    configureCheck(project.id, {
       kind: 'e2e',
       command: 'npx playwright test',
       blocking: false,
     });
-    projectsService.upsertValidationCommand(project.id, { kind: 'unit', command: 'npm test' });
+    configureCheck(project.id, { kind: 'unit', command: 'npm test' });
     const withCommand = projectsService.requireProject(project.id);
 
     const run = runs.createRun({ projectId: project.id, request: 'x' });
@@ -367,7 +408,7 @@ describe('assessReadiness', () => {
 
   it('does not treat an unconfigured check as a failure', async () => {
     const project = await makeProject('ready-notconfigured');
-    projectsService.upsertValidationCommand(project.id, { kind: 'unit', command: 'npm test' });
+    configureCheck(project.id, { kind: 'unit', command: 'npm test' });
     const withCommand = projectsService.requireProject(project.id);
 
     const run = runs.createRun({ projectId: project.id, request: 'x' });
@@ -387,7 +428,7 @@ describe('assessReadiness', () => {
 
   it('blocks while a check is still running', async () => {
     const project = await makeProject('ready-running');
-    projectsService.upsertValidationCommand(project.id, { kind: 'unit', command: 'npm test' });
+    configureCheck(project.id, { kind: 'unit', command: 'npm test' });
     const withCommand = projectsService.requireProject(project.id);
 
     const run = runs.createRun({ projectId: project.id, request: 'x' });
@@ -403,7 +444,7 @@ describe('assessReadiness', () => {
 
   it('requires validation to have run when the project demands it', async () => {
     const project = await makeProject('ready-requires');
-    projectsService.upsertValidationCommand(project.id, { kind: 'unit', command: 'npm test' });
+    configureCheck(project.id, { kind: 'unit', command: 'npm test' });
     const withCommand = projectsService.requireProject(project.id);
     expect(withCommand.requireValidation).toBe(true);
 
@@ -428,7 +469,7 @@ describe('assessReadiness', () => {
     const assessment = runs.assessReadiness(runs.requireRun(run.id), project);
     expect(assessment.ready).toBe(false);
     expect(
-      assessment.reasons.some((r) => r.includes('no validation commands configured')),
+      assessment.reasons.some((r) => r.includes('no validation steps configured')),
     ).toBe(true);
   });
 
@@ -437,7 +478,7 @@ describe('assessReadiness', () => {
       requireE2eForUiChanges: true,
       uiPathPatterns: ['.tsx'],
     });
-    projectsService.upsertValidationCommand(project.id, { kind: 'unit', command: 'npm test' });
+    configureCheck(project.id, { kind: 'unit', command: 'npm test' });
     const withCommand = projectsService.requireProject(project.id);
 
     const run = runs.createRun({ projectId: project.id, request: 'x' });
@@ -466,7 +507,7 @@ describe('assessReadiness', () => {
       requireE2eForUiChanges: true,
       uiPathPatterns: ['.tsx'],
     });
-    projectsService.upsertValidationCommand(project.id, { kind: 'unit', command: 'npm test' });
+    configureCheck(project.id, { kind: 'unit', command: 'npm test' });
     const withCommand = projectsService.requireProject(project.id);
 
     const run = runs.createRun({ projectId: project.id, request: 'x' });
@@ -488,7 +529,7 @@ describe('assessReadiness', () => {
 
   it('uses only the latest validation attempt', async () => {
     const project = await makeProject('ready-latest-attempt');
-    projectsService.upsertValidationCommand(project.id, { kind: 'unit', command: 'npm test' });
+    configureCheck(project.id, { kind: 'unit', command: 'npm test' });
     const withCommand = projectsService.requireProject(project.id);
 
     const run = runs.createRun({ projectId: project.id, request: 'x' });
@@ -505,7 +546,7 @@ describe('assessReadiness', () => {
 
   it('does not block on review findings by default', async () => {
     const project = await makeProject('ready-findings-advisory');
-    projectsService.upsertValidationCommand(project.id, { kind: 'unit', command: 'npm test' });
+    configureCheck(project.id, { kind: 'unit', command: 'npm test' });
     const withCommand = projectsService.requireProject(project.id);
     expect(withCommand.reviewBlocksReady).toBe(false);
 
@@ -533,7 +574,7 @@ describe('assessReadiness', () => {
 
   it('blocks on a high-severity finding when the project opts in', async () => {
     const project = await makeProject('ready-findings-blocking', { reviewBlocksReady: true });
-    projectsService.upsertValidationCommand(project.id, { kind: 'unit', command: 'npm test' });
+    configureCheck(project.id, { kind: 'unit', command: 'npm test' });
     const withCommand = projectsService.requireProject(project.id);
 
     const run = runs.createRun({ projectId: project.id, request: 'x' });
@@ -552,7 +593,7 @@ describe('assessReadiness', () => {
 
   it('does not block on a low-severity finding even when review is blocking', async () => {
     const project = await makeProject('ready-findings-low', { reviewBlocksReady: true });
-    projectsService.upsertValidationCommand(project.id, { kind: 'unit', command: 'npm test' });
+    configureCheck(project.id, { kind: 'unit', command: 'npm test' });
     const withCommand = projectsService.requireProject(project.id);
 
     const run = runs.createRun({ projectId: project.id, request: 'x' });
@@ -588,7 +629,7 @@ describe('assessReadiness in the read-only modes', () => {
 
   async function planRun(name: string, mode: 'plan' | 'ask' = 'plan') {
     const project = await makeProject(name);
-    projectsService.upsertValidationCommand(project.id, { kind: 'unit', command: 'npm test' });
+    configureCheck(project.id, { kind: 'unit', command: 'npm test' });
     const withCommand = projectsService.requireProject(project.id);
     const run = runs.createRun({
       projectId: project.id,

@@ -7,19 +7,30 @@ import net from 'node:net';
 import path from 'node:path';
 
 import { AppError, errorMessage } from '@/core/errors';
-import { ensureDir, runArtifactDir } from '@/core/paths';
-import { redact } from '@/core/redact';
+import { ensureDir, isInside, runArtifactDir } from '@/core/paths';
+import { redact, registerExtraSecrets } from '@/core/redact';
+import { parseEnvLines, secretValuesIn } from '@/domain/validation-steps';
 import type { PreviewStatus, PreviewView } from '@/domain/previews';
+import type { PreviewConfigView } from './projects';
 import { killTree } from '@/process/spawn';
 import { refreshArtifactBytes, register } from './artifacts';
 import { appendEvent } from './events';
 import { requireProject } from './projects';
 import { requireRun } from './runs';
 
+/** How many log lines the Preview tab shows without opening the artifact. */
+const LOG_TAIL_LINES = 200;
+
 interface PreviewProcessState {
   runId: string;
   command: string;
   cwd: string;
+  /** Where a readiness probe is sent. `url` plus the configured ready path. */
+  readyUrl: string;
+  readyTimeoutMs: number;
+  generation: number;
+  /** Ring of recent output, so the tab can show a tail without a file read. */
+  tail: string[];
   child: ChildProcess;
   log: fs.WriteStream;
   status: Exclude<PreviewStatus, 'not_configured' | 'not_started'>;
@@ -48,21 +59,68 @@ const STOP_TIMEOUT_MS = 10_000;
 const READY_POLL_MS = 750;
 const FETCH_TIMEOUT_MS = 1_500;
 
+/** Survives a module reload so a restart does not reset the iframe key. */
+const GENERATION_KEY = '__devCockpitPreviewGenerations__' as const;
+type GlobalWithGenerations = typeof globalThis & {
+  [GENERATION_KEY]?: Map<string, number>;
+};
+
+function nextGeneration(runId: string): number {
+  const g = globalThis as GlobalWithGenerations;
+  g[GENERATION_KEY] ??= new Map();
+  const next = (g[GENERATION_KEY].get(runId) ?? 0) + 1;
+  g[GENERATION_KEY].set(runId, next);
+  return next;
+}
+
 function previewProcesses(): Map<string, PreviewProcessState> {
   const g = globalThis as GlobalWithPreviews;
   g[GLOBAL_KEY] ??= new Map();
   return g[GLOBAL_KEY];
 }
 
-function configuredCommand(runId: string): { command: string | null; cwd: string | null } {
+function configuredCommand(runId: string): {
+  command: string | null;
+  cwd: string | null;
+  preview: PreviewConfigView;
+} {
   const run = requireRun(runId);
   const project = requireProject(run.projectId);
-  const command = project.developmentCommand?.trim() || null;
-  return { command, cwd: run.worktreePath };
+  const command = project.preview.command?.trim() || null;
+  return { command, cwd: run.worktreePath, preview: project.preview };
+}
+
+/**
+ * Where the preview's working directory is, and a refusal when it escapes.
+ *
+ * The same guard a validation step's working directory gets, for the same
+ * reason: a preview started against the user's real checkout would write build
+ * output into it.
+ */
+function resolvePreviewCwd(worktreePath: string, workingDir: string | null): string {
+  if (!workingDir) return worktreePath;
+  const resolved = path.resolve(worktreePath, workingDir);
+  if (resolved !== worktreePath && !isInside(worktreePath, resolved)) {
+    throw new AppError(`Preview working directory ${workingDir} escapes the worktree.`, {
+      code: 'preview_unsafe_working_dir',
+    });
+  }
+  return resolved;
+}
+
+/** Joins the ready path onto the base URL without doubling or dropping a slash. */
+function readyUrlFor(base: string, readyPath: string): string {
+  const suffix = readyPath.startsWith('/') ? readyPath : `/${readyPath}`;
+  return suffix === '/' ? base : `${base}${suffix}`;
 }
 
 function isRunning(state: PreviewProcessState): boolean {
-  return state.status === 'starting' || state.status === 'ready';
+  // `unresponsive` counts: the process is alive, so Stop must still reach it.
+  return (
+    state.status === 'starting' ||
+    state.status === 'ready' ||
+    state.status === 'unresponsive'
+  );
 }
 
 function toView(
@@ -76,6 +134,7 @@ function toView(
     running: isRunning(state),
     status: state.status,
     url: state.url,
+    readyUrl: state.readyUrl,
     port: state.port,
     pid: state.pid,
     cwd: state.cwd,
@@ -86,6 +145,8 @@ function toView(
     logArtifactId: state.logArtifactId,
     logPath: state.logPath,
     error: state.error,
+    generation: state.generation,
+    logTail: state.tail.length > 0 ? state.tail.join('') : null,
   };
 }
 
@@ -97,6 +158,7 @@ function idlePreviewView(runId: string): PreviewView {
     running: false,
     status: command === null ? 'not_configured' : 'not_started',
     url: null,
+    readyUrl: null,
     port: null,
     pid: null,
     cwd,
@@ -107,6 +169,8 @@ function idlePreviewView(runId: string): PreviewView {
     logArtifactId: null,
     logPath: null,
     error: null,
+    generation: 0,
+    logTail: null,
   };
 }
 
@@ -125,7 +189,8 @@ export async function startRunPreview(runId: string): Promise<PreviewView> {
 
   const run = requireRun(runId);
   const project = requireProject(run.projectId);
-  const command = project.developmentCommand?.trim();
+  const config = project.preview;
+  const command = config.command?.trim();
   if (!command) {
     throw new AppError('This project does not have a development command configured.', {
       code: 'preview_not_configured',
@@ -144,8 +209,23 @@ export async function startRunPreview(runId: string): Promise<PreviewView> {
     });
   }
 
-  const port = await reservePort();
+  const cwd = resolvePreviewCwd(run.worktreePath, config.workingDir);
+  const cwdStat = await fsp.stat(cwd).catch(() => null);
+  if (!cwdStat?.isDirectory()) {
+    throw new AppError(`The preview working directory does not exist: ${cwd}`, {
+      code: 'preview_no_working_dir',
+    });
+  }
+
+  // A fixed port is a deliberate choice for a project whose configuration
+  // hard-codes a URL, so a clash is reported rather than silently worked
+  // around — quietly moving it would defeat the point of asking for it.
+  const port =
+    config.portStrategy === 'fixed' && config.fixedPort
+      ? await claimFixedPort(config.fixedPort)
+      : await reservePort();
   const url = `http://127.0.0.1:${port}`;
+  const readyUrl = readyUrlFor(url, config.readyPath);
   const startedAt = new Date().toISOString();
   const logDir = ensureDir(path.join(runArtifactDir(runId), 'preview'));
   const logPath = path.join(logDir, `${startedAt.replace(/[:.]/g, '-')}.log`);
@@ -154,7 +234,10 @@ export async function startRunPreview(runId: string): Promise<PreviewView> {
     `Run: ${runId}`,
     `Command: ${command}`,
     `Worktree: ${run.worktreePath}`,
+    `Working directory: ${cwd}`,
     `URL: ${url}`,
+    `Readiness probe: ${readyUrl}`,
+    `Port strategy: ${config.portStrategy}`,
     `Started: ${startedAt}`,
     '',
   ].join('\n');
@@ -166,15 +249,20 @@ export async function startRunPreview(runId: string): Promise<PreviewView> {
     label: 'Preview server log',
     filePath: logPath,
     previewUrl: url,
-    meta: { command, cwd: run.worktreePath, port, url, startedAt },
+    meta: { command, cwd, port, url, readyUrl, startedAt },
   });
 
   const log = fs.createWriteStream(logPath, { flags: 'a', encoding: 'utf8' });
 
+  // Configured values never reach `process.env`, so the redactor cannot see
+  // them without being told. Same gap, same fix as a validation step's env.
+  const previewEnv = parseEnvLines(config.env.join('\n'));
+  registerExtraSecrets(secretValuesIn(previewEnv));
+
   let child: ChildProcess;
   try {
     child = spawn(command, {
-      cwd: run.worktreePath,
+      cwd,
       env: {
         ...process.env,
         PORT: String(port),
@@ -182,6 +270,9 @@ export async function startRunPreview(runId: string): Promise<PreviewView> {
         HOSTNAME: '127.0.0.1',
         BROWSER: 'none',
         DEV_COCKPIT_PREVIEW_URL: url,
+        // The project's own values win: a project that must set its own PORT
+        // or HOST knows something this code does not.
+        ...previewEnv,
       } as NodeJS.ProcessEnv,
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
@@ -214,7 +305,11 @@ export async function startRunPreview(runId: string): Promise<PreviewView> {
   const state: PreviewProcessState = {
     runId,
     command,
-    cwd: run.worktreePath,
+    cwd,
+    readyUrl,
+    readyTimeoutMs: config.readyTimeoutMs,
+    generation: nextGeneration(runId),
+    tail: [],
     child,
     log,
     status: 'starting',
@@ -235,8 +330,8 @@ export async function startRunPreview(runId: string): Promise<PreviewView> {
   };
 
   previewProcesses().set(runId, state);
-  pipeRedacted(child.stdout, log);
-  pipeRedacted(child.stderr, log);
+  pipeRedacted(child.stdout, log, state);
+  pipeRedacted(child.stderr, log, state);
 
   child.on('error', (err) => {
     state.error = err.message;
@@ -256,6 +351,19 @@ export async function startRunPreview(runId: string): Promise<PreviewView> {
   void waitForReady(state);
 
   return getRunPreview(runId);
+}
+
+/**
+ * Stop, then start.
+ *
+ * One call rather than two, because sequencing it in the browser means a
+ * window where a failed stop leaves the UI thinking it restarted. The stop is
+ * allowed to report "nothing was running" — restarting a stopped preview is
+ * just starting it.
+ */
+export async function restartRunPreview(runId: string): Promise<PreviewView> {
+  await stopRunPreview(runId, 'Stopped for a restart');
+  return startRunPreview(runId);
 }
 
 export async function stopRunPreview(
@@ -343,18 +451,38 @@ async function finalizePreview(
   state.resolveClosed();
 }
 
-function pipeRedacted(stream: NodeJS.ReadableStream | null, log: fs.WriteStream): void {
+function pipeRedacted(
+  stream: NodeJS.ReadableStream | null,
+  log: fs.WriteStream,
+  state: PreviewProcessState,
+): void {
   if (!stream) return;
   stream.setEncoding('utf8');
   stream.on('data', (raw: string) => {
     const { text } = redact(raw);
     log.write(text);
+    // Kept in memory as well as on disk so the Preview tab can show a tail
+    // without a file read on every poll. Bounded, because a chatty dev server
+    // produces megabytes an hour and none of it is worth holding.
+    state.tail.push(text);
+    if (state.tail.length > LOG_TAIL_LINES) {
+      state.tail.splice(0, state.tail.length - LOG_TAIL_LINES);
+    }
   });
 }
 
+/**
+ * Polls until the server answers, or until the project's patience runs out.
+ *
+ * The timeout is the point. V1 polled forever, so a server that never bound
+ * left the preview reading `starting` with no way out but stopping it — and
+ * nothing said why.
+ */
 async function waitForReady(state: PreviewProcessState): Promise<void> {
+  const deadline = Date.now() + state.readyTimeoutMs;
+
   while (previewProcesses().get(state.runId) === state && state.status === 'starting') {
-    if (await responds(state.url)) {
+    if (await responds(state.readyUrl)) {
       if (previewProcesses().get(state.runId) !== state || state.status !== 'starting') return;
       state.status = 'ready';
       appendEvent({
@@ -365,6 +493,25 @@ async function waitForReady(state: PreviewProcessState): Promise<void> {
       });
       return;
     }
+
+    if (Date.now() >= deadline) {
+      if (previewProcesses().get(state.runId) !== state || state.status !== 'starting') return;
+      const seconds = Math.round(state.readyTimeoutMs / 1000);
+      state.status = 'unresponsive';
+      state.error = `The preview did not answer ${state.readyUrl} within ${seconds}s. It is still running — a slow first build is the usual cause — but the ready path may also be wrong.`;
+      appendEvent({
+        runId: state.runId,
+        type: 'preview.unresponsive',
+        level: 'notice',
+        message: state.error,
+        payload: { url: state.url, readyUrl: state.readyUrl, waitedMs: state.readyTimeoutMs },
+      });
+      // The process is left running on purpose: a slow build is the common
+      // cause, the log is still being captured, and killing it would throw
+      // away the thing the user needs to read.
+      return;
+    }
+
     await delay(READY_POLL_MS);
   }
 }
@@ -384,6 +531,33 @@ async function responds(url: string): Promise<boolean> {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Checks a fixed port is free, and says so plainly when it is not.
+ *
+ * Still a check rather than a reservation: nothing can hold a port open and
+ * hand it to a child process, so this narrows the window rather than closing
+ * it. A clash after this point surfaces as the dev server's own bind error in
+ * the preview log.
+ */
+async function claimFixedPort(port: number): Promise<number> {
+  const server = net.createServer();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(port, '127.0.0.1', resolve);
+    });
+  } catch {
+    throw new AppError(
+      `Port ${port} is already in use, and this project's preview is configured to use it. Free the port, or switch the preview to an automatic port.`,
+      { code: 'preview_port_unavailable' },
+    );
+  }
+  await new Promise<void>((resolve, reject) => {
+    server.close((err) => (err ? reject(err) : resolve()));
+  });
+  return port;
 }
 
 async function reservePort(): Promise<number> {

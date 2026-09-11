@@ -60,6 +60,49 @@ function seedDatabaseThatSkippedRunExpiryMigration(dbFile: string): void {
         run_id text NOT NULL,
         ordinal integer NOT NULL
       );
+
+      -- Same reasoning. 0008 reads this table to build the validation_steps
+      -- pipeline, and every database that reached 0004 has had it since 0000.
+      CREATE TABLE "validation_commands" (
+        id integer PRIMARY KEY AUTOINCREMENT,
+        project_id text NOT NULL,
+        kind text NOT NULL,
+        command text NOT NULL,
+        working_dir text,
+        timeout_ms integer DEFAULT 900000 NOT NULL,
+        enabled integer DEFAULT true NOT NULL,
+        blocking integer DEFAULT true NOT NULL,
+        profiles text DEFAULT 'quick' NOT NULL,
+        created_at text NOT NULL DEFAULT '2025-01-01T00:00:00.000Z',
+        updated_at text NOT NULL DEFAULT '2025-01-01T00:00:00.000Z'
+      );
+
+      -- 0008 rebuilds validation_results to re-key it on step_key, so the
+      -- fixture needs the pre-0008 shape for that rebuild to copy from.
+      CREATE TABLE "validation_results" (
+        id text PRIMARY KEY,
+        run_id text NOT NULL,
+        attempt integer DEFAULT 1 NOT NULL,
+        kind text NOT NULL,
+        command_source text DEFAULT 'project' NOT NULL,
+        command text,
+        working_dir text,
+        outcome text DEFAULT 'running' NOT NULL,
+        blocking integer DEFAULT true NOT NULL,
+        exit_code integer,
+        duration_ms integer,
+        stdout text,
+        stderr text,
+        error text,
+        started_at text,
+        finished_at text,
+        created_at text NOT NULL DEFAULT '2025-01-01T00:00:00.000Z'
+      );
+
+      CREATE TABLE "runs" (
+        id text PRIMARY KEY,
+        project_id text NOT NULL
+      );
     `);
   } finally {
     sqlite.close();

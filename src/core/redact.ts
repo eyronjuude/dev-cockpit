@@ -37,6 +37,33 @@ function environmentSecrets(): string[] {
 
 let envSecretsCache: string[] | null = null;
 
+/**
+ * Secrets supplied by configuration rather than the environment.
+ *
+ * A validation step or a preview can carry its own `KEY=VALUE` pairs. Those
+ * never reach `process.env`, so the scan above cannot see them — which would
+ * make the one field a user is most likely to put a credential in the one
+ * field that is not masked. Registering them closes that gap.
+ *
+ * Additive and process-wide on purpose: output arrives asynchronously, often
+ * after the step that produced it has moved on, so scoping the mask to a step
+ * would drop the value exactly when it is still in flight.
+ */
+const extraSecrets = new Set<string>();
+
+export function registerExtraSecrets(values: readonly string[]): void {
+  for (const value of values) {
+    // Too short to be a credential, and masking it would shred ordinary output.
+    if (value.length < 4) continue;
+    extraSecrets.add(value);
+  }
+}
+
+/** Test seam: forget configuration-supplied secrets. */
+export function clearExtraSecrets(): void {
+  extraSecrets.clear();
+}
+
 export function redact(input: string): RedactionResult {
   if (!input) return { text: input, hits: [] };
 
@@ -48,6 +75,14 @@ export function redact(input: string): RedactionResult {
   for (const secret of envSecretsCache) {
     if (!text.includes(secret)) continue;
     hits.add('environment-value');
+    text = text.split(secret).join(REDACTED);
+  }
+
+  // Longest first, so masking a superstring before its substring cannot leave
+  // a partial value behind.
+  for (const secret of [...extraSecrets].sort((a, b) => b.length - a.length)) {
+    if (!text.includes(secret)) continue;
+    hits.add('configured-value');
     text = text.split(secret).join(REDACTED);
   }
 

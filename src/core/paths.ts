@@ -17,6 +17,16 @@ export const landingsDir = () => path.join(dataDir(), 'landings');
 export const artifactsDir = () => path.join(dataDir(), 'artifacts');
 
 /**
+ * Disposable checkouts used to try a proposed configuration out.
+ *
+ * Its own root, not a corner of `worktrees/`, for the reason landing has one
+ * too: retention walks runs, and a directory that belongs to no run would
+ * either be swept by a rule that does not understand it or missed by every
+ * rule there is. A separate root means one sweep can own it.
+ */
+export const probesDir = () => path.join(dataDir(), 'probes');
+
+/**
  * Files the user attached to a request.
  *
  * Deliberately not under `artifacts/`. An artifact is something a run
@@ -31,6 +41,9 @@ export const runWorktreeDir = (projectId: string, runId: string) =>
 
 export const runLandingDir = (projectId: string, runId: string) =>
   path.join(landingsDir(), projectId, runId);
+
+export const probeWorktreeDir = (projectId: string, probeId: string) =>
+  path.join(probesDir(), projectId, probeId);
 
 export const runArtifactDir = (runId: string) => path.join(artifactsDir(), runId);
 
@@ -52,6 +65,7 @@ export function ensureDataDirs(): void {
   ensureDir(landingsDir());
   ensureDir(artifactsDir());
   ensureDir(attachmentsDir());
+  ensureDir(probesDir());
 }
 
 /**

@@ -848,8 +848,10 @@ describe('validation engine', () => {
     const report = artifacts.find((a) => a.kind === 'validation_report');
     expect(report?.exists).toBe(true);
     const content = await artifactsService.readArtifactText(report!.id);
-    expect(content?.text).toContain('| typecheck | pass |');
-    expect(content?.text).toContain('| e2e | not configured |');
+    expect(content?.text).toContain('| Typecheck | typecheck | pass |');
+    // Kinds nothing covers are still named, so "never set up" stays legible
+    // even though the pipeline no longer has one slot per kind.
+    expect(content?.text).toContain('Kinds no step covers: lint, integration, e2e, build');
   });
 
   it('records an error, not a failure, when a command cannot start', async () => {
@@ -898,8 +900,8 @@ describe('validation engine', () => {
       ],
     });
 
-    expect(engine.kindsForProfile(project, 'quick').map((c) => c.kind)).toEqual(['unit']);
-    expect(engine.kindsForProfile(project, 'deep').map((c) => c.kind)).toEqual(['unit', 'e2e']);
+    expect(engine.stepsForRun(project, 'quick').map((s) => s.kind)).toEqual(['unit']);
+    expect(engine.stepsForRun(project, 'deep').map((s) => s.kind)).toEqual(['unit', 'e2e']);
   });
 
   it('refuses a working directory that escapes the worktree', async () => {

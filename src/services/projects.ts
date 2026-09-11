@@ -1,19 +1,40 @@
 import 'server-only';
 
-import { and, asc, desc, eq, isNull } from 'drizzle-orm';
+import { asc, desc, eq, isNull } from 'drizzle-orm';
 import path from 'node:path';
 import { z } from 'zod';
 
 import { getDb } from '@/db/client';
-import { projects, runs, validationCommands } from '@/db/schema';
+import { projects, runs, validationSteps } from '@/db/schema';
 import { newProjectId } from '@/core/ids';
 import { AppError, conflict, invalid, notFound } from '@/core/errors';
 import {
   agentPermissionModeSchema,
+  aiConfigModeSchema,
   DEFAULT_AGENT_PERMISSION_MODE,
+  DEFAULT_PREVIEW_READY_PATH,
+  DEFAULT_PREVIEW_READY_TIMEOUT_MS,
+  MAX_RETRIES,
+  POSITION_STRIDE,
+  previewPortStrategySchema,
+  retryOnModeSchema,
+  runWhenConditionSchema,
+  VALIDATION_KIND_LABELS,
   VALIDATION_KINDS,
+  validationKindSchema,
+  type AiConfigMode,
+  type PreviewPortStrategy,
+  type RetryOnMode,
+  type RunWhenCondition,
   type ValidationKind,
 } from '@/domain/types';
+import {
+  nextPosition,
+  orderSteps,
+  slugifyStepKey,
+  STEP_KEY_PATTERN,
+  uniqueStepKey,
+} from '@/domain/validation-steps';
 import {
   DEFAULT_ARTIFACT_RETENTION_DAYS,
   DEFAULT_WORKTREE_RETENTION_DAYS,
@@ -29,12 +50,46 @@ import {
   listBranches,
   repositoryRoot,
 } from '@/git/git';
-import type { ProjectRow, ValidationCommandRow } from '@/db/schema';
+import type { ProjectRow, ValidationStepRow } from '@/db/schema';
 
 /* ------------------------------------------------------------------ *
  * Input schemas
  * ------------------------------------------------------------------ */
 
+/**
+ * One step of a project's validation pipeline.
+ *
+ * `key` is optional on the way in and derived from the label when absent, so a
+ * caller adding a step does not have to invent a slug. It is not optional in
+ * storage: it is the identity a result row is written against.
+ */
+export const validationStepInputSchema = z.object({
+  key: z.string().trim().regex(STEP_KEY_PATTERN).optional(),
+  label: z.string().trim().min(1).max(80),
+  kind: validationKindSchema.nullable().optional(),
+  command: z.string().trim().max(2_000),
+  workingDir: z.string().trim().max(500).nullable().optional(),
+  env: z.array(z.string().max(2_000)).max(50).optional(),
+  timeoutMs: z.number().int().min(1_000).max(7_200_000).optional(),
+  enabled: z.boolean().optional(),
+  blocking: z.boolean().optional(),
+  profiles: z.array(z.string()).optional(),
+  position: z.number().int().min(0).max(100_000).optional(),
+  runWhen: runWhenConditionSchema.optional(),
+  runWhenArg: z.string().trim().max(2_000).nullable().optional(),
+  retries: z.number().int().min(0).max(MAX_RETRIES).optional(),
+  retryOn: retryOnModeSchema.optional(),
+});
+
+export type ValidationStepInput = z.infer<typeof validationStepInputSchema>;
+
+/**
+ * The pre-pipeline shape: one command per kind.
+ *
+ * Accepted on the way in and converted, because it is how every caller wrote a
+ * project before steps existed and there is no reason to break them. Nothing
+ * reads it back — `ProjectView` reports steps.
+ */
 export const validationCommandInputSchema = z.object({
   kind: z.enum(VALIDATION_KINDS),
   command: z.string().trim().max(2_000),
@@ -43,6 +98,17 @@ export const validationCommandInputSchema = z.object({
   enabled: z.boolean().optional(),
   blocking: z.boolean().optional(),
   profiles: z.array(z.string()).optional(),
+});
+
+/** Everything about how this project's preview is started and watched. */
+export const previewConfigInputSchema = z.object({
+  workingDir: z.string().trim().max(500).nullable().optional(),
+  env: z.array(z.string().max(2_000)).max(50).optional(),
+  portStrategy: previewPortStrategySchema.optional(),
+  fixedPort: z.number().int().min(1).max(65_535).nullable().optional(),
+  readyPath: z.string().trim().max(500).optional(),
+  readyTimeoutMs: z.number().int().min(1_000).max(1_800_000).optional(),
+  autoStart: z.boolean().optional(),
 });
 
 /**
@@ -73,6 +139,11 @@ export const createProjectSchema = z.object({
   agentModel: z.string().trim().max(120).nullable().optional(),
   agentPermissionMode: agentPermissionModeSchema.optional(),
   agentAddDirs: z.array(z.string()).optional(),
+  aiConfigMode: aiConfigModeSchema.optional(),
+  aiConfigProvider: z.string().trim().max(60).nullable().optional(),
+  preview: previewConfigInputSchema.optional(),
+  validationSteps: z.array(validationStepInputSchema).max(100).optional(),
+  /** Legacy shape, converted to steps. See `validationCommandInputSchema`. */
   validationCommands: z.array(validationCommandInputSchema).optional(),
 });
 
@@ -99,15 +170,38 @@ export const fromLines = (value: string | null | undefined): string[] =>
  * Views
  * ------------------------------------------------------------------ */
 
-export interface ValidationCommandView {
+export interface ValidationStepView {
   id: number;
-  kind: ValidationKind;
+  /** Slug, unique per project. What a result row is keyed by. */
+  key: string;
+  label: string;
+  /** A tag, not an identity. Null for a step that fits none of the six kinds. */
+  kind: ValidationKind | null;
   command: string;
   workingDir: string | null;
+  /** Raw `KEY=VALUE` lines; parse with `parseEnvLines`. */
+  env: string[];
   timeoutMs: number;
   enabled: boolean;
   blocking: boolean;
   profiles: string[];
+  position: number;
+  runWhen: RunWhenCondition;
+  runWhenArg: string | null;
+  retries: number;
+  retryOn: RetryOnMode;
+}
+
+export interface PreviewConfigView {
+  /** The same value as `ProjectView.developmentCommand`; this is the command. */
+  command: string | null;
+  workingDir: string | null;
+  env: string[];
+  portStrategy: PreviewPortStrategy;
+  fixedPort: number | null;
+  readyPath: string;
+  readyTimeoutMs: number;
+  autoStart: boolean;
 }
 
 export interface ProjectView {
@@ -141,25 +235,51 @@ export interface ProjectView {
    */
   effectivePermissionMode: string;
   agentAddDirs: string[];
+  /** How much authority the setup advisor has here. See `AI_CONFIG_MODES`. */
+  aiConfigMode: AiConfigMode;
+  aiConfigProvider: string | null;
   createdAt: string;
   updatedAt: string;
-  validationCommands: ValidationCommandView[];
+  /** The pipeline, already in execution order. */
+  validationSteps: ValidationStepView[];
+  preview: PreviewConfigView;
 }
 
-function toCommandView(row: ValidationCommandRow): ValidationCommandView {
+function toStepView(row: ValidationStepRow): ValidationStepView {
   return {
     id: row.id,
-    kind: row.kind as ValidationKind,
+    key: row.key,
+    label: row.label,
+    kind: (row.kind as ValidationKind | null) ?? null,
     command: row.command,
     workingDir: row.workingDir,
+    env: fromLines(row.env),
     timeoutMs: row.timeoutMs,
     enabled: row.enabled,
     blocking: row.blocking,
     profiles: fromLines(row.profiles),
+    position: row.position,
+    runWhen: row.runWhen as RunWhenCondition,
+    runWhenArg: row.runWhenArg,
+    retries: row.retries,
+    retryOn: row.retryOn as RetryOnMode,
   };
 }
 
-function toProjectView(row: ProjectRow, commands: ValidationCommandRow[]): ProjectView {
+function toPreviewView(row: ProjectRow): PreviewConfigView {
+  return {
+    command: row.developmentCommand,
+    workingDir: row.previewWorkingDir,
+    env: fromLines(row.previewEnv),
+    portStrategy: (row.previewPortStrategy as PreviewPortStrategy) ?? 'auto',
+    fixedPort: row.previewFixedPort,
+    readyPath: row.previewReadyPath || DEFAULT_PREVIEW_READY_PATH,
+    readyTimeoutMs: row.previewReadyTimeoutMs || DEFAULT_PREVIEW_READY_TIMEOUT_MS,
+    autoStart: row.previewAutoStart,
+  };
+}
+
+function toProjectView(row: ProjectRow, steps: ValidationStepRow[]): ProjectView {
   return {
     id: row.id,
     name: row.name,
@@ -183,16 +303,12 @@ function toProjectView(row: ProjectRow, commands: ValidationCommandRow[]): Proje
     agentPermissionMode: row.agentPermissionMode,
     effectivePermissionMode: resolvePermissionMode(row.agentPermissionMode),
     agentAddDirs: fromLines(row.agentAddDirs),
+    aiConfigMode: (row.aiConfigMode as AiConfigMode) ?? 'draft',
+    aiConfigProvider: row.aiConfigProvider,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
-    validationCommands: commands
-      .slice()
-      .sort(
-        (a, b) =>
-          VALIDATION_KINDS.indexOf(a.kind as ValidationKind) -
-          VALIDATION_KINDS.indexOf(b.kind as ValidationKind),
-      )
-      .map(toCommandView),
+    validationSteps: orderSteps(steps.map(toStepView)),
+    preview: toPreviewView(row),
   };
 }
 
@@ -209,11 +325,11 @@ export function listProjects(): ProjectView[] {
     .orderBy(asc(projects.name))
     .all();
 
-  const commands = db.select().from(validationCommands).all();
+  const steps = db.select().from(validationSteps).all();
   return rows.map((row) =>
     toProjectView(
       row,
-      commands.filter((c) => c.projectId === row.id),
+      steps.filter((step) => step.projectId === row.id),
     ),
   );
 }
@@ -222,12 +338,12 @@ export function getProject(id: string): ProjectView | null {
   const db = getDb();
   const row = db.select().from(projects).where(eq(projects.id, id)).get();
   if (!row) return null;
-  const commands = db
+  const steps = db
     .select()
-    .from(validationCommands)
-    .where(eq(validationCommands.projectId, id))
+    .from(validationSteps)
+    .where(eq(validationSteps.projectId, id))
     .all();
-  return toProjectView(row, commands);
+  return toProjectView(row, steps);
 }
 
 export function requireProject(id: string): ProjectView {
@@ -356,14 +472,83 @@ export async function createProject(input: CreateProjectInput): Promise<ProjectV
       agentModel: parsed.agentModel ?? null,
       agentPermissionMode: parsed.agentPermissionMode ?? DEFAULT_AGENT_PERMISSION_MODE,
       agentAddDirs: toLines(parsed.agentAddDirs) ?? null,
+      aiConfigMode: parsed.aiConfigMode ?? 'draft',
+      aiConfigProvider: parsed.aiConfigProvider ?? null,
+      ...previewColumns(parsed.preview),
     })
     .run();
 
-  for (const command of parsed.validationCommands ?? []) {
-    upsertValidationCommand(id, command);
-  }
+  const steps = stepsFromInput(parsed);
+  if (steps.length > 0) replaceValidationSteps(id, steps);
 
   return requireProject(id);
+}
+
+/**
+ * Maps the preview half of a project input onto columns.
+ *
+ * Undefined means "not mentioned", which must leave the stored value alone —
+ * so this returns a partial and the caller spreads it.
+ */
+function previewColumns(
+  preview: z.infer<typeof previewConfigInputSchema> | undefined,
+): Record<string, unknown> {
+  if (!preview) return {};
+  const out: Record<string, unknown> = {};
+  if (preview.workingDir !== undefined) out.previewWorkingDir = preview.workingDir?.trim() || null;
+  if (preview.env !== undefined) out.previewEnv = toLines(preview.env) ?? null;
+  if (preview.portStrategy !== undefined) out.previewPortStrategy = preview.portStrategy;
+  if (preview.fixedPort !== undefined) out.previewFixedPort = preview.fixedPort ?? null;
+  if (preview.readyPath !== undefined) {
+    out.previewReadyPath = normaliseReadyPath(preview.readyPath);
+  }
+  if (preview.readyTimeoutMs !== undefined) out.previewReadyTimeoutMs = preview.readyTimeoutMs;
+  if (preview.autoStart !== undefined) out.previewAutoStart = preview.autoStart;
+  return out;
+}
+
+/**
+ * A ready path is appended to a URL, so it has to start with a slash and must
+ * not carry an origin of its own — otherwise a probe could be pointed at any
+ * host on the network by editing a project field.
+ */
+function normaliseReadyPath(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return DEFAULT_PREVIEW_READY_PATH;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed) || trimmed.startsWith('//')) {
+    throw invalid('The preview ready path must be a path, not a URL.');
+  }
+  return trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+}
+
+/**
+ * Collects steps from either input shape.
+ *
+ * The legacy per-kind commands are converted here rather than at the edge, so
+ * every caller — the API, the advisor, a test helper — goes through one
+ * conversion and cannot disagree about the order they land in.
+ */
+function stepsFromInput(parsed: {
+  validationSteps?: ValidationStepInput[];
+  validationCommands?: z.infer<typeof validationCommandInputSchema>[];
+}): ValidationStepInput[] {
+  if (parsed.validationSteps) return parsed.validationSteps;
+  if (!parsed.validationCommands) return [];
+  return parsed.validationCommands
+    .slice()
+    .sort((a, b) => VALIDATION_KINDS.indexOf(a.kind) - VALIDATION_KINDS.indexOf(b.kind))
+    .map((command, index) => ({
+      key: command.kind,
+      label: VALIDATION_KIND_LABELS[command.kind],
+      kind: command.kind,
+      command: command.command,
+      workingDir: command.workingDir ?? null,
+      timeoutMs: command.timeoutMs,
+      enabled: command.enabled,
+      blocking: command.blocking,
+      profiles: command.profiles,
+      position: index * POSITION_STRIDE,
+    }));
 }
 
 export function updateProject(id: string, input: UpdateProjectInput): ProjectView {
@@ -404,70 +589,182 @@ export function updateProject(id: string, input: UpdateProjectInput): ProjectVie
       agentModel: parsed.agentModel === undefined ? existing.agentModel : parsed.agentModel,
       agentPermissionMode: parsed.agentPermissionMode ?? existing.agentPermissionMode,
       agentAddDirs: toLines(parsed.agentAddDirs) ?? existing.agentAddDirs.join('\n'),
+      aiConfigMode: parsed.aiConfigMode ?? existing.aiConfigMode,
+      aiConfigProvider:
+        parsed.aiConfigProvider === undefined
+          ? existing.aiConfigProvider
+          : parsed.aiConfigProvider,
+      ...previewColumns(parsed.preview),
       updatedAt: new Date().toISOString(),
     })
     .where(eq(projects.id, id))
     .run();
 
-  if (parsed.validationCommands) {
-    for (const command of parsed.validationCommands) {
-      upsertValidationCommand(id, command);
-    }
+  if (parsed.validationSteps || parsed.validationCommands) {
+    replaceValidationSteps(id, stepsFromInput(parsed));
   }
 
   return requireProject(id);
 }
 
 /**
- * Sets or clears one validation command. An empty command string removes the
- * row, which is how a kind returns to "not configured" rather than "failed".
+ * Replaces a project's whole pipeline in one transaction.
+ *
+ * Whole-list rather than per-step upsert, because order is now part of the
+ * configuration: a partial write would leave two steps claiming one position
+ * and no way to say which the user meant. The form sends what it has and this
+ * makes the stored pipeline match it.
+ *
+ * A step with a blank command is dropped rather than stored, which is how a
+ * check returns to "not configured" — the same convention the per-kind upsert
+ * used, and for the same reason: not configured is not failed.
  */
-export function upsertValidationCommand(
+export function replaceValidationSteps(
   projectId: string,
-  input: z.infer<typeof validationCommandInputSchema>,
+  input: readonly ValidationStepInput[],
 ): void {
-  const parsed = validationCommandInputSchema.parse(input);
   const db = getDb();
-  const command = parsed.command.trim();
+  const parsed = input.map((step) => validationStepInputSchema.parse(step));
 
-  if (!command) {
-    db.delete(validationCommands)
-      .where(
-        and(
-          eq(validationCommands.projectId, projectId),
-          eq(validationCommands.kind, parsed.kind),
-        ),
-      )
-      .run();
-    return;
+  const taken = new Set<string>();
+  const rows: {
+    key: string;
+    label: string;
+    kind: ValidationKind | null;
+    command: string;
+    workingDir: string | null;
+    env: string | null;
+    timeoutMs: number;
+    enabled: boolean;
+    blocking: boolean;
+    profiles: string;
+    position: number;
+    runWhen: RunWhenCondition;
+    runWhenArg: string | null;
+    retries: number;
+    retryOn: RetryOnMode;
+  }[] = [];
+
+  parsed.forEach((step, index) => {
+    const command = step.command.trim();
+    if (!command) return;
+
+    const key = uniqueStepKey(step.key ?? slugifyStepKey(step.label), taken);
+    taken.add(key);
+
+    rows.push({
+      key,
+      label: step.label.trim() || key,
+      kind: step.kind ?? null,
+      command,
+      workingDir: step.workingDir?.trim() || null,
+      env: toLines(step.env) ?? null,
+      timeoutMs: step.timeoutMs ?? 900_000,
+      enabled: step.enabled ?? true,
+      blocking: step.blocking ?? true,
+      profiles: toLines(step.profiles) ?? 'quick\nstandard\ndeep',
+      position: step.position ?? index * POSITION_STRIDE,
+      runWhen: step.runWhen ?? 'always',
+      runWhenArg: step.runWhenArg?.trim() || null,
+      retries: step.retries ?? 0,
+      retryOn: step.retryOn ?? 'error',
+    });
+  });
+
+  // A `depends_on` pointing at a step that is not in the list would skip
+  // forever. Refusing here beats discovering it mid-run.
+  const keys = new Set(rows.map((row) => row.key));
+  for (const row of rows) {
+    if (row.runWhen !== 'depends_on') continue;
+    const dependency = row.runWhenArg ?? '';
+    if (!keys.has(dependency)) {
+      throw invalid(`Step ${row.key} depends on ${dependency || '(nothing)'}, which is not a step.`);
+    }
+    if (dependency === row.key) {
+      throw invalid(`Step ${row.key} cannot depend on itself.`);
+    }
+  }
+  assertNoDependencyCycle(rows);
+
+  const now = new Date().toISOString();
+  db.transaction((tx) => {
+    tx.delete(validationSteps).where(eq(validationSteps.projectId, projectId)).run();
+    for (const row of rows) {
+      tx.insert(validationSteps)
+        .values({ projectId, ...row, createdAt: now, updatedAt: now })
+        .run();
+    }
+  });
+}
+
+/**
+ * Refuses a pipeline whose dependencies form a loop.
+ *
+ * Without this the engine would skip every step in the cycle and report a
+ * pipeline that ran nothing as though nothing were configured, which is the
+ * one reading the scorecard is built to prevent.
+ */
+function assertNoDependencyCycle(
+  rows: readonly { key: string; runWhen: RunWhenCondition; runWhenArg: string | null }[],
+): void {
+  const edges = new Map<string, string>();
+  for (const row of rows) {
+    if (row.runWhen === 'depends_on' && row.runWhenArg) edges.set(row.key, row.runWhenArg);
   }
 
-  const existing = db
-    .select()
-    .from(validationCommands)
-    .where(
-      and(eq(validationCommands.projectId, projectId), eq(validationCommands.kind, parsed.kind)),
-    )
-    .get();
+  for (const start of edges.keys()) {
+    const seen = new Set<string>([start]);
+    let current = edges.get(start);
+    while (current !== undefined) {
+      if (seen.has(current)) {
+        throw invalid(`Validation steps form a dependency cycle through ${current}.`);
+      }
+      seen.add(current);
+      current = edges.get(current);
+    }
+  }
+}
 
-  const values = {
-    command,
-    workingDir: parsed.workingDir?.trim() || null,
-    timeoutMs: parsed.timeoutMs ?? existing?.timeoutMs ?? 900_000,
-    enabled: parsed.enabled ?? existing?.enabled ?? true,
-    blocking: parsed.blocking ?? existing?.blocking ?? true,
-    profiles: toLines(parsed.profiles) ?? existing?.profiles ?? 'quick\nstandard\ndeep',
-    updatedAt: new Date().toISOString(),
+/**
+ * Adds or replaces one step, leaving the rest of the pipeline alone.
+ *
+ * The narrow path, for callers that hold one step rather than a list — the
+ * probe's revision pass is the one that matters.
+ */
+export function upsertValidationStep(projectId: string, input: ValidationStepInput): void {
+  const existing = requireProject(projectId).validationSteps;
+  const step = validationStepInputSchema.parse(input);
+  const key = step.key ?? slugifyStepKey(step.label);
+
+  const next = existing.map(toStepInput);
+  const at = next.findIndex((candidate) => candidate.key === key);
+  if (at >= 0) {
+    next[at] = { ...next[at], ...step, key };
+  } else {
+    next.push({ ...step, key, position: step.position ?? nextPosition(existing) });
+  }
+  replaceValidationSteps(projectId, next);
+}
+
+/** Round-trips a stored step back into the input shape. */
+export function toStepInput(step: ValidationStepView): ValidationStepInput {
+  return {
+    key: step.key,
+    label: step.label,
+    kind: step.kind,
+    command: step.command,
+    workingDir: step.workingDir,
+    env: step.env,
+    timeoutMs: step.timeoutMs,
+    enabled: step.enabled,
+    blocking: step.blocking,
+    profiles: step.profiles,
+    position: step.position,
+    runWhen: step.runWhen,
+    runWhenArg: step.runWhenArg,
+    retries: step.retries,
+    retryOn: step.retryOn,
   };
-
-  if (existing) {
-    db.update(validationCommands).set(values).where(eq(validationCommands.id, existing.id)).run();
-    return;
-  }
-
-  db.insert(validationCommands)
-    .values({ projectId, kind: parsed.kind, ...values })
-    .run();
 }
 
 /** Hides a project from the list without touching its runs or worktrees. */

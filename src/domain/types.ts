@@ -243,6 +243,110 @@ export const COMMAND_SOURCES = ['project', 'dynamic'] as const;
 export type CommandSource = (typeof COMMAND_SOURCES)[number];
 
 /* ------------------------------------------------------------------ *
+ * Validation steps
+ * ------------------------------------------------------------------ */
+
+/**
+ * When a step runs.
+ *
+ *  - `always` — every time its profile is selected. The default, and what
+ *    every pre-existing command becomes.
+ *  - `changed_files_match` — only when a changed file matches one of the
+ *    patterns in `runWhenArg`. Skipping an E2E suite on a docs-only change is
+ *    the case this exists for.
+ *  - `depends_on` — only when the step named in `runWhenArg` passed. This is
+ *    how fail-fast is expressed: opt-in, per step. Running everything after a
+ *    failure remains the default, because a second failure is usually worth
+ *    knowing about.
+ *
+ * A step held back by any of these records `skipped`, which never blocks
+ * readiness. That is the whole point: not running is not failing.
+ */
+export const RUN_WHEN_CONDITIONS = ['always', 'changed_files_match', 'depends_on'] as const;
+export type RunWhenCondition = (typeof RUN_WHEN_CONDITIONS)[number];
+export const runWhenConditionSchema = z.enum(RUN_WHEN_CONDITIONS);
+
+export const RUN_WHEN_LABELS: Record<RunWhenCondition, string> = {
+  always: 'Always',
+  changed_files_match: 'Only when changed files match',
+  depends_on: 'Only when another step passed',
+};
+
+/**
+ * Which outcomes a retry applies to.
+ *
+ * `error` is the useful default: the command could not start, or timed out,
+ * and trying again costs little. `fail` re-runs a suite that ran and did not
+ * pass, which is what a genuinely flaky test needs and what an honest one does
+ * not — so it is opt-in and stated rather than assumed.
+ */
+export const RETRY_ON_MODES = ['error', 'fail', 'both'] as const;
+export type RetryOnMode = (typeof RETRY_ON_MODES)[number];
+export const retryOnModeSchema = z.enum(RETRY_ON_MODES);
+
+/** More than this and a pipeline is being used as a build system. */
+export const MAX_RETRIES = 3;
+
+/** Positions are spaced so a step can be inserted between two without a re-number. */
+export const POSITION_STRIDE = 10;
+
+/* ------------------------------------------------------------------ *
+ * Preview configuration
+ * ------------------------------------------------------------------ */
+
+/**
+ * How a preview gets its port.
+ *
+ * `auto` asks the OS for a free one, which is what V1 always did and remains
+ * the default. `fixed` exists for a project whose own configuration hard-codes
+ * a URL — an OAuth callback, a CORS allowlist — and therefore cannot take
+ * whatever it is given.
+ */
+export const PREVIEW_PORT_STRATEGIES = ['auto', 'fixed'] as const;
+export type PreviewPortStrategy = (typeof PREVIEW_PORT_STRATEGIES)[number];
+export const previewPortStrategySchema = z.enum(PREVIEW_PORT_STRATEGIES);
+
+export const DEFAULT_PREVIEW_READY_PATH = '/';
+export const DEFAULT_PREVIEW_READY_TIMEOUT_MS = 120_000;
+
+/* ------------------------------------------------------------------ *
+ * AI configuration authority
+ * ------------------------------------------------------------------ */
+
+/**
+ * How much authority the setup advisor has over a project's configuration.
+ *
+ *  - `off` — deterministic detection only. No model is asked anything.
+ *  - `draft` — the model proposes, the user reviews and saves. The default,
+ *    and what every project had before this setting existed.
+ *  - `auto` — the model proposes, the configuration is saved, and a probe runs
+ *    it in a disposable worktree. Whatever could not run is revised once and
+ *    saved again.
+ *
+ * `auto` executes commands a model wrote. That is inside the threat model this
+ * application already documents — a run's implementation agent does the same —
+ * but it is the first path where no human reads the command first, so it is
+ * opt-in, it never touches the user's checkout, and every save it makes is
+ * preceded by a revision snapshot that can be restored in one click.
+ */
+export const AI_CONFIG_MODES = ['off', 'draft', 'auto'] as const;
+export type AiConfigMode = (typeof AI_CONFIG_MODES)[number];
+export const aiConfigModeSchema = z.enum(AI_CONFIG_MODES);
+
+export const AI_CONFIG_MODE_LABELS: Record<AiConfigMode, string> = {
+  off: 'Off — detect from the repository only',
+  draft: 'Draft — propose, and let me review before saving',
+  auto: 'Auto — propose, save, and verify in a disposable worktree',
+};
+
+/** Who wrote a stored configuration revision. */
+export const CONFIG_REVISION_SOURCES = ['user', 'advisor', 'probe'] as const;
+export type ConfigRevisionSource = (typeof CONFIG_REVISION_SOURCES)[number];
+
+export const PROBE_STATUSES = ['running', 'completed', 'failed', 'cancelled'] as const;
+export type ProbeStatus = (typeof PROBE_STATUSES)[number];
+
+/* ------------------------------------------------------------------ *
  * Agent permissions
  * ------------------------------------------------------------------ */
 

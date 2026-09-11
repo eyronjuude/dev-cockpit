@@ -30,7 +30,7 @@ function fixture(name: string, files: Record<string, string>): string {
 const commandFor = (
   proposal: import('@/services/repo-evidence').SetupProposal,
   kind: string,
-): string | undefined => proposal.validationCommands.find((c) => c.kind === kind)?.command;
+): string | undefined => proposal.validationSteps.find((step) => step.kind === kind)?.command;
 
 beforeAll(async () => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'cockpit-evidence-'));
@@ -74,6 +74,8 @@ describe('repository evidence', () => {
     expect(commandFor(proposal, 'typecheck')).toBe('pnpm typecheck');
     expect(commandFor(proposal, 'unit')).toBe('pnpm test');
     expect(proposal.developmentCommand).toBe('pnpm dev');
+    // The preview reads the same column, so the two must not drift.
+    expect(proposal.preview.command).toBe('pnpm dev');
     // Linking costs nothing, so it is preferred over an install.
     expect(proposal.linkPaths).toEqual(['node_modules']);
     expect(proposal.setupCommand).toBeNull();
@@ -104,7 +106,7 @@ describe('repository evidence', () => {
 
     // A blank check reports as "not configured"; a guessed one reports as a
     // failure. Only `build` exists here.
-    expect(proposal.validationCommands.map((c) => c.kind)).toEqual(['build']);
+    expect(proposal.validationSteps.map((step) => step.kind)).toEqual(['build']);
     expect(commandFor(proposal, 'lint')).toBeUndefined();
     expect(commandFor(proposal, 'unit')).toBeUndefined();
   });
@@ -234,7 +236,7 @@ describe('repository evidence', () => {
     expect(evidence.notes.join(' ')).toMatch(/no recognised manifest/i);
 
     const proposal = evidenceMod.proposeProjectSetup(evidence);
-    expect(proposal.validationCommands).toEqual([]);
+    expect(proposal.validationSteps).toEqual([]);
     expect(proposal.confidence).toBe('low');
   });
 

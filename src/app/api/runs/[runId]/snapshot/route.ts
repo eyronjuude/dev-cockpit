@@ -48,9 +48,15 @@ export function GET(_request: Request, { params }: Params) {
       attachmentsMutable: canModifyAttachments(runId) && !active,
       // Needed so the scorecard can distinguish a kind the project never
       // configured from one that is configured but has not run yet.
-      configuredValidations: project.validationCommands
-        .filter((c) => c.enabled && c.command.trim().length > 0)
-        .map((c) => ({ kind: c.kind, command: c.command, blocking: c.blocking })),
+      configuredValidations: project.validationSteps
+        .filter((step) => step.enabled && step.command.trim().length > 0)
+        .map((step) => ({
+          key: step.key,
+          label: step.label,
+          kind: step.kind,
+          command: step.command,
+          blocking: step.blocking,
+        })),
       policies: {
         requireValidation: project.requireValidation,
         requireE2eForUiChanges: project.requireE2eForUiChanges,

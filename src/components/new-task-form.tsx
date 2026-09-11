@@ -25,7 +25,6 @@ import {
 } from '@/domain/models';
 import {
   permissionModeAllowsCommands,
-  VALIDATION_KIND_LABELS,
   type ExecutionProfileName,
 } from '@/domain/types';
 import { recommendedModelFor, type ExecutionProfile } from '@/orchestrator/profiles';
@@ -137,8 +136,8 @@ export function NewTaskForm({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const configured = project.validationCommands.filter(
-    (c) => c.enabled && c.command.trim().length > 0,
+  const configured = project.validationSteps.filter(
+    (step) => step.enabled && step.command.trim().length > 0,
   );
   const selectedProfile = profiles.find((p) => p.id === profile) ?? profiles[1] ?? profiles[0]!;
   const selectedImplementer = implementers.find((p) => p.id === implementer);
@@ -614,8 +613,8 @@ export function NewTaskForm({
               </span>
             ) : (
               configured
-                .filter((c) => c.profiles.length === 0 || c.profiles.includes(profile))
-                .map((c) => VALIDATION_KIND_LABELS[c.kind])
+                .filter((step) => step.profiles.length === 0 || step.profiles.includes(profile))
+                .map((step) => step.label)
                 .join(', ') || 'Nothing for this profile'
             )}
           </Row>

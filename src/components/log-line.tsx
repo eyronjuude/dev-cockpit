@@ -52,6 +52,7 @@ const ICON: Partial<Record<EventType, string>> = {
   'run.expired': '⌛',
   'preview.started': '▶',
   'preview.ready': '✓',
+  'preview.unresponsive': '◷',
   'preview.stopped': '⊘',
   'preview.failed': '✕',
   'agent.started': '▶',
@@ -119,6 +120,8 @@ function toneFor(event: RunEvent): string {
     case 'landing.queued':
     case 'landing.manual_instructions':
     case 'landing.validation_failed':
+    case 'preview.unresponsive':
+      return 'warn';
     case 'preview.failed':
     case 'run.paused':
     case 'agent.fallback_started':

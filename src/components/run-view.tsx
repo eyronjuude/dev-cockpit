@@ -381,9 +381,11 @@ function PreviewTab({ snapshot }: { snapshot: RunSnapshot }) {
                   ? 'badge-pass'
                   : preview.status === 'failed'
                     ? 'badge-fail'
-                    : preview.running
-                      ? 'badge-running'
-                      : 'badge-idle'
+                    : preview.status === 'unresponsive'
+                      ? 'badge-warn'
+                      : preview.running
+                        ? 'badge-running'
+                        : 'badge-idle'
               }`}
             >
               {preview.status.replace('_', ' ')}
@@ -691,10 +693,20 @@ function TestsTab({
   snapshot: RunSnapshot;
   latestAttempt: number;
 }) {
+  // Configured order, not alphabetical: the Checks tab should read the way the
+  // pipeline ran, so a reader can see what happened before what.
+  const order = new Map(
+    snapshot.configuredValidations.map((step, index) => [step.key, index] as const),
+  );
   const results = snapshot.run.validations
     .filter((v) => v.attempt === latestAttempt && v.outcome !== 'not_configured')
     .slice()
-    .sort((a, b) => a.kind.localeCompare(b.kind));
+    .sort(
+      (a, b) =>
+        (order.get(a.stepKey) ?? Number.MAX_SAFE_INTEGER) -
+          (order.get(b.stepKey) ?? Number.MAX_SAFE_INTEGER) ||
+        a.stepKey.localeCompare(b.stepKey),
+    );
 
   if (results.length === 0) {
     return (
@@ -703,7 +715,7 @@ function TestsTab({
           ? `${
               WORK_MODE_LABELS[effectiveWorkMode(snapshot.run)]
             } mode runs no checks, because nothing changed. Switch the run to Build mode to have them run against an implementation.`
-          : 'No validation has run yet. Configure commands on the project to have them run automatically.'}
+          : 'No validation has run yet. Configure steps on the project to have them run automatically.'}
       </p>
     );
   }
@@ -717,7 +729,10 @@ function TestsTab({
           <div key={result.id} className="panel">
             <div className="panel-head">
               <div className="flex items-center gap-2">
-                <h3 className="panel-title">{result.kind}</h3>
+                <h3 className="panel-title">{result.stepLabel || result.stepKey}</h3>
+                {result.kind && result.kind !== result.stepLabel.toLowerCase() ? (
+                  <span className="badge badge-idle">{result.kind}</span>
+                ) : null}
                 <span
                   className={`badge ${
                     result.outcome === 'pass'

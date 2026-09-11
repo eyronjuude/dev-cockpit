@@ -74,6 +74,53 @@ export const projects = sqliteTable(
       .notNull()
       .default(true),
 
+    /* ------------------------------------------------------------------ *
+     * Preview configuration
+     *
+     * One preview per run, deliberately. `development_command` above is the
+     * command; everything here says how to run it and how to tell when it is
+     * up. All nullable or defaulted, so a project configured before these
+     * existed keeps exactly the behaviour it had.
+     * ------------------------------------------------------------------ */
+
+    /** Relative to the worktree root; null means the root itself. */
+    previewWorkingDir: text('preview_working_dir'),
+    /** Extra environment for the preview process, newline-separated KEY=VALUE. */
+    previewEnv: text('preview_env'),
+    /**
+     * `auto` asks the OS for a free port, which is what V1 always did. `fixed`
+     * uses `preview_fixed_port` instead, for a project whose configuration
+     * hard-codes a URL and cannot take whatever it is given.
+     */
+    previewPortStrategy: text('preview_port_strategy').notNull().default('auto'),
+    previewFixedPort: integer('preview_fixed_port'),
+    /** Path appended to the preview URL when probing for readiness. */
+    previewReadyPath: text('preview_ready_path').notNull().default('/'),
+    /**
+     * How long to wait for the first response before calling the preview
+     * failed. V1 polled forever, which left a server that never binds showing
+     * `starting` with no way out but stopping it.
+     */
+    previewReadyTimeoutMs: integer('preview_ready_timeout_ms').notNull().default(120_000),
+    /** Start the preview automatically once a build run reaches READY. */
+    previewAutoStart: integer('preview_auto_start', { mode: 'boolean' })
+      .notNull()
+      .default(false),
+
+    /**
+     * How much authority the setup advisor has over this project.
+     *
+     *  - `off`    deterministic detection only
+     *  - `draft`  propose; the user reviews and saves. The default.
+     *  - `auto`   draft, save, verify in a disposable worktree, revise once
+     *
+     * `auto` executes commands a model wrote, which is why it is opt-in and
+     * why every save is preceded by a revision snapshot.
+     */
+    aiConfigMode: text('ai_config_mode').notNull().default('draft'),
+    /** Which advisor provider to use. Null falls back to the registry default. */
+    aiConfigProvider: text('ai_config_provider'),
+
     /** Agent configuration. */
     agentModel: text('agent_model'),
     /**
@@ -123,6 +170,129 @@ export const validationCommands = sqliteTable(
     updatedAt: text('updated_at').notNull().default(now),
   },
   (t) => [uniqueIndex('validation_commands_project_kind_idx').on(t.projectId, t.kind)],
+);
+
+/* ------------------------------------------------------------------ *
+ * Validation steps
+ *
+ * Supersedes `validation_commands`, which is left in place unread so a
+ * rollback has somewhere to go. The difference that matters: a step is
+ * identified by `key`, not by `kind`, so a project can run as many steps as it
+ * needs, in an order it chooses, and two of them may share a kind — or carry
+ * none at all.
+ *
+ * `kind` survives as a *tag*. Readiness still reports coverage over the six
+ * kinds, the reviewer still receives them, and the implementation map still
+ * draws them. What it no longer does is decide identity or order.
+ * ------------------------------------------------------------------ */
+
+export const validationSteps = sqliteTable(
+  'validation_steps',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    projectId: text('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    /** Slug, unique per project. The step's identity, and the result row key. */
+    key: text('key').notNull(),
+    /** What the user calls it. Shown wherever a result is reported. */
+    label: text('label').notNull(),
+    /** One of `ValidationKind`, or null for a step that fits none of them. */
+    kind: text('kind'),
+    command: text('command').notNull(),
+    /** Relative to the worktree root; null means the root itself. */
+    workingDir: text('working_dir'),
+    /** Extra environment for this step, newline-separated KEY=VALUE. */
+    env: text('env'),
+    timeoutMs: integer('timeout_ms').notNull().default(900_000),
+    enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+    /**
+     * A non-blocking step records pass/fail but never prevents READY.
+     * Used for advisory checks such as a flaky E2E suite.
+     */
+    blocking: integer('blocking', { mode: 'boolean' }).notNull().default(true),
+    /** Which execution profiles run this step, newline-separated. */
+    profiles: text('profiles').notNull().default('quick\nstandard\ndeep'),
+    /** Explicit order. Spaced by ten so a step can be inserted between two. */
+    position: integer('position').notNull().default(0),
+    /** One of `RUN_WHEN_CONDITIONS`. */
+    runWhen: text('run_when').notNull().default('always'),
+    /**
+     * Patterns for `changed_files_match`, newline-separated; a step key for
+     * `depends_on`; unused for `always`.
+     */
+    runWhenArg: text('run_when_arg'),
+    /** How many times to re-run before accepting the outcome. 0 means once. */
+    retries: integer('retries').notNull().default(0),
+    /** One of `RETRY_ON_MODES`. Which outcomes a retry applies to. */
+    retryOn: text('retry_on').notNull().default('error'),
+    createdAt: text('created_at').notNull().default(now),
+    updatedAt: text('updated_at').notNull().default(now),
+  },
+  (t) => [
+    uniqueIndex('validation_steps_project_key_idx').on(t.projectId, t.key),
+    index('validation_steps_project_position_idx').on(t.projectId, t.position),
+  ],
+);
+
+/* ------------------------------------------------------------------ *
+ * Project configuration revisions
+ *
+ * Written before every save of a project's validation and preview
+ * configuration, whoever made it. This is what makes it safe for the advisor
+ * to save on its own: the previous configuration is never lost, and reverting
+ * a draft that went wrong costs one click rather than an afternoon of
+ * remembering what the commands used to be.
+ * ------------------------------------------------------------------ */
+
+export const projectConfigRevisions = sqliteTable(
+  'project_config_revisions',
+  {
+    id: text('id').primaryKey(),
+    projectId: text('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    /** JSON: the validation steps and preview configuration as they were. */
+    snapshot: text('snapshot').notNull(),
+    /** One of `CONFIG_REVISION_SOURCES`: who wrote the configuration. */
+    source: text('source').notNull().default('user'),
+    /** A short human-facing account of what changed and why. */
+    note: text('note'),
+    createdAt: text('created_at').notNull().default(now),
+  },
+  (t) => [index('project_config_revisions_project_idx').on(t.projectId, t.createdAt)],
+);
+
+/* ------------------------------------------------------------------ *
+ * Configuration probes
+ *
+ * A probe runs a proposed configuration in a disposable worktree to find out
+ * whether it actually works, before it is trusted.
+ *
+ * Progress is polled rather than streamed: `events.run_id` is a NOT NULL
+ * foreign key to `runs`, and a probe has no run. Giving it one, or making that
+ * column nullable, would cost more than the feature is worth — so the row
+ * carries its own status and a JSON result, and the form polls it.
+ * ------------------------------------------------------------------ */
+
+export const configProbes = sqliteTable(
+  'config_probes',
+  {
+    id: text('id').primaryKey(),
+    projectId: text('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    /** One of `PROBE_STATUSES`. */
+    status: text('status').notNull().default('running'),
+    /** A one-line account of what the probe is doing now. */
+    phase: text('phase').notNull().default('starting'),
+    /** JSON `ProbeReport`: the proposal tried, every outcome, what was revised. */
+    report: text('report'),
+    error: text('error'),
+    startedAt: text('started_at').notNull().default(now),
+    finishedAt: text('finished_at'),
+  },
+  (t) => [index('config_probes_project_idx').on(t.projectId, t.startedAt)],
 );
 
 /* ------------------------------------------------------------------ *
@@ -335,7 +505,16 @@ export const validationResults = sqliteTable(
       .references(() => runs.id, { onDelete: 'cascade' }),
     /** Which validation pass this belongs to; increments on re-run. */
     attempt: integer('attempt').notNull().default(1),
-    kind: text('kind').notNull(),
+    /**
+     * Which configured step produced this row. Identity moved here from `kind`
+     * when a project gained the ability to run two steps of the same kind.
+     * Rows written before that migration carry their kind as the key.
+     */
+    stepKey: text('step_key').notNull().default(''),
+    /** A human label, so a report does not have to say `lint-2`. */
+    stepLabel: text('step_label'),
+    /** One of `ValidationKind`, or null for a step that fits none of them. */
+    kind: text('kind'),
     /** `project` for a configured command. V1 never records `dynamic`. */
     commandSource: text('command_source').notNull().default('project'),
     command: text('command'),
@@ -355,7 +534,7 @@ export const validationResults = sqliteTable(
   },
   (t) => [
     index('validation_results_run_idx').on(t.runId),
-    uniqueIndex('validation_results_run_attempt_kind_idx').on(t.runId, t.attempt, t.kind),
+    uniqueIndex('validation_results_run_attempt_step_idx').on(t.runId, t.attempt, t.stepKey),
   ],
 );
 
@@ -462,6 +641,10 @@ export type ProjectRow = typeof projects.$inferSelect;
 export type NewProjectRow = typeof projects.$inferInsert;
 export type ValidationCommandRow = typeof validationCommands.$inferSelect;
 export type NewValidationCommandRow = typeof validationCommands.$inferInsert;
+export type ValidationStepRow = typeof validationSteps.$inferSelect;
+export type NewValidationStepRow = typeof validationSteps.$inferInsert;
+export type ProjectConfigRevisionRow = typeof projectConfigRevisions.$inferSelect;
+export type ConfigProbeRow = typeof configProbes.$inferSelect;
 export type RunRow = typeof runs.$inferSelect;
 export type NewRunRow = typeof runs.$inferInsert;
 export type IterationRow = typeof iterations.$inferSelect;

@@ -67,9 +67,9 @@ omit it if the provider cannot do it.
 
 ## Adding a setup advisor
 
-A setup advisor drafts a project's configuration when it is registered — the
-install command, the dev command, and which of the six validation kinds map to
-which commands.
+A setup advisor drafts a project's configuration — the install command, the
+preview command and its ready path, and an ordered list of validation steps.
+Available whenever the project form is open, not only at registration.
 
 It is deliberately **not** a transformer. The transformer contract forbids file
 paths and shell commands, and an advisor deals in exactly those, so it has its
@@ -112,11 +112,18 @@ form, with its availability and requirement shown.
 
 **Contract notes.** Never throw — return a fallback result instead, because a
 broken button is worse than a plain draft. Run every response through
-`normaliseAdvisorResponse`: it closes the validation-kind enum so a model
-cannot invent a seventh kind, and caps every string, because these values
-become shell commands. Never propose a command the evidence does not support; a
-blank check reports as "not configured", and a guessed one reports as a
-failure.
+`normaliseAdvisorResponse`: it closes the validation-kind enum so a model cannot
+invent a seventh kind, requires `key` to match the slug pattern the database
+indexes, de-duplicates by key, renumbers positions from the order returned, and
+caps every string — because these values become shell commands. Never propose a
+command the evidence does not support; a blank check reports as "not
+configured", and a guessed one reports as a failure.
+
+**On a revision pass**, `input.probeFeedback` carries the steps that could not
+run when the previous proposal was executed. Correct those. Do not touch a step
+that ran and failed — it found something real, and `applyRevision` will discard
+the change anyway. Keep every key unchanged: results are matched across runs by
+it.
 
 **Security note.** Script names and values from the repository reach the prompt.
 They are extracted fields, capped in count and length, and never whole files —
@@ -206,6 +213,8 @@ commands — an HTTP health probe, a bundle-size budget, an accessibility audit.
 
 ```ts
 export class BundleSizeValidator implements Validator {
+  readonly key = 'bundle-size';
+  // A tag, for readiness coverage and the scorecard. Null is legal.
   readonly kind = 'build';
   readonly blocking = true;
 
@@ -220,6 +229,10 @@ export class BundleSizeValidator implements Validator {
 `CommandValidator` directly from project configuration; wiring a registry in is
 the small piece of work a second validator would need.
 
+A validator's `key` is what its result row is written against, so it has to be
+unique within a project's pipeline and stable across runs — renaming one orphans
+its history.
+
 **Contract notes.** A validator must never modify source code. Distinguish
 `fail` (the check ran and did not pass) from `error` (the check could not run) —
 conflating them makes a missing binary look like a broken test.
@@ -228,7 +241,7 @@ conflating them makes a missing binary look like a broken test.
 
 One entry in `PROFILES` in `src/orchestrator/profiles.ts`. A profile is a bundle
 of defaults, not a code path, so nothing else changes. Add the profile name to a
-validation command's `profiles` list to include that command.
+validation step's `profiles` list to include that step.
 
 Set `recommendedModels` alongside `agentEffort`: the two are one statement about
 how much to spend, and a profile that raised effort while leaving the model to

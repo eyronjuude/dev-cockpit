@@ -11,7 +11,10 @@ import type { ReadinessAssessment, RunView } from '@/services/runs';
 import type { RunWorktree } from '@/services/worktrees';
 
 export interface ConfiguredValidation {
-  kind: ValidationKind;
+  key: string;
+  label: string;
+  /** A tag. Null for a step that fits none of the six kinds. */
+  kind: ValidationKind | null;
   command: string;
   blocking: boolean;
 }

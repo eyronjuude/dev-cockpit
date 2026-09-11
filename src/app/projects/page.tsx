@@ -1,6 +1,5 @@
 import Link from 'next/link';
 
-import { VALIDATION_KIND_LABELS } from '@/domain/types';
 import { formatRelative } from '@/components/status';
 import { landingQueueCounts } from '@/services/landing-queue';
 import { listProjects, projectRunCounts } from '@/services/projects';
@@ -44,7 +43,7 @@ export default function ProjectsPage() {
           {projects.map((project) => {
             const counts = projectRunCounts(project.id);
             const landing = landings.get(project.id) ?? NO_LANDINGS;
-            const configured = project.validationCommands.filter((c) => c.enabled);
+            const configured = project.validationSteps.filter((step) => step.enabled);
 
             return (
               <div key={project.id} className="panel flex flex-col">
@@ -71,9 +70,9 @@ export default function ProjectsPage() {
                     {configured.length === 0 ? (
                       <span className="badge badge-warn">no validation configured</span>
                     ) : (
-                      configured.map((command) => (
-                        <span key={command.kind} className="badge badge-accent">
-                          {VALIDATION_KIND_LABELS[command.kind]}
+                      configured.map((step) => (
+                        <span key={step.key} className="badge badge-accent">
+                          {step.label}
                         </span>
                       ))
                     )}

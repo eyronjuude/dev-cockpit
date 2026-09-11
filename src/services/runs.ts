@@ -46,6 +46,7 @@ import {
   type ValidationKind,
   type ValidationOutcome,
 } from '@/domain/types';
+import { matchesPathPatterns } from '@/domain/validation-steps';
 import type { FileChange } from '@/git/diff';
 import { listAttachments, type AttachmentView } from './attachments';
 import { appendEvent } from './events';
@@ -126,7 +127,11 @@ export interface IterationSettings {
 export interface ValidationResultView {
   id: string;
   attempt: number;
-  kind: ValidationKind;
+  /** Which configured step produced this. Identity; `kind` is only a tag. */
+  stepKey: string;
+  /** The step's label, so a report never has to print a slug at a person. */
+  stepLabel: string;
+  kind: ValidationKind | null;
   commandSource: string;
   command: string | null;
   workingDir: string | null;
@@ -275,7 +280,9 @@ function hydrateValidation(row: typeof validationResults.$inferSelect): Validati
   return {
     id: row.id,
     attempt: row.attempt,
-    kind: row.kind as ValidationKind,
+    stepKey: row.stepKey || (row.kind ?? ''),
+    stepLabel: row.stepLabel || row.stepKey || (row.kind ?? 'Check'),
+    kind: (row.kind as ValidationKind | null) ?? null,
     commandSource: row.commandSource,
     command: row.command,
     workingDir: row.workingDir,
@@ -1033,7 +1040,9 @@ export function upsertValidationResult(input: {
   id: string;
   runId: string;
   attempt: number;
-  kind: ValidationKind;
+  stepKey: string;
+  stepLabel?: string | null;
+  kind: ValidationKind | null;
   commandSource?: string;
   command: string | null;
   workingDir: string | null;
@@ -1057,6 +1066,8 @@ export function upsertValidationResult(input: {
   const values = {
     runId: input.runId,
     attempt: input.attempt,
+    stepKey: input.stepKey,
+    stepLabel: input.stepLabel ?? null,
     kind: input.kind,
     commandSource: input.commandSource ?? 'project',
     command: input.command,
@@ -1243,8 +1254,14 @@ function assessReadOnlyReadiness(run: RunView, mode: ResolvedWorkMode): Readines
 /**
  * Readiness for a build run.
  *
- * A missing validation kind counts as not configured, never as a failure, and
- * only `blocking` commands can hold a run back.
+ * A kind no step covers counts as not configured, never as a failure, and only
+ * `blocking` steps can hold a run back.
+ *
+ * Coverage is still counted per kind even though the pipeline is free-form.
+ * That is deliberate: "this project never set up E2E" and "E2E failed" are
+ * different facts, and the six kinds are the vocabulary the scorecard uses to
+ * keep them apart. A step carrying no kind is judged on its own outcome and
+ * contributes to no coverage count.
  */
 function assessBuildReadiness(run: RunView, project: ProjectView): ReadinessAssessment {
   const reasons: string[] = [];
@@ -1261,7 +1278,7 @@ function assessBuildReadiness(run: RunView, project: ProjectView): ReadinessAsse
 
   for (const failure of failed) {
     reasons.push(
-      `${failure.kind} ${failure.outcome === 'error' ? 'could not run' : 'failed'}${
+      `${describeStep(failure)} ${failure.outcome === 'error' ? 'could not run' : 'failed'}${
         failure.exitCode === null ? '' : ` (exit ${failure.exitCode})`
       }`,
     );
@@ -1269,21 +1286,23 @@ function assessBuildReadiness(run: RunView, project: ProjectView): ReadinessAsse
 
   const stillRunning = current.filter((v) => v.outcome === 'running');
   for (const running of stillRunning) {
-    reasons.push(`${running.kind} is still running`);
+    reasons.push(`${describeStep(running)} is still running`);
   }
 
   if (project.requireValidation) {
-    const configuredKinds = project.validationCommands.filter((c) => c.enabled).map((c) => c.kind);
-    if (configuredKinds.length === 0) {
-      reasons.push('This project requires validation but has no validation commands configured');
-    } else if (current.length === 0) {
+    const enabled = project.validationSteps.filter((step) => step.enabled);
+    if (enabled.length === 0) {
+      reasons.push('This project requires validation but has no validation steps configured');
+    } else if (current.every((v) => v.outcome === 'not_configured')) {
       reasons.push('Validation has not run yet');
     }
   }
 
   if (project.requireE2eForUiChanges && touchesUi(run, project)) {
-    const e2e = current.find((v) => v.kind === 'e2e');
-    if (!e2e || e2e.outcome === 'not_configured') {
+    // Any step tagged `e2e` satisfies this, not one designated row — a project
+    // may split its suite across several.
+    const e2e = current.filter((v) => v.kind === 'e2e' && v.outcome !== 'not_configured');
+    if (e2e.length === 0) {
       reasons.push('This change touches UI files and the project requires an E2E check');
     }
   }
@@ -1311,13 +1330,26 @@ function assessBuildReadiness(run: RunView, project: ProjectView): ReadinessAsse
   };
 }
 
+/**
+ * What to call a step in a readiness reason.
+ *
+ * The label where there is one, because a person reading "lint-2 failed" has
+ * to go and look up what that was. The key is the fallback, and the kind is the
+ * last resort for rows written before steps had either.
+ */
+function describeStep(result: ValidationResultView): string {
+  return result.stepLabel || result.stepKey || result.kind || 'A check';
+}
+
 /** Whether any changed file matches the project's UI path patterns. */
 export function touchesUi(run: RunView, project: ProjectView): boolean {
   const patterns = project.uiPathPatterns.length > 0 ? project.uiPathPatterns : DEFAULT_UI_PATTERNS;
-  return run.changedFiles.some((file) => {
-    const normalised = file.path.replace(/\\/g, '/').toLowerCase();
-    return patterns.some((pattern) => normalised.includes(pattern.toLowerCase()));
-  });
+  // Shared with `changed_files_match` on a validation step, so a pattern means
+  // the same thing in both places rather than nearly the same thing.
+  return matchesPathPatterns(
+    run.changedFiles.map((file) => file.path),
+    patterns,
+  );
 }
 
 const DEFAULT_UI_PATTERNS = [

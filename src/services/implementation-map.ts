@@ -80,6 +80,7 @@ export function collectImplementationMapInput(runId: string): ImplementationMapI
     validations: run.validations
       .filter((v) => v.attempt === validationAttempt)
       .map((v) => ({
+        label: v.stepLabel || v.stepKey,
         kind: v.kind,
         outcome: v.outcome,
         blocking: v.blocking,

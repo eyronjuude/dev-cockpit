@@ -42,6 +42,7 @@ export const EVENT_TYPES = [
 
   'preview.started',
   'preview.ready',
+  'preview.unresponsive',
   'preview.stopped',
   'preview.failed',
 
@@ -233,6 +234,12 @@ export interface EventPayloads {
     artifactId: string | null;
   };
   'preview.ready': { url: string; port: number };
+  /**
+   * The process is alive but never answered. Distinct from `preview.failed`,
+   * which means it exited: calling this one a failure would be wrong about
+   * what happened and about what to do next.
+   */
+  'preview.unresponsive': { url: string; readyUrl: string; waitedMs: number };
   'preview.stopped': { exitCode: number | null; signal: string | null; reason: string | null };
   'preview.failed': { error: string; exitCode: number | null; signal: string | null };
 
@@ -362,7 +369,8 @@ export interface EventPayloads {
   };
   'landing.refresh_started': { path: string; targetBranch: string; targetCommit: string };
   'landing.refresh_completed': { branch: string; targetBranch: string; commitSha: string };
-  'landing.repair_started': { path: string; failed: ValidationKind[] };
+  /** `failed` carries step labels, not kinds: a pipeline may hold several of one kind. */
+  'landing.repair_started': { path: string; failed: string[] };
   'landing.repair_committed': { branch: string; commitSha: string };
   'landing.manual_instructions': {
     reason: string;

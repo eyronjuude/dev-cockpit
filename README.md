@@ -443,23 +443,71 @@ If a project has a **Development command**, a run with a prepared worktree can
 start it from the run screen. Dev Cockpit allocates a local `127.0.0.1` port,
 sets `PORT`, `HOST`, `HOSTNAME` and `DEV_COCKPIT_PREVIEW_URL` for the command,
 captures its output as a **Preview server log** artifact, and shows the URL in
-the **Preview** tab. The action bar can stop the server, and cleanup or force
-restart stops it before deleting the worktree.
+the **Preview** tab. The action bar can start, stop and restart the server, the
+tab can reload the frame and tail the log, and cleanup or force restart stops it
+before deleting the worktree.
+
+One preview per run, deliberately. What the project form configures is how that
+one is run:
+
+| Setting | What it does |
+| --- | --- |
+| **Working directory** | Where the command runs, relative to the worktree. Refused if it escapes. |
+| **Ready path** | What the readiness probe requests. `/` unless a health endpoint suits better. |
+| **Give up waiting after** | How long to poll before saying so. Default 120s. |
+| **Port** | `Automatic` takes any free port; `Fixed` uses yours and reports a clash rather than moving. |
+| **Environment** | `KEY=VALUE` lines. The project's values win over the ones Dev Cockpit sets. |
+| **Auto-start** | Starts the preview when a build run reaches `READY`. |
+
+A preview that never answers within its timeout is reported as `unresponsive`,
+not `failed`. The process is still running — a slow first build is the usual
+cause — so it is left alone and its log keeps filling. Killing it would throw
+away the thing you need to read.
 
 ## Validation configuration
 
-Six kinds are supported: `typecheck`, `lint`, `unit`, `integration`, `e2e`,
-`build`. Each takes a command line, an optional working directory relative to
-the worktree, a timeout, and two flags:
+A project's validation is an ordered list of named steps that you build. Add as
+many as the project needs, drag them into the order they should run, and give
+each one whatever it takes to work:
 
-- **blocks readiness on failure** — off makes the check advisory. It still runs
-  and still records pass or fail, but cannot hold the run back. Useful for a
-  flaky E2E suite.
-- **enabled** — off skips it entirely.
+| Setting | What it does |
+| --- | --- |
+| **Name and command** | What it is called, and what runs. |
+| **Kind** | One of `typecheck`, `lint`, `unit`, `integration`, `e2e`, `build` — or none. A *tag*, not an identity. |
+| **Working directory** | Relative to the worktree. Refused if it escapes. |
+| **Environment** | `KEY=VALUE` lines. Secret-looking values are masked in captured output. |
+| **Timeout** | Per step. |
+| **blocks readiness on failure** | Off makes the step advisory: it still runs and still records pass or fail, but cannot hold the run back. Useful for a flaky E2E suite. |
+| **enabled** | Off skips it entirely. |
+| **Run this step** | Always, only when a changed file matches, or only when another step passed. |
+| **Retries** | Up to three, on a step that could not run, one that failed, or either. |
+| **Profiles** | Which of `quick`, `standard`, `deep` include it. |
 
-Commands run sequentially through the platform shell, inside the worktree. They
-compete for the same CPU, ports and lockfiles, so interleaving them would
-produce flaky results.
+Two steps may share a kind — a monorepo linting `web` and `api` separately is
+the ordinary case — and a step may carry no kind at all. The kind is what the
+scorecard groups by and what the E2E-for-UI policy looks for; it decides nothing
+about order or identity.
+
+Order is yours. Steps run top to bottom, sequentially, through the platform
+shell, inside the worktree. They compete for the same CPU, ports and lockfiles,
+so interleaving them would produce flaky results. Putting the cheap checks first
+is the usual arrangement: a typecheck that fails in four seconds should not wait
+behind a six-minute build.
+
+**Conditions** hold a step back without failing it:
+
+- *only when changed files match* — skip an E2E suite on a docs-only change.
+- *only when another step passed* — fail-fast, opt-in and per step. Running
+  everything after a failure remains the default, because a second failure is
+  usually worth knowing about. A dependency loop is refused when you save it,
+  not discovered mid-run.
+
+**Retries** re-run a step before its outcome is accepted. Retrying one that
+*could not run* is cheap and usually right. Retrying one that *failed* re-runs a
+suite that found something — worth it for a genuinely flaky suite, misleading
+otherwise, which is why it is a separate choice. Either way the count lands in
+the step's log, so a step that only passed on the third go does not read as a
+clean pass.
 
 Every outcome is recorded with its command, exit code, duration, stdout, stderr
 and timestamps. Five outcomes are distinguished, and the difference matters:
@@ -469,11 +517,50 @@ and timestamps. Five outcomes are distinguished, and the difference matters:
 | `pass` | exit 0 | no |
 | `fail` | non-zero exit | yes, if blocking |
 | `error` | could not start, or timed out | yes, if blocking |
-| `not_configured` | no command defined | **no** |
-| `skipped` | excluded by the profile | no |
+| `not_configured` | no step covers this kind | **no** |
+| `skipped` | held back by a profile or a condition | no |
 
 A project that never set up E2E has not failed E2E. Collapsing those two into
-one red badge is the mistake this table exists to prevent.
+one red badge is the mistake this table exists to prevent — which is why
+coverage is still reported per kind even though the pipeline is free-form, and
+why a kind whose steps disagree takes the worst of them rather than the first.
+
+## Letting AI configure it
+
+Each project chooses how much authority the setup advisor has:
+
+| Mode | What happens |
+| --- | --- |
+| **Off** | Detection from the repository only. No model is asked anything. |
+| **Draft** | The model proposes; you review and save. The default. |
+| **Auto** | The model proposes, the configuration is saved, and a probe runs it. Whatever could not run is corrected once and saved again. |
+
+**Auto** is the only path where a model's shell commands are saved and executed
+without you reading them first. Four things make that a reasonable trade:
+
+- It is **opt-in**, per project, and off by default.
+- The probe runs in a **disposable worktree** under `data/probes/`, on a
+  throwaway branch, never your checkout. It is removed whichever way the probe
+  ends, and anything left by a crash is swept at the next start.
+- Every save is preceded by a **revision snapshot**. The configuration history
+  is on the project form and reverting is one click — including reverting a
+  revert, since realising you wanted what you reverted away from is the usual
+  second move.
+- The model still runs with **no tools at all**. Dev Cockpit executes the
+  proposal and hands back exit codes. It refines against evidence rather than
+  against another guess.
+
+The revision rule is the part worth understanding. A step that **could not run**
+has the wrong command, the wrong working directory, or needs something the setup
+command does not install — that is a configuration mistake, and it is corrected.
+A step that **ran and failed** found a real problem in your code, and it is left
+exactly as it was. The model is never shown it. A model asked to fix a red
+pipeline will reach for the failing check, and the failing check is usually the
+most valuable thing the probe found.
+
+A step the probe proved sound is never rewritten, and a step you wrote yourself
+is never deleted. Those are enforced when the revision is applied, not requested
+in the prompt.
 
 ## Where things are stored
 
@@ -485,6 +572,8 @@ data/
 ├── cockpit.db                    SQLite: projects, runs, events, results
 ├── worktrees/<projectId>/<runId>/    the isolated checkout
 ├── landings/<projectId>/<runId>/     the isolated merge checkout, when landing
+├── probes/<projectId>/<probeId>/     disposable checkout for verifying a
+│                                     drafted configuration; removed after
 ├── attachments/<runId>/
 │   └── <attachmentId>__<name>    files you attached, verbatim
 └── artifacts/<runId>/
@@ -694,6 +783,19 @@ Two honest caveats:
 - **Preview servers are live processes, not persisted jobs.** Their logs are
   artifacts, but a Dev Cockpit server restart loses the in-memory process state;
   start the preview again from the run screen if needed.
+- **`auto` mode runs commands a model wrote, unattended.** The isolation is a
+  git worktree, not a container — the same boundary a run's implementation agent
+  gets, and the same one ADR 0010 describes. It is off by default, every save is
+  reversible from the configuration history, and the probe never touches your
+  checkout. A project you do not trust that far should stay on **Draft**.
+- **`auto` has not been exercised against a live model.** The probe, the
+  revision rule and the history are tested with commands written by the test
+  rather than by a provider, which is the part worth pinning down. What has not
+  been proven end to end is a real advisor returning a proposal that the probe
+  then corrects. Try it on a throwaway project before it matters.
+- **A probe's cost is not recorded against anything.** `addRunCost` counts a
+  run's spending; a configuration probe has no run, so the two advisor calls it
+  makes are not added to any total.
 - **The implementation map is a snapshot, not a live view.** It is drawn when a
   pass finishes, so a run you approve afterwards still shows the verdict the
   orchestrator reached — `Ready for review`, not `Approved`. The timestamp in
