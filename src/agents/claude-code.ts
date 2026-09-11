@@ -9,7 +9,7 @@ import { promisify } from 'node:util';
 
 import { redactText } from '@/core/redact';
 import { ensureDir, runArtifactDir } from '@/core/paths';
-import { planSpawn, resolveExecutable } from '@/process/exec';
+import { describeUnavailable, planSpawn, resolveExecutable, withRetries } from '@/process/exec';
 import { killTree } from '@/process/spawn';
 import { claudePermissionArgs, resolvePermissionMode } from './permissions';
 import { NdjsonSplitter, parseStreamMessage, summariseToolInput } from './stream-parser';
@@ -63,21 +63,27 @@ export class ClaudeCodeAgent implements ImplementationAgent {
 
   async checkAvailability(): Promise<AgentAvailability> {
     const bin = claudeBinary();
-    const plan = planSpawn(bin, ['--version']);
     try {
-      const { stdout } = await execFileAsync(plan.file, plan.args, {
-        windowsHide: true,
-        timeout: 20_000,
-        windowsVerbatimArguments: plan.windowsVerbatimArguments,
+      // The plan is recomputed on every attempt, not just once: if what
+      // changed between a failure and a retry is the resolved path itself
+      // (an update rewriting the binary mid-check), re-resolving is what
+      // lets the retry actually recover.
+      const stdout = await withRetries(async () => {
+        const plan = planSpawn(bin, ['--version']);
+        const { stdout } = await execFileAsync(plan.file, plan.args, {
+          windowsHide: true,
+          timeout: 20_000,
+          windowsVerbatimArguments: plan.windowsVerbatimArguments,
+        });
+        return stdout;
       });
       const version = stdout.trim();
       const resolved = resolveExecutable(bin).resolvedPath ?? bin;
       return { available: true, detail: `${resolved} — ${version}`, version };
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
       return {
         available: false,
-        detail: `Could not run "${bin} --version": ${message}`,
+        detail: describeUnavailable(bin, err, 'npm install -g @anthropic-ai/claude-code'),
         version: null,
       };
     }
