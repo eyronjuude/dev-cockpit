@@ -47,7 +47,7 @@ import {
   type ValidationKind,
   type ValidationOutcome,
 } from '@/domain/types';
-import { matchesPathPatterns } from '@/domain/validation-steps';
+import { DEFAULT_UI_PATTERNS, matchesPathPatterns } from '@/domain/validation-steps';
 import type { FileChange } from '@/git/diff';
 import { listAttachments, type AttachmentView } from './attachments';
 import { clearRunCommits, listRunCommits, type CommitView } from './commits';
@@ -1376,18 +1376,6 @@ export function touchesUi(run: RunView, project: ProjectView): boolean {
     patterns,
   );
 }
-
-const DEFAULT_UI_PATTERNS = [
-  '.tsx',
-  '.jsx',
-  '.vue',
-  '.svelte',
-  '.css',
-  '.scss',
-  'components/',
-  'pages/',
-  'app/',
-];
 
 /* ------------------------------------------------------------------ *
  * Restart recovery

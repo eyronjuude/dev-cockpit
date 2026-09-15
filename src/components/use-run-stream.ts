@@ -3,63 +3,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { RunEvent } from '@/domain/events';
-import type { ExpiryPlan } from '@/domain/expiry';
-import type { PreviewView } from '@/domain/previews';
-import type { ValidationKind } from '@/domain/types';
-import type { ArtifactView } from '@/services/artifacts';
-import type { ReadinessAssessment, RunView } from '@/services/runs';
-import type { RunWorktree } from '@/services/worktrees';
 
-export interface ConfiguredValidation {
-  key: string;
-  label: string;
-  /** A tag. Null for a step that fits none of the six kinds. */
-  kind: ValidationKind | null;
-  command: string;
-  blocking: boolean;
-}
-
-export interface ImplementationAgentOption {
-  id: string;
-  label: string;
-}
-
-export interface RunSnapshot {
-  run: RunView;
-  readiness: ReadinessAssessment;
-  artifacts: ArtifactView[];
-  live: { active: boolean; phase: string | null };
-  preview: PreviewView;
-  /** This run's worktrees, and whether each is still on disk. */
-  worktrees: RunWorktree[];
-  /**
-   * When retention will reclaim this run's storage. Computed server-side from
-   * the project's windows, so the screen and the sweep can never disagree.
-   */
-  expiry: ExpiryPlan;
-  /** Implementation providers the user may choose for the next agent pass. */
-  implementationAgents: ImplementationAgentOption[];
-  /** Transformers the user may choose for this and later iterations' summaries. */
-  transformers: ImplementationAgentOption[];
-  /**
-   * Whether the attachment list can still be added to or removed from.
-   *
-   * Server-decided rather than derived on the client from the status, because
-   * it also accounts for whether the orchestrator is mid-flight, which the
-   * status alone does not say.
-   */
-  attachmentsMutable: boolean;
-  configuredValidations: ConfiguredValidation[];
-  policies: {
-    requireValidation: boolean;
-    requireE2eForUiChanges: boolean;
-    reviewBlocksReady: boolean;
-    allowAgentCommit: boolean;
-    protectedBranches: string[];
-    worktreeRetentionDays: number;
-    artifactRetentionDays: number;
-  };
-}
+/**
+ * The snapshot shape is owned by the server module that builds it, so the
+ * client cannot describe a field the builder does not send. Re-exported here
+ * because the run screen components have always imported it from this file.
+ */
+export type {
+  ConfiguredValidation,
+  ImplementationAgentOption,
+  RunSnapshot,
+} from '@/services/run-snapshot';
+import type { RunSnapshot } from '@/services/run-snapshot';
 
 interface StreamState {
   events: RunEvent[];

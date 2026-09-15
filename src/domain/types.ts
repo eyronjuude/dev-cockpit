@@ -413,6 +413,14 @@ export const ARTIFACT_KINDS = [
   'plan',
   /** An ask run's deliverable: the agent's own answer, verbatim. */
   'answer',
+  /**
+   * A self-contained page a build run wrote, copied out of the worktree.
+   *
+   * Copied rather than served from the checkout because the worktree is
+   * reclaimed after a week and the artifact row is the run's own account of
+   * what it produced — the same reason every other output lives here.
+   */
+  'html_page',
   'other',
 ] as const;
 
@@ -435,6 +443,7 @@ export const ARTIFACT_KIND_LABELS: Record<ArtifactKind, string> = {
   transform_spec: 'Specification',
   plan: 'Plan',
   answer: 'Answer',
+  html_page: 'Page',
   other: 'File',
 };
 

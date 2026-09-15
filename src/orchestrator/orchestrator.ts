@@ -94,6 +94,7 @@ import { register, writeTextArtifact } from '@/services/artifacts';
 import { markRunCommitsLanded, recordRunCommits } from '@/services/commits';
 import { appendEvent } from '@/services/events';
 import { tryRecordImplementationMap } from '@/services/implementation-map';
+import { tryRecordOutputPages } from '@/services/output-pages';
 import { startRunPreview, stopRunPreview } from '@/services/previews';
 import { requireProject, type ProjectView } from '@/services/projects';
 import { checkDependencyReadiness } from '@/services/repo-evidence';
@@ -2742,6 +2743,11 @@ async function phaseCollectDiff(run: RunView, _signal: AbortSignal): Promise<Run
     message: `${diff.files.length} file(s) changed, +${diff.additions}/-${diff.deletions}`,
     payload: { artifactId: '', kind: 'git_diff', label: 'Git diff', bytes: diff.patch.length },
   });
+
+  // A run asked for a report rather than a change leaves a page behind in the
+  // worktree, which is reclaimed. Copying it out is what lets the Preview tab
+  // show it, and failing to is never a reason to fail the run.
+  await tryRecordOutputPages(requireRun(run.id));
 
   return requireRun(run.id);
 }

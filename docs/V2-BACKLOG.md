@@ -32,10 +32,20 @@ cheap. That panel is the missing half: per-project totals for `worktrees/`,
 
 **Preview automation** — *mostly done*
 Auto-start on `READY`, a configurable ready path with a real timeout, restart,
-and a log tail all ship now. What remains is browser-capture integration that
-can register screenshots or Playwright reports against the preview URL, and a
+and a log tail all ship now, and the tab opens the page an implementer names
+rather than the site root. What remains is browser-capture integration that can
+register screenshots or Playwright reports against the preview URL, and a
 readiness check richer than "something answered" — parsing the dev server's own
 output for its bound URL would beat polling.
+
+Route *derivation* is the other gap. Today a page is previewed because the
+implementer named it; a run whose agent writes no `## Preview` section falls
+back to the configured ready path. Mapping a changed file to the URL that
+renders it would cover that, and needs framework knowledge the app does not
+have: `repo-evidence.ts` reads only top-level manifests and identifies
+ecosystems, not frameworks. The cheap first step is already sitting there —
+`dependencyNames` is computed in `packageJsonFacts` and thrown away without
+reaching `RepoEvidence`.
 
 **Host-side permission allowlist**
 ADR 0010 made runs skip permission checks entirely, so the implementer can now
