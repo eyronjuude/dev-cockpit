@@ -20,6 +20,7 @@ import {
   RETRY_STAGE_LABELS,
 } from '@/domain/retry';
 import { isFinished, LANDABLE_STATUSES, type RunStatus } from '@/domain/types';
+import { AttachmentList } from './attachments';
 import type { RunSnapshot } from './use-run-stream';
 
 /**
@@ -851,6 +852,14 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
             }
             onChange={(e) => setFeedback(e.target.value)}
           />
+          <div className="mt-2.5">
+            <AttachmentList
+              runId={run.id}
+              attachments={run.attachments}
+              mutable={snapshot.attachmentsMutable}
+              onChanged={onChanged}
+            />
+          </div>
           <AgentControls
             idPrefix="changes"
             agents={snapshot.implementationAgents}
