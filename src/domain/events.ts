@@ -67,6 +67,7 @@ export const EVENT_TYPES = [
 
   'artifact.created',
   'visualisation.skipped',
+  'output.skipped',
 
   'attachment.added',
   'attachment.removed',
@@ -332,6 +333,12 @@ export interface EventPayloads {
   'artifact.created': { artifactId: string; kind: ArtifactKind; label: string; bytes: number };
   /** The implementation map could not be drawn. The run itself is unaffected. */
   'visualisation.skipped': { reason: string };
+  /**
+   * A page the run wrote was not captured as an output — too large, unreadable,
+   * or the capture itself failed. The file is still in the worktree and the
+   * diff; only the rendered preview of it is missing.
+   */
+  'output.skipped': { reason: string; path: string | null };
 
   /**
    * An attachment arrived or left. Both are recorded because the attachment

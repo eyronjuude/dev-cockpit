@@ -102,6 +102,9 @@ async function waitForReady(runId: string): Promise<import('@/domain/previews').
 const SERVER_COMMAND =
   'node -e "const http=require(\'http\'); const port=Number(process.env.PORT); const server=http.createServer((req,res)=>res.end(\'preview ok\')); server.listen(port,\'127.0.0.1\',()=>console.log(\'ready \'+port));"';
 
+/** Answers on / and /dashboard, 404s elsewhere, so a path probe has something to find. */
+const ROUTED_SERVER_COMMAND = 'node -e "const http=require(\'http\'); const port=Number(process.env.PORT); const server=http.createServer((req,res)=>{ if(req.url===\'/dashboard\'||req.url===\'/\'){res.end(\'ok\');return;} res.statusCode=404;res.end(\'nope\'); }); server.listen(port,\'127.0.0.1\',()=>console.log(\'ready \'+port));"';
+
 describe('run previews', () => {
   it('starts the project development command in the run worktree and stops it', async () => {
     const run = await runWithWorktree('preview-ok', SERVER_COMMAND);
@@ -133,6 +136,28 @@ describe('run previews', () => {
     expect(log?.label).toBe('Preview server log');
     expect(log?.previewUrl).toBe(ready.url);
     expect(log?.bytes).toBeGreaterThan(0);
+  });
+
+  it('tells a missing page apart from a server that answered', async () => {
+    // `responds` counts any answer as success, which is right for readiness and
+    // wrong for "does this route exist". `probePath` is the one that reads the
+    // status, and the two must not be collapsed into each other.
+    const run = await runWithWorktree('preview-probe', ROUTED_SERVER_COMMAND);
+    await previewsService.startRunPreview(run.id);
+    const ready = await waitForReady(run.id);
+
+    expect(await previewsService.probePath(`${ready.url}/dashboard`)).toBe(true);
+    expect(await previewsService.probePath(`${ready.url}/missing`)).toBe(false);
+
+    await expect(
+      previewsService.probePreviewPaths(run.id, ['/dashboard', '/missing']),
+    ).resolves.toEqual(['/missing']);
+
+    await previewsService.stopRunPreview(run.id, 'done testing');
+
+    await expect(previewsService.probePreviewPaths(run.id, ['/dashboard'])).rejects.toThrow(
+      /preview running/,
+    );
   });
 
   it('requires a configured development command', async () => {

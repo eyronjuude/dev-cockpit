@@ -19,6 +19,7 @@ import { ArtifactPanel } from './artifact-panel';
 import { AttachmentList } from './attachments';
 import { DiffView } from './diff-view';
 import { LogStream } from './log-stream';
+import { OutputView } from './output-view';
 import { Markdown } from './markdown';
 import { ProgressPanel } from './progress-panel';
 import { ReadinessNotice, RunActions } from './run-actions';
@@ -247,7 +248,9 @@ export function RunView({ initial }: { initial: RunSnapshot }) {
 
             {tab === 'Map' ? <MapTab artifacts={mapArtifacts} /> : null}
 
-            {tab === 'Preview' ? <PreviewTab snapshot={snapshot} /> : null}
+            {tab === 'Preview' ? (
+              <OutputView snapshot={snapshot} onChanged={refresh} />
+            ) : null}
 
             {tab === 'Changes' ? (
               run.changedFiles.length === 0 ? (
@@ -361,70 +364,6 @@ export function RunView({ initial }: { initial: RunSnapshot }) {
 }
 
 /* ------------------------------------------------------------------ */
-
-function PreviewTab({ snapshot }: { snapshot: RunSnapshot }) {
-  const { preview, run } = snapshot;
-
-  if (!preview.configured) {
-    return <p className="empty-state">No development command is configured for this project.</p>;
-  }
-
-  if (!run.worktreePath) {
-    return <p className="empty-state">Preview is available once this run has a worktree.</p>;
-  }
-
-  if (!preview.url) {
-    return <p className="empty-state">Start the preview from the action bar.</p>;
-  }
-
-  return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-line px-3.5 py-2">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <span
-              className={`badge ${
-                preview.status === 'ready'
-                  ? 'badge-pass'
-                  : preview.status === 'failed'
-                    ? 'badge-fail'
-                    : preview.status === 'unresponsive'
-                      ? 'badge-warn'
-                      : preview.running
-                        ? 'badge-running'
-                        : 'badge-idle'
-              }`}
-            >
-              {preview.status.replace('_', ' ')}
-            </span>
-            <code className="mono truncate text-[11px] text-ink-faint">{preview.command}</code>
-          </div>
-          {preview.error ? (
-            <p className="mt-1 text-[12px] text-fail">{preview.error}</p>
-          ) : null}
-        </div>
-        <a className="btn btn-sm shrink-0" href={preview.url} target="_blank" rel="noreferrer">
-          Open
-        </a>
-      </div>
-
-      {!preview.running ? (
-        <p className="empty-state">
-          {preview.status === 'failed'
-            ? 'The preview process failed. Open the preview log from Artifacts for details.'
-            : 'The preview process stopped. Open the preview log from Artifacts for details.'}
-        </p>
-      ) : (
-        <iframe
-          src={preview.url}
-          title="Run preview"
-          className="min-h-[520px] flex-1 border-0 bg-white"
-          referrerPolicy="no-referrer"
-        />
-      )}
-    </div>
-  );
-}
 
 function Meta({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (

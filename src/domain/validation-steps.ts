@@ -56,6 +56,25 @@ export function matchesPathPatterns(
 }
 
 /**
+ * What counts as a UI file when a project has named no patterns of its own.
+ *
+ * Here rather than in `services/runs`, which is `server-only`: the readiness
+ * check, the E2E-for-UI policy and the Preview tab all need the same list, and
+ * the browser cannot reach a server-only module to get it.
+ */
+export const DEFAULT_UI_PATTERNS: readonly string[] = [
+  '.tsx',
+  '.jsx',
+  '.vue',
+  '.svelte',
+  '.css',
+  '.scss',
+  'components/',
+  'pages/',
+  'app/',
+];
+
+/**
  * Parses newline-separated `KEY=VALUE` pairs.
  *
  * The same shape `linkPaths` and `protectedBranches` already use, for the same

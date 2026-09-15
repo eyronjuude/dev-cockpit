@@ -10,7 +10,7 @@ import { AppError, errorMessage } from '@/core/errors';
 import { ensureDir, isInside, runArtifactDir } from '@/core/paths';
 import { redact, registerExtraSecrets } from '@/core/redact';
 import { parseEnvLines, secretValuesIn } from '@/domain/validation-steps';
-import type { PreviewStatus, PreviewView } from '@/domain/previews';
+import { joinPreviewPath, type PreviewStatus, type PreviewView } from '@/domain/previews';
 import type { PreviewConfigView } from './projects';
 import { killTree } from '@/process/spawn';
 import { refreshArtifactBytes, register } from './artifacts';
@@ -108,11 +108,6 @@ function resolvePreviewCwd(worktreePath: string, workingDir: string | null): str
   return resolved;
 }
 
-/** Joins the ready path onto the base URL without doubling or dropping a slash. */
-function readyUrlFor(base: string, readyPath: string): string {
-  const suffix = readyPath.startsWith('/') ? readyPath : `/${readyPath}`;
-  return suffix === '/' ? base : `${base}${suffix}`;
-}
 
 function isRunning(state: PreviewProcessState): boolean {
   // `unresponsive` counts: the process is alive, so Stop must still reach it.
@@ -225,7 +220,7 @@ export async function startRunPreview(runId: string): Promise<PreviewView> {
       ? await claimFixedPort(config.fixedPort)
       : await reservePort();
   const url = `http://127.0.0.1:${port}`;
-  const readyUrl = readyUrlFor(url, config.readyPath);
+  const readyUrl = joinPreviewPath(url, config.readyPath);
   const startedAt = new Date().toISOString();
   const logDir = ensureDir(path.join(runArtifactDir(runId), 'preview'));
   const logPath = path.join(logDir, `${startedAt.replace(/[:.]/g, '-')}.log`);
@@ -515,6 +510,61 @@ async function waitForReady(state: PreviewProcessState): Promise<void> {
     await delay(READY_POLL_MS);
   }
 }
+
+/**
+ * Whether a path on the running preview actually resolves.
+ *
+ * Deliberately not `responds`, which counts any answer — including a 404 — as
+ * success. That is right for readiness, where the question is whether the
+ * server is up, and wrong here, where the question is whether a page exists.
+ * Fixing `responds` instead would quietly change what "ready" means.
+ *
+ * A soft 404 served with a 200 still reports reachable. Nothing can be done
+ * about that from outside the application, which is why an unreachable target
+ * is marked rather than hidden.
+ */
+export async function probePath(url: string): Promise<boolean> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, { cache: 'no-store', signal: controller.signal });
+    return response.status < 400;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/**
+ * Probes several paths against this run's preview at once.
+ *
+ * Returns the paths that did not answer, because that is the shorter list and
+ * the one the UI marks.
+ */
+export async function probePreviewPaths(
+  runId: string,
+  paths: readonly string[],
+): Promise<string[]> {
+  const state = previewProcesses().get(runId);
+  if (!state || !isRunning(state)) {
+    throw new AppError('This run does not have a preview running.', {
+      code: 'preview_not_running',
+    });
+  }
+
+  const checked = await Promise.all(
+    paths.slice(0, MAX_PROBED_PATHS).map(async (path) => ({
+      path,
+      ok: await probePath(joinPreviewPath(state.url, path)),
+    })),
+  );
+
+  return checked.filter((result) => !result.ok).map((result) => result.path);
+}
+
+/** More than this is a crawl, not a check. */
+const MAX_PROBED_PATHS = 8;
 
 async function responds(url: string): Promise<boolean> {
   const controller = new AbortController();

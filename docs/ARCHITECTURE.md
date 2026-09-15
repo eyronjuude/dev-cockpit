@@ -62,7 +62,8 @@ produces `review.skipped`. Neither can fail a run.
 ```
 src/
 ├── core/          ids, errors, data-directory paths, secret redaction
-├── domain/        run lifecycle, event catalogue, validation and mode vocabulary
+├── domain/        run lifecycle, event catalogue, validation and mode vocabulary,
+│                  which output the Preview tab shows and which page it opens
 ├── db/            drizzle schema, client, generated SQL migrations
 ├── process/       command execution, process-tree kill, executable resolution
 ├── git/           git wrapper, diff collection, worktree lifecycle
@@ -223,6 +224,45 @@ A follow-up iteration is short, because the resumed session still holds the
 rules, the task and what it produced. With no session to resume that inverts,
 and the prompt carries all three instead — feedback alone would ask a cold
 agent to revise work it has never seen. See ADR 0010.
+
+## What the Preview tab shows
+
+A run produces one of several kinds of thing, and for most of this project's
+life the Preview tab could only show one of them: the development server. An
+Ask run and a Plan run never start one, so the tab was empty for exactly the
+runs whose whole output was a document already sitting in `artifacts`.
+
+`domain/outputs.ts` is a ranking over stored state — the run's mode, its changed
+files, its artifacts, whether a development command exists. It is pure, and the
+browser is its only caller today, but it is in `domain` because the decision is
+a rule rather than a rendering detail, and because being pure is what makes the
+table of rules testable without a worktree.
+
+**One output is shown.** Others are offered as links in the sentence that
+explains the choice. A second row of tabs would be permanent chrome for a case
+that should be rare, and the Artifacts tab already exists for comparing things
+side by side. If the alternatives get used constantly, the ranking is wrong —
+that is the signal, and it is better than the signal a switcher would give,
+which is none.
+
+Only the newest artifact of each kind is a candidate. Earlier passes stay in the
+Artifacts tab, which is the arrangement the implementation map already uses.
+
+### Which page
+
+`domain/preview-targets.ts` answers the second half. A change to what a page
+*displays* usually touches no file under that page, so nothing derivable from
+the diff points at it. The implementer knows, having followed the call chain to
+make the change, so the build prompt asks it to name the paths and this parses
+the `## Preview` section out of the closing message.
+
+That is the one place the application acts on an agent's claim about its own
+work, and the distinction is deliberate: readiness decides whether work is done
+and must never take the agent's word for it, while a preview target is a
+navigation hint whose worst case is a wrong page. Paths are rejected rather than
+coerced when malformed, and checked against the running server before use —
+`probePath` reads the status code, which `responds` deliberately does not,
+because for readiness any answer at all is the right answer.
 
 ## Impact
 

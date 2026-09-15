@@ -185,6 +185,39 @@ ${list}
 Treat them as part of the request. If one contradicts the text of the request, say so rather than picking silently.`;
 }
 
+/**
+ * Asks a build run to name the pages its change is visible on.
+ *
+ * Only for a project that has a development command — a project with no dev
+ * server should not be asked about pages at all.
+ *
+ * This exists because nothing derivable from a diff answers the question. A
+ * change to a profit calculation touches no page file, and is only visible on
+ * the one page that shows the figure; the implementer is the only party that
+ * knows, because it followed the call chain to make the change. What comes
+ * back is a navigation hint, not a verdict — readiness still never consults
+ * anything the agent says about its own work.
+ *
+ * The shape is ordinary Markdown so the section reads correctly to a person in
+ * the Overview tab as well as parsing in `domain/preview-targets`.
+ */
+function previewSection(project: ProjectView): string | null {
+  if (!project.preview.command?.trim()) return null;
+
+  return `# Preview
+
+Dev Cockpit can run this project's development command against your worktree and show the result.
+
+If your change is visible on a page a person can open, end your reply with a \`## Preview\` section listing each affected path, rooted, one per line, with a few words on what to look at:
+
+## Preview
+- /dashboard/revenue — the profit summary now nets refunds
+
+Include a page whose own files you did not edit, if your change alters what it displays — that is the case this is most useful for. Leave the section out entirely when nothing about your change is visible in a browser.
+
+If what was asked for is a standalone page rather than a change to the product — a report, a visualisation — write it as a single self-contained HTML file with its CSS and JavaScript inline. Dev Cockpit copies that one file out of the worktree to show it, so a stylesheet or a script beside it will not load.`;
+}
+
 export interface BuildPromptInput {
   run: RunView;
   project: ProjectView;
@@ -260,6 +293,11 @@ export function buildInitialPrompt(input: BuildPromptInput): string {
   const attachmentsText = attachmentSection(run, mode);
   if (attachmentsText) sections.push(attachmentsText);
 
+  if (mode.editsCode) {
+    const previewText = previewSection(project);
+    if (previewText) sections.push(previewText);
+  }
+
   return sections.join('\n\n');
 }
 
@@ -310,6 +348,14 @@ export function buildChangeRequestPrompt(input: BuildChangeRequestInput): string
     sections.push(...openingRules(project, mode), taskSection(run));
   } else if (modeSwitched) {
     sections.push(...openingRules(project, mode), MODE_SWITCH_NOTE[mode.id]);
+  }
+
+  // A resumed build session was already asked for this and does not need it
+  // again. A cold one inherited nothing, and a session that has just switched
+  // into Build was previously told to change nothing at all.
+  if (mode.editsCode && (!resumed || modeSwitched)) {
+    const previewText = previewSection(project);
+    if (previewText) sections.push(previewText);
   }
 
   /**

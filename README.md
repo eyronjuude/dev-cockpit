@@ -437,7 +437,48 @@ Specifically:
 Pushing remains a deliberate manual step. Dev Cockpit updates only the local
 target branch.
 
-## Worktree previews
+## The Preview tab
+
+The tab shows **the run's output**, whatever that turned out to be, and says in
+one line why it picked what it picked.
+
+| The run | What Preview shows |
+| --- | --- |
+| Ask | the answer it wrote |
+| Plan | the plan it wrote, newest pass — earlier ones stay in Artifacts |
+| Build that changed the site | the site, running from this run's worktree |
+| Build asked for a report or visualisation | that page, rendered |
+| Anything else | a sentence saying what happened and where to look instead |
+
+One output at a time. When a run has more than one, the others are links in that
+same sentence rather than a second row of tabs — if you find yourself using them
+often, the ranking in `src/domain/outputs.ts` is what wants fixing.
+
+### Pointing at the page that changed
+
+A change to a profit calculation is only visible on the page that shows the
+figure, and that page's own files were never touched — so nothing in the diff
+can find it. Instead, a build run whose project has a development command is
+asked to end its reply with a `## Preview` section naming the paths its change
+is visible on:
+
+```
+## Preview
+- /dashboard/revenue — the profit summary now nets refunds
+```
+
+Dev Cockpit opens the first of those rather than the site root, after checking
+the running server actually serves it. A path that answers with a 404 is marked
+rather than hidden — that usually means a route parameter or a login, which is
+worth seeing. The path box in the toolbar is always editable, and an agent that
+writes no such section costs nothing: the preview opens the configured ready
+path, as it always did.
+
+This is the one place Dev Cockpit acts on something an agent says about its own
+work. It is a navigation hint, not a verdict: readiness still never consults it,
+and the worst case is a wrong page and a retyped path.
+
+### Worktree previews
 
 If a project has a **Development command**, a run with a prepared worktree can
 start it from the run screen. Dev Cockpit allocates a local `127.0.0.1` port,
@@ -463,6 +504,20 @@ A preview that never answers within its timeout is reported as `unresponsive`,
 not `failed`. The process is still running — a slow first build is the usual
 cause — so it is left alone and its log keeps filling. Killing it would throw
 away the thing you need to read.
+
+### Pages a run writes
+
+A build run whose deliverable is a page rather than a change — a report, a
+visualisation of a plan — leaves an HTML file in a worktree that retention will
+reclaim. Dev Cockpit copies self-contained pages out into the run's artifacts
+and renders them in the Preview tab, in a sandbox with an opaque origin: the
+page can draw and calculate, and cannot reach this application's API. Files
+under `node_modules/`, `dist/`, `coverage/` and the like are ignored, as is
+anything the development server would serve itself.
+
+Only the one file is copied, so a page that links a stylesheet beside it renders
+without it and says so. Build prompts ask for a single self-contained file for
+that reason.
 
 ## Validation configuration
 

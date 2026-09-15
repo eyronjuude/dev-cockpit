@@ -463,6 +463,21 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
           </button>
         ) : null}
 
+        {preview.running ? (
+          <button
+            type="button"
+            className="btn"
+            // One endpoint rather than a stop followed by a start: sequencing it
+            // here would leave a window where a failed stop still looked like a
+            // successful restart. The route refuses while the run is working.
+            disabled={busy !== null || active}
+            title={active ? 'Wait for the run to stop before restarting the preview.' : undefined}
+            onClick={() => void post(`/api/runs/${run.id}/preview/restart`, {}, 'preview-restart')}
+          >
+            {busy === 'preview-restart' ? 'Restarting…' : 'Restart preview'}
+          </button>
+        ) : null}
+
         {preview.running && preview.url ? (
           <a className="btn" href={preview.url} target="_blank" rel="noreferrer">
             Open preview

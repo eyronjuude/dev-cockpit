@@ -46,3 +46,19 @@ export interface PreviewView {
   /** Tail of the captured log, for the Preview tab. */
   logTail: string | null;
 }
+
+/**
+ * Joins a path onto the preview's base URL without doubling or dropping a
+ * slash.
+ *
+ * Here rather than in `services/previews` because two callers need to agree:
+ * the readiness probe builds the URL it polls, and the Preview tab builds the
+ * URL it frames. Two joiners that nearly agree would put the probe and the
+ * iframe on different pages.
+ */
+export function joinPreviewPath(base: string, path: string): string {
+  const trimmed = path.trim();
+  if (!trimmed) return base;
+  const suffix = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+  return suffix === '/' ? base : `${base}${suffix}`;
+}
