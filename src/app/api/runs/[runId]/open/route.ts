@@ -1,11 +1,10 @@
-import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import { z } from 'zod';
 
 import { assertLocalRequest, handle, readJson } from '@/app/api/_lib/handler';
-import { AppError } from '@/core/errors';
+import { AppError, errorMessage } from '@/core/errors';
 import { runLandingDir } from '@/core/paths';
-import { planSpawn } from '@/process/exec';
+import { planSpawn, spawnDetached } from '@/process/exec';
 import { requireProject } from '@/services/projects';
 import { requireRun } from '@/services/runs';
 
@@ -49,11 +48,11 @@ export function POST(request: Request, { params }: Params) {
       throw new AppError(`That directory no longer exists: ${dir}`, { code: 'missing_path' });
     }
 
-    return { opened: true, path: dir, command: launch(project.openCommand, dir) };
+    return { opened: true, path: dir, command: await launch(project.openCommand, dir) };
   });
 }
 
-function launch(openCommand: string | null, dir: string): string {
+async function launch(openCommand: string | null, dir: string): Promise<string> {
   const template = openCommand?.trim();
 
   const [file, ...rest] = template
@@ -70,14 +69,11 @@ function launch(openCommand: string | null, dir: string): string {
 
   const plan = planSpawn(file, args);
 
-  spawn(plan.file, plan.args, {
-    detached: true,
-    stdio: 'ignore',
-    windowsHide: true,
-    windowsVerbatimArguments: plan.windowsVerbatimArguments,
-  }).unref();
-
-  return plan.describe;
+  try {
+    return await spawnDetached(plan);
+  } catch (err) {
+    throw new AppError(errorMessage(err));
+  }
 }
 
 function platformOpener(): string {
