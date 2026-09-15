@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -81,6 +82,37 @@ export function resolveExecutable(name: string): ResolvedExecutable {
   }
 
   const directories = pathDirectories();
+
+  // `name` may already carry one of the extensions the loops below would
+  // otherwise append (e.g. the default opener `explorer.exe`), which would
+  // search for nonsense like `explorer.exe.exe` and never find it. Search for
+  // it as-is instead.
+  const existingExt = path.extname(name).toLowerCase();
+  if (DIRECT_EXTENSIONS.includes(existingExt)) {
+    for (const directory of directories) {
+      // turbopackIgnore: this walks the runtime PATH, not project files.
+      const candidate = path.join(/* turbopackIgnore: true */ directory, name);
+      if (isFile(candidate)) {
+        return { file: candidate, prefixArgs: [], viaCmd: false, resolvedPath: candidate };
+      }
+    }
+    return { file: name, prefixArgs: [], viaCmd: false, resolvedPath: null };
+  }
+  if (SHIM_EXTENSIONS.includes(existingExt)) {
+    const baseName = name.slice(0, -existingExt.length);
+    for (const directory of directories) {
+      // turbopackIgnore: this walks the runtime PATH, not project files.
+      const candidate = path.join(/* turbopackIgnore: true */ directory, name);
+      if (!isFile(candidate)) continue;
+
+      const sibling = findShimTarget(candidate, baseName);
+      if (sibling) {
+        return { file: sibling, prefixArgs: [], viaCmd: false, resolvedPath: sibling };
+      }
+      return { file: comspec, prefixArgs: ['/d', '/s', '/c'], viaCmd: true, resolvedPath: candidate };
+    }
+    return { file: name, prefixArgs: [], viaCmd: false, resolvedPath: null };
+  }
 
   // A directly spawnable executable is strictly preferable: no shell involved.
   for (const extension of DIRECT_EXTENSIONS) {
@@ -254,4 +286,32 @@ export function planSpawn(name: string, args: readonly string[]): SpawnPlan {
     windowsVerbatimArguments: true,
     describe: commandLine,
   };
+}
+
+/**
+ * Launches a detached, fire-and-forget process from a spawn plan.
+ *
+ * `spawn`'s `'error'` event fires asynchronously, after this call returns; an
+ * unhandled one is an uncaught exception with no listener attached, which
+ * takes the whole server down instead of just failing the one request. This
+ * waits for either `'spawn'` (the process is confirmed running, safe to
+ * detach) or `'error'` before settling, so a bad command surfaces as a
+ * rejected promise instead of a crash.
+ */
+export function spawnDetached(plan: SpawnPlan): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(plan.file, plan.args, {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+      windowsVerbatimArguments: plan.windowsVerbatimArguments,
+    });
+    child.once('error', (err) => {
+      reject(new Error(`Could not launch "${plan.describe}": ${err.message}`));
+    });
+    child.once('spawn', () => {
+      child.unref();
+      resolve(plan.describe);
+    });
+  });
 }

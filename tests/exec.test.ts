@@ -5,6 +5,7 @@ import {
   planSpawn,
   quoteWindowsArg,
   resolveExecutable,
+  spawnDetached,
   withRetries,
 } from '@/process/exec';
 
@@ -116,6 +117,20 @@ describe('resolveExecutable', () => {
     const resolved = resolveExecutable('./local/tool');
     expect(resolved.resolvedPath).toBe('./local/tool');
   });
+
+  it('does not double an extension the name already carries', () => {
+    // The default Windows opener is literally "explorer.exe". Appending
+    // another extension on top of it (explorer.exe.exe, explorer.exe.cmd)
+    // never matches anything and used to fall through to "not found".
+    const resolved = resolveExecutable('explorer.exe');
+    expect(resolved.file.toLowerCase()).not.toContain('.exe.exe');
+    expect(resolved.file.toLowerCase()).not.toContain('.exe.cmd');
+    if (process.platform === 'win32') {
+      // Windows keeps its own directory on PATH, so this should resolve
+      // directly now instead of falling back to resolvedPath: null.
+      expect(resolved.file.toLowerCase().endsWith('explorer.exe')).toBe(true);
+    }
+  });
 });
 
 describe('planSpawn', () => {
@@ -156,6 +171,22 @@ describe('planSpawn', () => {
       windowsHide: true,
     });
     expect(stdout).toBe(tricky);
+  });
+});
+
+describe('spawnDetached', () => {
+  it('rejects instead of raising an uncaught error when the executable does not exist', async () => {
+    // Before the fix, a launch failure like this was an unhandled 'error'
+    // event on the child process — an uncaught exception with no listener,
+    // not a rejected promise. If that regressed, this test process itself
+    // would crash rather than seeing the rejection below.
+    const plan = planSpawn('definitely-not-installed-zzz', []);
+    await expect(spawnDetached(plan)).rejects.toThrow();
+  });
+
+  it('resolves once the process actually starts', async () => {
+    const plan = planSpawn('node', ['-e', 'process.exit(0)']);
+    await expect(spawnDetached(plan)).resolves.toContain('node');
   });
 });
 
