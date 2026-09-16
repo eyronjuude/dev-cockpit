@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { effectiveWorkMode } from '@/domain/modes';
@@ -53,6 +54,7 @@ export function OutputView({
         preview: { configured: preview.configured, running: preview.running },
         hasWorktree: run.worktreePath !== null,
         uiPathPatterns: policies.uiPathPatterns,
+        projectId: run.projectId,
       }),
     [run, artifacts, preview.configured, preview.running, live.active, policies.uiPathPatterns],
   );
@@ -64,7 +66,23 @@ export function OutputView({
   const current = available.find((output) => output.id === requestedId) ?? selection.shown;
 
   if (!current) {
-    return <p className="empty-state">{selection.emptyReason}</p>;
+    return (
+      <p className="empty-state">
+        {selection.emptyReason}
+        {selection.emptyReasonHref ? (
+          <>
+            {' '}
+            <Link
+              href={selection.emptyReasonHref}
+              className="underline decoration-dotted underline-offset-2 hover:text-ink"
+            >
+              Set one up
+            </Link>
+            .
+          </>
+        ) : null}
+      </p>
+    );
   }
 
   const others = available.filter((output) => output.id !== current.id);
@@ -73,6 +91,18 @@ export function OutputView({
     <div className="flex h-full min-h-0 flex-col">
       <p className="shrink-0 border-b border-line px-3.5 py-2 text-[11.5px] text-ink-faint">
         Showing the <span className="font-medium text-ink">{current.label}</span> — {current.reason}
+        {current.settingsHref ? (
+          <>
+            {' '}
+            <Link
+              href={current.settingsHref}
+              className="underline decoration-dotted underline-offset-2 hover:text-ink"
+            >
+              Set up a preview
+            </Link>
+            .
+          </>
+        ) : null}
         {selection.olderPasses > 0 && current.id === selection.shown?.id ? (
           <>
             {' '}

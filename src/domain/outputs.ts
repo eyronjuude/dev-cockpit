@@ -49,6 +49,12 @@ export interface RunOutput {
   label: string;
   /** Why the tab picked this, as a sentence. */
   reason: string;
+  /**
+   * Where to go to get a better output than this one, when the reason is a
+   * missing project setting rather than something about this run. Null when
+   * there is nothing a settings change would fix (e.g. the worktree is gone).
+   */
+  settingsHref: string | null;
   source: RunOutputSource;
 }
 
@@ -59,6 +65,8 @@ export interface RunOutputSelection {
   alternatives: RunOutput[];
   /** Set exactly when `shown` is null. */
   emptyReason: string | null;
+  /** Same condition as `emptyReason`: the settings fix for it, if any. */
+  emptyReasonHref: string | null;
   /**
    * How many earlier passes produced the same kind of deliverable.
    *
@@ -107,7 +115,12 @@ export interface RunOutputInput {
   preview: OutputPreviewState;
   hasWorktree: boolean;
   uiPathPatterns: readonly string[];
+  /** Where the settings-fix links below point: `/projects/{projectId}`. */
+  projectId: string;
 }
+
+/** The project settings page, scrolled to the field that would fix a missing preview. */
+const previewSettingsHref = (projectId: string): string => `/projects/${projectId}#dev-command`;
 
 /* ------------------------------------------------------------------ *
  * Facts
@@ -272,12 +285,17 @@ export function wantsVisualArtifact(request: string): boolean {
  * The rules
  * ------------------------------------------------------------------ */
 
-function documentOutput(artifact: OutputArtifact, reason: string): RunOutput {
+function documentOutput(
+  artifact: OutputArtifact,
+  reason: string,
+  settingsHref: string | null = null,
+): RunOutput {
   return {
     id: `artifact:${artifact.id}`,
     kind: 'document',
     label: DOCUMENT_LABELS[artifact.kind] ?? 'document',
     reason,
+    settingsHref,
     source: { source: 'artifact', artifactId: artifact.id, mimeType: artifact.mimeType },
   };
 }
@@ -288,6 +306,7 @@ function pageOutput(artifact: OutputArtifact, reason: string): RunOutput {
     kind: 'page',
     label: 'page',
     reason,
+    settingsHref: null,
     source: { source: 'artifact', artifactId: artifact.id, mimeType: artifact.mimeType },
   };
 }
@@ -298,6 +317,7 @@ function siteOutput(reason: string): RunOutput {
     kind: 'site',
     label: 'rendered site',
     reason,
+    settingsHref: null,
     source: { source: 'devServer' },
   };
 }
@@ -375,24 +395,34 @@ const RULES: readonly OutputRule[] = [
   },
   {
     id: 'page-without-a-server',
-    applies(_input, facts) {
+    applies(input, facts) {
       const artifact = facts.newest.get(PAGE_KIND);
       if (!artifact) return null;
       return pageOutput(
         artifact,
-        'No development command is configured, and this run wrote an HTML page.',
+        input.preview.configured
+          ? 'This run no longer has a worktree to serve from, and this run wrote an HTML page.'
+          : 'No development command is configured, and this run wrote an HTML page.',
       );
     },
   },
   {
     id: 'implementation-summary',
-    applies(_input, facts) {
+    applies(input, facts) {
       const artifact = facts.newest.get('markdown_report');
       if (!artifact) return null;
-      return documentOutput(
-        artifact,
-        'No development command is configured, so the run wrote up what it did.',
-      );
+      // Both causes of `!facts.previewable` land here, but only one of them
+      // is a settings change away from a real preview next time.
+      return input.preview.configured
+        ? documentOutput(
+            artifact,
+            'This run no longer has a worktree to serve from, so here is what it did.',
+          )
+        : documentOutput(
+            artifact,
+            'No development command is configured, so the run wrote up what it did.',
+            previewSettingsHref(input.projectId),
+          );
     },
   },
 ];
@@ -418,6 +448,17 @@ function allOutputs(facts: RunOutputFacts): RunOutput[] {
   return outputs;
 }
 
+export interface NoOutputExplanation {
+  text: string;
+  /** Set only when a settings change, not just time or a finished run, would fix it. */
+  href: string | null;
+}
+
+const explanation = (text: string, href: string | null = null): NoOutputExplanation => ({
+  text,
+  href,
+});
+
 /**
  * What to say when there is nothing to show.
  *
@@ -425,32 +466,44 @@ function allOutputs(facts: RunOutputFacts): RunOutput[] {
  * "No preview" with no explanation is the state this whole module exists to
  * remove.
  */
-export function describeNoOutput(input: RunOutputInput, facts: RunOutputFacts): string {
+export function describeNoOutput(
+  input: RunOutputInput,
+  facts: RunOutputFacts,
+): NoOutputExplanation {
   const wording = WORK_MODE_WORDING[input.mode];
 
   if (facts.expiredDocuments.length > 0) {
-    return `This run's ${wording.deliverable} was reclaimed under the project's artifact retention policy. The record of it is still in the Artifacts tab.`;
+    return explanation(
+      `This run's ${wording.deliverable} was reclaimed under the project's artifact retention policy. The record of it is still in the Artifacts tab.`,
+    );
   }
 
   if (input.active) {
-    return `The ${wording.deliverable} appears here when the ${wording.agentNoun} finishes.`;
+    return explanation(`The ${wording.deliverable} appears here when the ${wording.agentNoun} finishes.`);
   }
 
   if (input.mode !== 'build') {
-    return isFinished(input.status)
-      ? `This run finished without producing a ${wording.deliverable}. The Logs tab has what the ${wording.agentNoun} did.`
-      : `No ${wording.deliverable} has been written yet.`;
+    return explanation(
+      isFinished(input.status)
+        ? `This run finished without producing a ${wording.deliverable}. The Logs tab has what the ${wording.agentNoun} did.`
+        : `No ${wording.deliverable} has been written yet.`,
+    );
   }
 
   if (!input.preview.configured) {
-    return 'This project has no development command, so there is no site to show. What the run changed is in the Changes and Diff tabs.';
+    return explanation(
+      'This project has no development command, so there is no site to show. What the run changed is in the Changes and Diff tabs.',
+      previewSettingsHref(input.projectId),
+    );
   }
 
   if (!input.hasWorktree) {
-    return 'This run no longer has a worktree, so there is nothing left to serve. What it changed is in the Changes and Diff tabs.';
+    return explanation(
+      'This run no longer has a worktree, so there is nothing left to serve. What it changed is in the Changes and Diff tabs.',
+    );
   }
 
-  return 'Nothing previewable yet. What the run changed is in the Changes and Diff tabs.';
+  return explanation('Nothing previewable yet. What the run changed is in the Changes and Diff tabs.');
 }
 
 /** Which output to show, which to offer instead, and why. */
@@ -464,10 +517,12 @@ export function selectRunOutputs(input: RunOutputInput): RunOutputSelection {
   }
 
   if (!shown) {
+    const noOutput = describeNoOutput(input, facts);
     return {
       shown: null,
       alternatives: [],
-      emptyReason: describeNoOutput(input, facts),
+      emptyReason: noOutput.text,
+      emptyReasonHref: noOutput.href,
       olderPasses: 0,
     };
   }
@@ -489,6 +544,7 @@ export function selectRunOutputs(input: RunOutputInput): RunOutputSelection {
     shown: chosen,
     alternatives,
     emptyReason: null,
+    emptyReasonHref: null,
     olderPasses: shownKind ? (facts.olderPasses.get(shownKind) ?? 0) : 0,
   };
 }

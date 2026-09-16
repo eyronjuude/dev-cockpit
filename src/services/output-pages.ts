@@ -79,6 +79,7 @@ export async function recordOutputPages(run: RunView): Promise<RecordedPage[]> {
     preview: { configured: false, running: false },
     hasWorktree: true,
     uiPathPatterns: [],
+    projectId: run.projectId,
   });
 
   if (candidates.length === 0) return [];
