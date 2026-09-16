@@ -43,6 +43,7 @@ function input(overrides: Partial<RunOutputInput> = {}): RunOutputInput {
     preview: { configured: false, running: false },
     hasWorktree: true,
     uiPathPatterns: [],
+    projectId: 'prj_1',
     ...overrides,
   };
 }
@@ -220,16 +221,35 @@ describe('selecting a run output', () => {
 
     expect(shown?.kind).toBe('document');
     expect(shown?.label).toBe('summary');
+    // The fallback is a settings problem, so it points at the fix.
+    expect(shown?.settingsHref).toBe('/projects/prj_1#dev-command');
+  });
+
+  it('does not offer a settings link when the summary fallback is caused by a missing worktree, not a missing command', () => {
+    const summary = artifact('markdown_report');
+    const { shown } = selectRunOutputs(
+      input({
+        changedFiles: [changed('src/lib/profit.ts')],
+        artifacts: [summary],
+        preview: { configured: true, running: false },
+        hasWorktree: false,
+      }),
+    );
+
+    expect(shown?.kind).toBe('document');
+    expect(shown?.reason).toContain('worktree');
+    expect(shown?.settingsHref).toBeNull();
   });
 
   it('explains itself when a run produced nothing', () => {
-    const { shown, alternatives, emptyReason } = selectRunOutputs(
+    const { shown, alternatives, emptyReason, emptyReasonHref } = selectRunOutputs(
       input({ status: 'FAILED' }),
     );
 
     expect(shown).toBeNull();
     expect(alternatives).toEqual([]);
     expect(emptyReason).toContain('no development command');
+    expect(emptyReasonHref).toBe('/projects/prj_1#dev-command');
   });
 
   it('points at the agent while a run is still working', () => {
