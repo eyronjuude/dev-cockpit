@@ -176,6 +176,62 @@ export function AttachmentPicker({
  * After the request exists
  * ------------------------------------------------------------------ */
 
+export interface AttachmentUploadResult {
+  /** The attachments the server accepted, in this call. Empty if none were. */
+  added: AttachmentView[];
+  /** A rejection or failure message to show, or null if nothing went wrong. */
+  error: string | null;
+}
+
+/**
+ * Uploads files to a request's attachment list.
+ *
+ * Shared by `AttachmentList`'s own file input and by anything else that wants
+ * to turn a dropped or pasted `File` into a stored attachment — the feedback
+ * textarea's inline attach does this too, so a screenshot pasted straight into
+ * the request text still goes through the one upload path and the one set of
+ * server-side limits, rather than a second copy of this logic drifting from it.
+ */
+export async function uploadAttachmentFiles(
+  runId: string,
+  files: readonly File[],
+  existingCount: number,
+): Promise<AttachmentUploadResult> {
+  const form = new FormData();
+  const problems: string[] = [];
+  let accepted = 0;
+
+  for (const file of files) {
+    const fileName = safeAttachmentFileName(file.name);
+    const rejection = attachmentRejection({ fileName, bytes: file.size }, existingCount + accepted);
+    if (rejection) {
+      problems.push(rejection);
+      continue;
+    }
+    form.append('attachments', file, fileName);
+    accepted += 1;
+  }
+
+  if (accepted === 0) {
+    return { added: [], error: problems.join(' ') || 'Nothing was attached.' };
+  }
+
+  try {
+    const response = await fetch(`/api/runs/${runId}/attachments`, {
+      method: 'POST',
+      body: form,
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => null)) as { error?: string } | null;
+      return { added: [], error: body?.error ?? `Could not attach the files (${response.status})` };
+    }
+    const body = (await response.json()) as { added: AttachmentView[] };
+    return { added: body.added, error: problems.length > 0 ? problems.join(' ') : null };
+  } catch (err) {
+    return { added: [], error: err instanceof Error ? err.message : 'Could not attach the files' };
+  }
+}
+
 export function AttachmentList({
   runId,
   attachments,
@@ -201,46 +257,11 @@ export function AttachmentList({
   const upload = async (picked: FileList | null) => {
     if (!picked || picked.length === 0) return;
 
-    const form = new FormData();
-    const problems: string[] = [];
-    let accepted = 0;
-
-    for (const file of Array.from(picked)) {
-      const fileName = safeAttachmentFileName(file.name);
-      const rejection = attachmentRejection(
-        { fileName, bytes: file.size },
-        attachments.length + accepted,
-      );
-      if (rejection) {
-        problems.push(rejection);
-        continue;
-      }
-      form.append('attachments', file, fileName);
-      accepted += 1;
-    }
-
-    if (accepted === 0) {
-      setError(problems.join(' ') || 'Nothing was attached.');
-      return;
-    }
-
     setBusy(true);
-    setError(problems.length > 0 ? problems.join(' ') : null);
-    try {
-      const response = await fetch(`/api/runs/${runId}/attachments`, {
-        method: 'POST',
-        body: form,
-      });
-      if (!response.ok) {
-        setError(await failureMessage(response, 'Could not attach the files'));
-        return;
-      }
-      onChanged();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not attach the files');
-    } finally {
-      setBusy(false);
-    }
+    const result = await uploadAttachmentFiles(runId, Array.from(picked), attachments.length);
+    setError(result.error);
+    if (result.added.length > 0) onChanged();
+    setBusy(false);
   };
 
   const remove = async (attachment: AttachmentView) => {
