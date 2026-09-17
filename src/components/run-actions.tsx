@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent } from 'react';
 
 import {
   effectiveWorkMode,
@@ -20,7 +20,7 @@ import {
   RETRY_STAGE_LABELS,
 } from '@/domain/retry';
 import { isFinished, LANDABLE_STATUSES, type RunStatus } from '@/domain/types';
-import { AttachmentList } from './attachments';
+import { AttachmentList, uploadAttachmentFiles } from './attachments';
 import type { RunSnapshot } from './use-run-stream';
 
 /**
@@ -140,6 +140,22 @@ function switchNotePlaceholder(from: ResolvedWorkMode, to: ResolvedWorkMode): st
   return 'What does the current retry logic actually do on a 500?';
 }
 
+/**
+ * Drops every `@name` token naming one of `fileNames` from `text`.
+ *
+ * Used when an attachment is removed after its inline token was already typed
+ * into the feedback box, so the request does not go on naming a file the
+ * agent will never be handed.
+ */
+function stripAttachmentTokens(text: string, fileNames: readonly string[]): string {
+  if (fileNames.length === 0) return text;
+  let next = text;
+  for (const name of fileNames) {
+    next = next.split(`@${name}`).join(' ');
+  }
+  return next.replace(/[ \t]{2,}/g, ' ').replace(/[ \t]+(\r?\n)/g, '$1').trim();
+}
+
 type Dialog =
   | 'none'
   | 'start'
@@ -162,6 +178,11 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
   const [error, setError] = useState<string | null>(null);
 
   const [feedback, setFeedback] = useState('');
+  const feedbackRef = useRef<HTMLTextAreaElement>(null);
+  const [inlineAttaching, setInlineAttaching] = useState(false);
+  const [inlineAttachError, setInlineAttachError] = useState<string | null>(null);
+  const [feedbackDragOver, setFeedbackDragOver] = useState(false);
+  const attachmentNamesRef = useRef<Set<string>>(new Set(run.attachments.map((a) => a.fileName)));
   const [implementNote, setImplementNote] = useState('');
   const [switchTarget, setSwitchTarget] = useState<ResolvedWorkMode>('build');
   const [note, setNote] = useState('');
@@ -244,6 +265,84 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
       setBusy(null);
     }
   };
+
+  // Inserts `@name` for each newly uploaded attachment at the caret, so a
+  // pasted or dropped file reads inline in the request the way Claude Code's
+  // and Codex's own prompt boxes show an attached image. This changes nothing
+  // about what reaches the agent: every attachment on the run, however it was
+  // added, is still listed by path in the `# Attachments` block that
+  // `attachmentSection()` (src/orchestrator/prompt.ts) builds from
+  // `run.attachments` — the token here is only ever text inside `feedback`,
+  // read alongside that block, never a second copy of the file.
+  const insertAttachmentTokens = (fileNames: string[]) => {
+    const tokens = fileNames.map((name) => `@${name}`).join(' ');
+    const el = feedbackRef.current;
+    if (!el) {
+      setFeedback((prev) => (prev.length > 0 ? `${prev} ${tokens}` : tokens));
+      return;
+    }
+    const start = el.selectionStart ?? el.value.length;
+    const end = el.selectionEnd ?? el.value.length;
+    setFeedback((prev) => {
+      const before = prev.slice(0, start);
+      const after = prev.slice(end);
+      const insertion = `${before.length > 0 && !/\s$/.test(before) ? ' ' : ''}${tokens}${
+        after.length > 0 && !/^\s/.test(after) ? ' ' : ''
+      }`;
+      const next = `${before}${insertion}${after}`;
+      const caret = start + insertion.length;
+      requestAnimationFrame(() => {
+        el.setSelectionRange(caret, caret);
+        el.focus();
+      });
+      return next;
+    });
+  };
+
+  const attachFilesInline = async (files: File[]) => {
+    if (files.length === 0 || !snapshot.attachmentsMutable) return;
+    setInlineAttaching(true);
+    setInlineAttachError(null);
+    const result = await uploadAttachmentFiles(run.id, files, run.attachments.length);
+    setInlineAttaching(false);
+    setInlineAttachError(result.error);
+    if (result.added.length > 0) {
+      insertAttachmentTokens(result.added.map((a) => a.fileName));
+      onChanged();
+    }
+  };
+
+  // Only intercepted when the drop or paste actually carries files: plain
+  // text keeps behaving like a normal textarea.
+  const onFeedbackDrop = (event: DragEvent<HTMLTextAreaElement>) => {
+    setFeedbackDragOver(false);
+    const files = Array.from(event.dataTransfer.files);
+    if (files.length === 0) return;
+    event.preventDefault();
+    void attachFilesInline(files);
+  };
+
+  const onFeedbackPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = Array.from(event.clipboardData.files);
+    if (files.length === 0) return;
+    event.preventDefault();
+    void attachFilesInline(files);
+  };
+
+  // An inline `@name` token is only ever correct while that attachment still
+  // exists: `AttachmentList`'s own Remove button (or the same file removed
+  // from another tab) deletes it independently of this dialog. Diffing
+  // against what was here last render, rather than wiring a callback through
+  // `AttachmentList`, catches every path that can shrink the list, not just
+  // the one this component happens to render.
+  useEffect(() => {
+    const currentNames = new Set(run.attachments.map((a) => a.fileName));
+    const removedNames = [...attachmentNamesRef.current].filter((name) => !currentNames.has(name));
+    if (removedNames.length > 0) {
+      setFeedback((prev) => stripAttachmentTokens(prev, removedNames));
+    }
+    attachmentNamesRef.current = currentNames;
+  }, [run.attachments]);
 
   const mode = effectiveWorkMode(run);
   const readOnly = isReadOnlyMode(mode);
@@ -840,6 +939,7 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
           </label>
           <textarea
             id="feedback"
+            ref={feedbackRef}
             className="textarea"
             rows={4}
             value={feedback}
@@ -851,7 +951,30 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
                   : 'The endpoint returns 500 when the id is missing. It should return 400 with a message.'
             }
             onChange={(e) => setFeedback(e.target.value)}
+            onDrop={onFeedbackDrop}
+            onPaste={onFeedbackPaste}
+            onDragOver={(e) => {
+              if (!snapshot.attachmentsMutable) return;
+              e.preventDefault();
+              setFeedbackDragOver(true);
+            }}
+            onDragLeave={() => setFeedbackDragOver(false)}
+            style={
+              feedbackDragOver
+                ? { borderColor: 'var(--color-accent)', boxShadow: '0 0 0 3px rgb(76 154 255 / 0.14)' }
+                : undefined
+            }
           />
+          {snapshot.attachmentsMutable ? (
+            <p className="hint">
+              {inlineAttaching
+                ? 'Attaching…'
+                : 'Paste or drop a screenshot or file here to attach it inline, the same as Claude Code or Codex.'}
+            </p>
+          ) : null}
+          {inlineAttachError ? (
+            <p className="mt-1 text-[12px] text-fail">{inlineAttachError}</p>
+          ) : null}
           <div className="mt-2.5">
             <AttachmentList
               runId={run.id}
