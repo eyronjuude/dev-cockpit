@@ -443,6 +443,14 @@ export const runs = sqliteTable(
      */
     transformerProvider: text('transformer_provider').notNull().default('none'),
     reviewerProvider: text('reviewer_provider').notNull().default('none'),
+    /**
+     * The `review_findings.attempt` used by the most recent review pass, set
+     * whether or not that pass found anything. A clean pass inserts no rows,
+     * so without this the newest finding's own attempt number — the only other
+     * way to ask "what is current?" — keeps pointing at an earlier, possibly
+     * since-resolved pass.
+     */
+    lastReviewAttempt: integer('last_review_attempt'),
 
     /* Outcome */
     disposition: text('disposition'),

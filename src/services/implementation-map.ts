@@ -41,9 +41,12 @@ export function collectImplementationMapInput(runId: string): ImplementationMapI
   if (!run) return null;
 
   // The latest attempt of each, matching what the run screen shows. An older
-  // attempt is history, not the current state of the work.
+  // attempt is history, not the current state of the work. Findings use
+  // `lastReviewAttempt` rather than the highest attempt actually stored,
+  // because a clean review pass writes no rows and would otherwise leave an
+  // earlier, now-stale pass looking current.
   const validationAttempt = run.validations.reduce((acc, v) => Math.max(acc, v.attempt), 0);
-  const findingAttempt = run.findings.reduce((acc, f) => Math.max(acc, f.attempt), 0);
+  const findingAttempt = run.lastReviewAttempt;
 
   return {
     run: {

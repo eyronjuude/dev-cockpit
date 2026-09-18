@@ -130,6 +130,7 @@ function makeRun(overrides: Partial<RunView> = {}): RunView {
     agentModel: null,
     transformerProvider: 'none',
     reviewerProvider: 'none',
+    lastReviewAttempt: null,
     disposition: null,
     dispositionNote: null,
     error: null,
