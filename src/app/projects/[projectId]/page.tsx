@@ -2,9 +2,11 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
 import { advisorStatuses } from '@/advisors/registry';
+import { OperationalCommandsPanel } from '@/components/operational-commands-panel';
 import { ProjectForm } from '@/components/project-form';
 import { formatRelative, RunStatusBadge } from '@/components/status';
 import { landingQueueCounts } from '@/services/landing-queue';
+import { listOperationalCommands } from '@/services/operational-commands';
 import { getProject, recentRunSummaries } from '@/services/projects';
 import { implementationAgentStatuses } from '@/orchestrator/orchestrator';
 import { reviewerStatuses } from '@/reviewers/registry';
@@ -25,6 +27,7 @@ export default async function ProjectPage({
   if (!project) notFound();
 
   const runs = recentRunSummaries(projectId, 12);
+  const operationalCommands = listOperationalCommands(projectId);
   const landing = landingQueueCounts([project]).get(project.id) ?? NO_LANDINGS;
   const [advisors, implementers, transformers, reviewers] = await Promise.all([
     advisorStatuses(),
@@ -93,6 +96,18 @@ export default async function ProjectPage({
           </ul>
         )}
       </section>
+
+      <OperationalCommandsPanel
+        projectId={project.id}
+        projectName={project.name}
+        initialCommands={operationalCommands}
+        runs={runs.map((run) => ({
+          id: run.id,
+          title: run.title,
+          branch: run.branch,
+          worktreePath: run.worktreePath,
+        }))}
+      />
 
       <h2 className="mb-2.5 text-[14px] font-semibold">Configuration</h2>
       <ProjectForm

@@ -502,3 +502,36 @@ export type IterationStatus = (typeof ITERATION_STATUSES)[number];
 
 export const DISPOSITIONS = ['approved', 'rejected'] as const;
 export type Disposition = (typeof DISPOSITIONS)[number];
+
+/* ------------------------------------------------------------------ *
+ * Operational commands
+ * ------------------------------------------------------------------ */
+
+/**
+ * What an operational command touches.
+ *
+ *  - `non_production` runs in a specific run's own worktree — a branch that
+ *    has not landed. It needs a `runId`.
+ *  - `production` runs directly in the project's main checkout
+ *    (`repositoryPath`), on its default branch, exactly where a deployment
+ *    would run from. There is no worktree for this: the main checkout is the
+ *    only thing "production" can mean in an app with no remote or deploy
+ *    step. It needs no `runId` and is refused unless the checkout is on the
+ *    default branch and clean, the same preflight landing already performs.
+ */
+export const COMMAND_TARGETS = ['non_production', 'production'] as const;
+export type CommandTarget = (typeof COMMAND_TARGETS)[number];
+export const commandTargetSchema = z.enum(COMMAND_TARGETS);
+
+export const COMMAND_TARGET_LABELS: Record<CommandTarget, string> = {
+  non_production: 'Non-production',
+  production: 'Production',
+};
+
+/**
+ * Outcome of one operational command execution. Deliberately smaller than
+ * `ValidationOutcome`: nothing here is ever skipped or "not configured" —
+ * either it was run, or it was refused before it started (`error`).
+ */
+export const OPERATIONAL_RUN_OUTCOMES = ['running', 'pass', 'fail', 'error', 'cancelled'] as const;
+export type OperationalRunOutcome = (typeof OPERATIONAL_RUN_OUTCOMES)[number];

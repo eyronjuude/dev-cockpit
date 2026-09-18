@@ -25,6 +25,8 @@ export const newFindingId = () => shortId('fnd');
 export const newCommitId = () => shortId('cmt');
 export const newProbeId = () => shortId('prb');
 export const newRevisionId = () => shortId('rev');
+export const newOperationalCommandId = () => shortId('opc');
+export const newOperationalCommandRunId = () => shortId('ocr');
 
 /** Git branch component derived from a run id. Safe for `refs/heads/`. */
 export function runBranchName(runId: string): string {

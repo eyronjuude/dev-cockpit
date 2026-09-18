@@ -125,6 +125,8 @@ export const createProjectSchema = z.object({
   setupCommand: z.string().trim().max(2_000).nullable().optional(),
   openCommand: z.string().trim().max(2_000).nullable().optional(),
   linkPaths: z.array(z.string()).optional(),
+  /** Extra environment for `setupCommand` and operational commands. */
+  env: z.array(z.string().max(2_000)).max(50).optional(),
   protectedBranches: z.array(z.string()).optional(),
   requireValidation: z.boolean().optional(),
   requireE2eForUiChanges: z.boolean().optional(),
@@ -221,6 +223,8 @@ export interface ProjectView {
   setupCommand: string | null;
   openCommand: string | null;
   linkPaths: string[];
+  /** Raw `KEY=VALUE` lines; parse with `parseEnvLines`. */
+  env: string[];
   protectedBranches: string[];
   requireValidation: boolean;
   requireE2eForUiChanges: boolean;
@@ -314,6 +318,7 @@ function toProjectView(row: ProjectRow, steps: ValidationStepRow[]): ProjectView
     setupCommand: row.setupCommand,
     openCommand: row.openCommand,
     linkPaths: fromLines(row.linkPaths),
+    env: fromLines(row.env),
     protectedBranches: fromLines(row.protectedBranches),
     requireValidation: row.requireValidation,
     requireE2eForUiChanges: row.requireE2eForUiChanges,
@@ -491,6 +496,7 @@ export async function createProject(input: CreateProjectInput): Promise<ProjectV
       setupCommand: parsed.setupCommand ?? null,
       openCommand: parsed.openCommand ?? null,
       linkPaths: toLines(parsed.linkPaths) ?? null,
+      env: toLines(parsed.env) ?? null,
       protectedBranches: [...protectedBranches].join('\n'),
       requireValidation: parsed.requireValidation ?? true,
       requireE2eForUiChanges: parsed.requireE2eForUiChanges ?? false,
@@ -614,6 +620,7 @@ export function updateProject(id: string, input: UpdateProjectInput): ProjectVie
         parsed.setupCommand === undefined ? existing.setupCommand : parsed.setupCommand,
       openCommand: parsed.openCommand === undefined ? existing.openCommand : parsed.openCommand,
       linkPaths: toLines(parsed.linkPaths) ?? existing.linkPaths.join('\n'),
+      env: toLines(parsed.env) ?? existing.env.join('\n'),
       protectedBranches: [...protectedBranches].join('\n'),
       requireValidation: parsed.requireValidation ?? existing.requireValidation,
       requireE2eForUiChanges: parsed.requireE2eForUiChanges ?? existing.requireE2eForUiChanges,
@@ -853,6 +860,7 @@ export function recentRunSummaries(projectId: string, limit = 10) {
       createdAt: runs.createdAt,
       finishedAt: runs.finishedAt,
       branch: runs.branch,
+      worktreePath: runs.worktreePath,
     })
     .from(runs)
     .where(eq(runs.projectId, projectId))

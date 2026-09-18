@@ -22,6 +22,7 @@ import {
   runLandingDir,
   runWorktreeDir,
 } from '@/core/paths';
+import { registerExtraSecrets } from '@/core/redact';
 import {
   describeRunImpact,
   settingsChanged,
@@ -60,6 +61,7 @@ import {
   type Disposition,
   type IterationKind,
 } from '@/domain/types';
+import { parseEnvLines, secretValuesIn } from '@/domain/validation-steps';
 import {
   lintCommitSubject,
   resolveCommitConvention,
@@ -1996,9 +1998,17 @@ async function provisionWorktree(input: {
 
   if (shouldRunSetup) {
     if (kind === 'run') setPhase(run.id, 'setup');
+    // The project's own `env` field, not `process.env`: a setup command (a
+    // migration, say) otherwise gets nothing but whatever Dev Cockpit's own
+    // server process happens to have, which is almost never the target
+    // project's secrets. Registered before running so redaction can mask it,
+    // the same way a validation step's env is registered in the engine.
+    const setupEnv = parseEnvLines(project.env.join('\n'));
+    registerExtraSecrets(secretValuesIn(setupEnv));
     const result = await runCommand({
       command: setupCommand,
       cwd: worktreePath,
+      env: setupEnv,
       timeoutMs: 20 * 60 * 1000,
       signal,
     });

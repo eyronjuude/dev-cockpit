@@ -33,6 +33,15 @@ export const projects = sqliteTable(
      * a fresh worktree has neither and most validation commands need both.
      */
     linkPaths: text('link_paths'),
+    /**
+     * Extra environment for `setupCommand` and operational commands,
+     * newline-separated `KEY=VALUE`. Distinct from `linkPaths`: that copies a
+     * file's bytes onto disk for the target project's own loader to find,
+     * this is injected directly into the spawned process's environment, so a
+     * setup step (a migration, say) has it even if nothing in the target
+     * project loads an env file for itself.
+     */
+    env: text('env'),
 
     /** Branches a run may never target or commit onto, newline-separated. */
     protectedBranches: text('protected_branches').notNull().default('main\nmaster'),
@@ -650,6 +659,82 @@ export const commits = sqliteTable(
 );
 
 /* ------------------------------------------------------------------ *
+ * Operational commands
+ *
+ * A command a person runs deliberately against a real target — a migration,
+ * a seed script — as distinct from a validation step, which runs
+ * automatically as part of every attempt. Never triggered by a run or an
+ * agent; only ever by an explicit action against this row.
+ * ------------------------------------------------------------------ */
+
+export const operationalCommands = sqliteTable(
+  'operational_commands',
+  {
+    id: text('id').primaryKey(),
+    projectId: text('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    label: text('label').notNull(),
+    command: text('command').notNull(),
+    /** Relative to the worktree or repository root; null means the root itself. */
+    workingDir: text('working_dir'),
+    /** One of `CommandTarget`. `production` runs against the main checkout. */
+    target: text('target').notNull().default('non_production'),
+    /** Extra environment for this command, newline-separated KEY=VALUE. */
+    env: text('env'),
+    timeoutMs: integer('timeout_ms').notNull().default(900_000),
+    createdAt: text('created_at').notNull().default(now),
+    updatedAt: text('updated_at').notNull().default(now),
+  },
+  (t) => [index('operational_commands_project_idx').on(t.projectId)],
+);
+
+/**
+ * One row per execution of an operational command — the audit trail for
+ * "who ran what, against which target, and what happened."
+ *
+ * A run's own validation results live in `validation_results` because they
+ * are produced automatically and belong to the run's own history. This is
+ * separate because an operational command is not part of any run's pipeline:
+ * a `production` execution has no run at all, and a `non_production`
+ * execution merely borrows a run's worktree.
+ */
+export const operationalCommandRuns = sqliteTable(
+  'operational_command_runs',
+  {
+    id: text('id').primaryKey(),
+    operationalCommandId: text('operational_command_id')
+      .notNull()
+      .references(() => operationalCommands.id, { onDelete: 'cascade' }),
+    projectId: text('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    /** Set only for a `non_production` execution: whose worktree it ran in. */
+    runId: text('run_id').references(() => runs.id, { onDelete: 'set null' }),
+    /** Snapshot of the command's own fields at execution time, in case they change later. */
+    label: text('label').notNull(),
+    command: text('command').notNull(),
+    target: text('target').notNull(),
+    cwd: text('cwd').notNull(),
+    outcome: text('outcome').notNull().default('running'),
+    exitCode: integer('exit_code'),
+    durationMs: integer('duration_ms'),
+    /** Redacted before storage; there is no separate artifact for this. */
+    stdout: text('stdout'),
+    stderr: text('stderr'),
+    /** Set when the command could not be run at all, e.g. a permission check failed. */
+    error: text('error'),
+    startedAt: text('started_at'),
+    finishedAt: text('finished_at'),
+    createdAt: text('created_at').notNull().default(now),
+  },
+  (t) => [
+    index('operational_command_runs_command_idx').on(t.operationalCommandId, t.createdAt),
+    index('operational_command_runs_project_idx').on(t.projectId, t.createdAt),
+  ],
+);
+
+/* ------------------------------------------------------------------ *
  * Request attachments
  * ------------------------------------------------------------------ */
 
@@ -735,3 +820,7 @@ export type AttachmentRow = typeof attachments.$inferSelect;
 export type NewAttachmentRow = typeof attachments.$inferInsert;
 export type ReviewFindingRow = typeof reviewFindings.$inferSelect;
 export type CommitRow = typeof commits.$inferSelect;
+export type OperationalCommandRow = typeof operationalCommands.$inferSelect;
+export type NewOperationalCommandRow = typeof operationalCommands.$inferInsert;
+export type OperationalCommandRunRow = typeof operationalCommandRuns.$inferSelect;
+export type NewOperationalCommandRunRow = typeof operationalCommandRuns.$inferInsert;
