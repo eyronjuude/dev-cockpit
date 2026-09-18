@@ -87,6 +87,7 @@ export function ProjectForm({
   const [setupCommand, setSetupCommand] = useState(existing?.setupCommand ?? '');
   const [openCommand, setOpenCommand] = useState(existing?.openCommand ?? '');
   const [linkPaths, setLinkPaths] = useState((existing?.linkPaths ?? []).join('\n'));
+  const [env, setEnv] = useState((existing?.env ?? []).join('\n'));
   const [protectedBranches, setProtectedBranches] = useState(
     (existing?.protectedBranches ?? ['main', 'master']).join('\n'),
   );
@@ -414,6 +415,7 @@ export function ProjectForm({
       setupCommand: setupCommand || null,
       openCommand: openCommand || null,
       linkPaths: splitLines(linkPaths),
+      env: splitLines(env),
       protectedBranches: splitLines(protectedBranches),
       requireValidation,
       requireE2eForUiChanges,
@@ -991,6 +993,26 @@ export function ProjectForm({
               onChange={(e) => setSetupCommand(e.target.value)}
             />
             <p className="hint">Runs once in each new worktree, after linking.</p>
+          </div>
+
+          <div>
+            <label className="label" htmlFor="setup-env">
+              Environment for the setup command
+            </label>
+            <textarea
+              id="setup-env"
+              className="textarea input-mono"
+              rows={3}
+              value={env}
+              placeholder={'DATABASE_URL=postgres://...'}
+              onChange={(e) => setEnv(e.target.value)}
+            />
+            <p className="hint">
+              One <code className="mono">KEY=VALUE</code> per line, injected directly into the
+              setup command&apos;s process. Unlike linked files, this reaches the command even if
+              nothing in the project loads an env file for itself — useful for a setup command
+              that runs a migration. Secret-looking values are masked in captured output.
+            </p>
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2">

@@ -45,6 +45,7 @@ function makeProject(overrides: Partial<ProjectView> = {}): ProjectView {
     setupCommand: null,
     openCommand: null,
     linkPaths: [],
+    env: [],
     protectedBranches: ['main'],
     requireValidation: true,
     requireE2eForUiChanges: false,
