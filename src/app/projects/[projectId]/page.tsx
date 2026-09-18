@@ -55,6 +55,9 @@ export default async function ProjectPage({
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
+          <Link href={`/projects/${project.id}/agent-config`} className="btn">
+            Agent config
+          </Link>
           <Link href={`/projects/${project.id}/landing-queue`} className="btn">
             Landing queue
             {landing.live > 0 ? <span className="badge badge-running">{landing.live}</span> : null}
