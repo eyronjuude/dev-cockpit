@@ -5,7 +5,7 @@ import path from 'node:path';
 import { z } from 'zod';
 
 import { getDb } from '@/db/client';
-import { projects, runs, validationSteps } from '@/db/schema';
+import { projectIntegrations, projects, runs, validationSteps } from '@/db/schema';
 import { newProjectId } from '@/core/ids';
 import { AppError, conflict, invalid, notFound } from '@/core/errors';
 import {
@@ -42,6 +42,13 @@ import {
 } from '@/domain/expiry';
 import { resolvePermissionMode } from '@/agents/permissions';
 import {
+  integrationInputSchema,
+  orderIntegrations,
+  replaceProjectIntegrations,
+  toIntegrationView,
+  type IntegrationView,
+} from './project-integrations';
+import {
   aheadBehind,
   currentBranch,
   guessDefaultBranch,
@@ -50,7 +57,7 @@ import {
   listBranches,
   repositoryRoot,
 } from '@/git/git';
-import type { ProjectRow, ValidationStepRow } from '@/db/schema';
+import type { ProjectIntegrationRow, ProjectRow, ValidationStepRow } from '@/db/schema';
 
 /* ------------------------------------------------------------------ *
  * Input schemas
@@ -153,6 +160,8 @@ export const createProjectSchema = z.object({
   validationSteps: z.array(validationStepInputSchema).max(100).optional(),
   /** Legacy shape, converted to steps. See `validationCommandInputSchema`. */
   validationCommands: z.array(validationCommandInputSchema).optional(),
+  /** MCP servers and other external-platform connections this project's own runs may use. */
+  integrations: z.array(integrationInputSchema).max(50).optional(),
 });
 
 export type CreateProjectInput = z.infer<typeof createProjectSchema>;
@@ -268,6 +277,12 @@ export interface ProjectView {
   /** The pipeline, already in execution order. */
   validationSteps: ValidationStepView[];
   preview: PreviewConfigView;
+  /**
+   * MCP servers and other external-platform connections this project's own
+   * runs may use, already in configured order. Threaded into every run
+   * started for this project; see `domain/mcp-integrations.buildMcpServers`.
+   */
+  integrations: IntegrationView[];
 }
 
 function toStepView(row: ValidationStepRow): ValidationStepView {
@@ -304,7 +319,11 @@ function toPreviewView(row: ProjectRow): PreviewConfigView {
   };
 }
 
-function toProjectView(row: ProjectRow, steps: ValidationStepRow[]): ProjectView {
+function toProjectView(
+  row: ProjectRow,
+  steps: ValidationStepRow[],
+  integrationRows: ProjectIntegrationRow[],
+): ProjectView {
   return {
     id: row.id,
     name: row.name,
@@ -341,6 +360,7 @@ function toProjectView(row: ProjectRow, steps: ValidationStepRow[]): ProjectView
     updatedAt: row.updatedAt,
     validationSteps: orderSteps(steps.map(toStepView)),
     preview: toPreviewView(row),
+    integrations: orderIntegrations(integrationRows.map(toIntegrationView)),
   };
 }
 
@@ -358,10 +378,12 @@ export function listProjects(): ProjectView[] {
     .all();
 
   const steps = db.select().from(validationSteps).all();
+  const integrationRows = db.select().from(projectIntegrations).all();
   return rows.map((row) =>
     toProjectView(
       row,
       steps.filter((step) => step.projectId === row.id),
+      integrationRows.filter((integration) => integration.projectId === row.id),
     ),
   );
 }
@@ -375,7 +397,12 @@ export function getProject(id: string): ProjectView | null {
     .from(validationSteps)
     .where(eq(validationSteps.projectId, id))
     .all();
-  return toProjectView(row, steps);
+  const integrationRows = db
+    .select()
+    .from(projectIntegrations)
+    .where(eq(projectIntegrations.projectId, id))
+    .all();
+  return toProjectView(row, steps, integrationRows);
 }
 
 export function requireProject(id: string): ProjectView {
@@ -520,6 +547,10 @@ export async function createProject(input: CreateProjectInput): Promise<ProjectV
   const steps = stepsFromInput(parsed);
   if (steps.length > 0) replaceValidationSteps(id, steps);
 
+  if (parsed.integrations && parsed.integrations.length > 0) {
+    replaceProjectIntegrations(id, parsed.integrations);
+  }
+
   return requireProject(id);
 }
 
@@ -659,6 +690,10 @@ export function updateProject(id: string, input: UpdateProjectInput): ProjectVie
 
   if (parsed.validationSteps || parsed.validationCommands) {
     replaceValidationSteps(id, stepsFromInput(parsed));
+  }
+
+  if (parsed.integrations !== undefined) {
+    replaceProjectIntegrations(id, parsed.integrations);
   }
 
   return requireProject(id);

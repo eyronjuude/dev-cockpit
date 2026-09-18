@@ -16,6 +16,7 @@ import type {
 } from '@/agents/types';
 import { landingBranchName, runAttemptBranchName } from '@/core/ids';
 import { AppError, errorMessage } from '@/core/errors';
+import { buildMcpServers } from '@/domain/mcp-integrations';
 import {
   normaliseRepositoryPath,
   runAttachmentDir,
@@ -2193,6 +2194,8 @@ async function phaseImplement(
       ? [...project.agentAddDirs, runAttachmentDir(run.id)]
       : project.agentAddDirs;
 
+  const mcpServers = buildMcpServers(project.integrations);
+
   const agents = implementationFallbackOrder(run.agentProvider);
   const capacityAttempts: CapacityAttempt[] = [];
   let finalAttempt: AgentAttemptResult | null = null;
@@ -2263,6 +2266,7 @@ async function phaseImplement(
       prompt,
       worktreePath: run.worktreePath,
       additionalDirs,
+      mcpServers,
       model,
       permissionMode,
       effort: effort.effort,
@@ -3567,6 +3571,7 @@ async function runLandingAgentIteration(input: {
     prompt,
     worktreePath: landingPath,
     additionalDirs: project.agentAddDirs,
+    mcpServers: buildMcpServers(project.integrations),
     model,
     permissionMode: project.effectivePermissionMode,
     effort: effort.effort,

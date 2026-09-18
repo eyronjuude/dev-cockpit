@@ -24,6 +24,11 @@ import {
   type StepState,
 } from './validation-step-editor';
 import {
+  IntegrationEditor,
+  newIntegrationFor,
+  type IntegrationState,
+} from './integration-editor';
+import {
   DEFAULT_ARTIFACT_RETENTION_DAYS,
   DEFAULT_WORKTREE_RETENTION_DAYS,
 } from '@/domain/expiry';
@@ -166,6 +171,21 @@ export function ProjectForm({
     })),
   );
 
+  const [integrations, setIntegrations] = useState<IntegrationState[]>(() =>
+    (existing?.integrations ?? []).map((integration) => ({
+      key: integration.key,
+      label: integration.label,
+      transport: integration.transport,
+      command: integration.command ?? '',
+      args: integration.args.join('\n'),
+      env: integration.env.join('\n'),
+      url: integration.url ?? '',
+      headers: integration.headers.join('\n'),
+      enabled: integration.enabled,
+      expanded: false,
+    })),
+  );
+
   /* Preview configuration. `developmentCommand` above is still the command. */
   const [previewWorkingDir, setPreviewWorkingDir] = useState(
     existing?.preview.workingDir ?? '',
@@ -204,6 +224,31 @@ export function ProjectForm({
   /** Order is the configuration, so moving a step is an edit like any other. */
   const moveStep = (index: number, delta: number) => {
     setSteps((prev) => {
+      const target = index + delta;
+      if (target < 0 || target >= prev.length) return prev;
+      const next = prev.slice();
+      const [moved] = next.splice(index, 1);
+      next.splice(target, 0, moved!);
+      return next;
+    });
+  };
+
+  const updateIntegration = (index: number, patch: Partial<IntegrationState>) => {
+    setIntegrations((prev) =>
+      prev.map((integration, i) => (i === index ? { ...integration, ...patch } : integration)),
+    );
+  };
+
+  const addIntegration = () => {
+    setIntegrations((prev) => [...prev, newIntegrationFor(prev)]);
+  };
+
+  const removeIntegration = (index: number) => {
+    setIntegrations((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const moveIntegration = (index: number, delta: number) => {
+    setIntegrations((prev) => {
       const target = index + delta;
       if (target < 0 || target >= prev.length) return prev;
       const next = prev.slice();
@@ -465,6 +510,22 @@ export function ProjectForm({
           runWhenArg: step.runWhen === 'always' ? null : step.runWhenArg.trim() || null,
           retries: step.retries,
           retryOn: step.retryOn,
+        })),
+      integrations: integrations
+        .filter((integration) =>
+          integration.transport === 'stdio' ? integration.command.trim() : integration.url.trim(),
+        )
+        .map((integration, index) => ({
+          key: integration.key,
+          label: integration.label.trim() || integration.key,
+          transport: integration.transport,
+          command: integration.transport === 'stdio' ? integration.command.trim() || null : null,
+          args: integration.transport === 'stdio' ? splitLines(integration.args) : undefined,
+          env: integration.transport === 'stdio' ? splitLines(integration.env) : undefined,
+          url: integration.transport === 'http' ? integration.url.trim() || null : null,
+          headers: integration.transport === 'http' ? splitLines(integration.headers) : undefined,
+          enabled: integration.enabled,
+          position: index * 10,
         })),
     };
 
@@ -809,6 +870,46 @@ export function ProjectForm({
               {VALIDATION_KIND_LABELS[kind]}
             </button>
           ))}
+        </div>
+      </section>
+
+      {/* Integrations */}
+      <section className="panel">
+        <div className="panel-head">
+          <h2 className="panel-title">Integrations</h2>
+          <span className="text-[11px] text-ink-faint">
+            {integrations.length === 0
+              ? 'nothing configured'
+              : `${integrations.length} integration${integrations.length === 1 ? '' : 's'}`}
+          </span>
+        </div>
+
+        {integrations.length === 0 ? (
+          <p className="px-3.5 py-3 text-[12px] text-ink-muted">
+            No integrations yet. An MCP server or other external-platform connection configured
+            here is made available to every run started for this project — set it up once instead
+            of once per task.
+          </p>
+        ) : (
+          <div className="divide-y divide-line">
+            {integrations.map((integration, index) => (
+              <IntegrationEditor
+                key={integration.key}
+                integration={integration}
+                index={index}
+                total={integrations.length}
+                onChange={(patch) => updateIntegration(index, patch)}
+                onRemove={() => removeIntegration(index)}
+                onMove={(delta) => moveIntegration(index, delta)}
+              />
+            ))}
+          </div>
+        )}
+
+        <div className="flex flex-wrap items-center gap-2 border-t border-line px-3.5 py-2.5">
+          <button type="button" className="btn btn-sm" onClick={addIntegration}>
+            Add an integration
+          </button>
         </div>
       </section>
 

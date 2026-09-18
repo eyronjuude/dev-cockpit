@@ -181,7 +181,12 @@ Not deferred — decided against for this application.
 - **Automatic merge to the default branch.** The whole isolation design exists
   to make landing work a deliberate human act.
 - **Automatic push.** Same reason.
-- Slack, Trello, or other third-party integrations
+- **Dev Cockpit itself growing third-party API clients** — posting to Slack,
+  syncing Trello cards, and the like. Different from a project's own MCP
+  integrations (`projects.integrations`, wired into `agents/claude-code.ts`):
+  those configure what a *run's agent* can reach, the same way its model or
+  permission mode already vary per project; this line is about the app's own
+  surface area growing new outbound API clients.
 - Sophisticated analytics
 - Multiple agents editing the same run concurrently
 - A plugin marketplace

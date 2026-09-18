@@ -269,6 +269,56 @@ export const validationSteps = sqliteTable(
 );
 
 /* ------------------------------------------------------------------ *
+ * Project integrations
+ *
+ * An MCP server (or other external-platform connection) a project makes
+ * available to its own agent runs — an orders API a run can query to verify
+ * a fix, say. Configured per project rather than per run, the same reason
+ * the validation pipeline is: setting it up once is the point.
+ *
+ * `key` is what the generated `.mcp.json` names the server, so it follows
+ * the same slug rules as a validation step's `key`. `command`/`args`/`env`
+ * apply to a `stdio` transport; `url`/`headers` to an `http` one. Both sets
+ * of columns exist on every row and the unused half stays null, rather than
+ * two tables, because a transport is switched far more often than a
+ * validation step changes kind and a row that remembers its other half's
+ * values makes that switch non-destructive.
+ * ------------------------------------------------------------------ */
+
+export const projectIntegrations = sqliteTable(
+  'project_integrations',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    projectId: text('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    /** Slug, unique per project. What the generated `.mcp.json` names the server. */
+    key: text('key').notNull(),
+    /** What the user calls it. Shown wherever the integration is listed. */
+    label: text('label').notNull(),
+    /** One of `IntegrationTransport`. */
+    transport: text('transport').notNull().default('stdio'),
+    command: text('command'),
+    /** Newline-separated, `stdio` only. */
+    args: text('args'),
+    /** Newline-separated KEY=VALUE, `stdio` only. */
+    env: text('env'),
+    url: text('url'),
+    /** Newline-separated KEY=VALUE, `http` only. */
+    headers: text('headers'),
+    enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+    /** Explicit order. Spaced by ten so an entry can be inserted between two. */
+    position: integer('position').notNull().default(0),
+    createdAt: text('created_at').notNull().default(now),
+    updatedAt: text('updated_at').notNull().default(now),
+  },
+  (t) => [
+    uniqueIndex('project_integrations_project_key_idx').on(t.projectId, t.key),
+    index('project_integrations_project_position_idx').on(t.projectId, t.position),
+  ],
+);
+
+/* ------------------------------------------------------------------ *
  * Project configuration revisions
  *
  * Written before every save of a project's validation and preview
@@ -722,6 +772,8 @@ export type ValidationCommandRow = typeof validationCommands.$inferSelect;
 export type NewValidationCommandRow = typeof validationCommands.$inferInsert;
 export type ValidationStepRow = typeof validationSteps.$inferSelect;
 export type NewValidationStepRow = typeof validationSteps.$inferInsert;
+export type ProjectIntegrationRow = typeof projectIntegrations.$inferSelect;
+export type NewProjectIntegrationRow = typeof projectIntegrations.$inferInsert;
 export type ProjectConfigRevisionRow = typeof projectConfigRevisions.$inferSelect;
 export type ConfigProbeRow = typeof configProbes.$inferSelect;
 export type RunRow = typeof runs.$inferSelect;

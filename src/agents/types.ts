@@ -1,3 +1,5 @@
+import type { McpServerConfig } from '@/domain/mcp-integrations';
+
 /**
  * The implementation agent boundary.
  *
@@ -39,6 +41,12 @@ export interface AgentStartInput {
   worktreePath: string;
   /** Extra directories the agent may read, if the project needs them. */
   additionalDirs?: readonly string[];
+  /**
+   * MCP servers the project makes available, keyed by name. Not every
+   * provider honours this — only `claude-code` does today. Undefined or
+   * empty means no `.mcp.json` is written and nothing about the run changes.
+   */
+  mcpServers?: Record<string, McpServerConfig>;
   model?: string | null;
   /** Claude Code permission mode, or the provider's equivalent. */
   permissionMode?: string;

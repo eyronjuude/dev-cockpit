@@ -7,8 +7,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
-import { redactText } from '@/core/redact';
+import { redactText, registerExtraSecrets } from '@/core/redact';
 import { ensureDir, runArtifactDir } from '@/core/paths';
+import { secretValuesIn } from '@/domain/validation-steps';
 import { describeUnavailable, planSpawn, resolveExecutable, withRetries } from '@/process/exec';
 import { killTree } from '@/process/spawn';
 import { claudePermissionArgs, resolvePermissionMode } from './permissions';
@@ -155,6 +156,27 @@ export class ClaudeCodeAgent implements ImplementationAgent {
 
     for (const dir of input.additionalDirs ?? []) {
       if (dir.trim()) args.push('--add-dir', dir);
+    }
+
+    const serverNames = Object.keys(input.mcpServers ?? {});
+    if (serverNames.length > 0) {
+      // Registered before the file is written, not after: output can start
+      // arriving the moment the process spawns, and a credential is only
+      // masked in output produced after this call.
+      for (const server of Object.values(input.mcpServers!)) {
+        if ('env' in server && server.env) registerExtraSecrets(secretValuesIn(server.env));
+        if ('headers' in server && server.headers) {
+          registerExtraSecrets(secretValuesIn(server.headers));
+        }
+      }
+
+      // Written under the run's own artifact directory, not the worktree: the
+      // worktree is what the agent's own diff is read from, and a stray
+      // `.mcp.json` there would show up as an unexplained untracked file.
+      const mcpDir = ensureDir(path.join(runArtifactDir(input.runId), 'agent'));
+      const mcpConfigPath = path.join(mcpDir, `${input.iterationId}.mcp.json`);
+      fs.writeFileSync(mcpConfigPath, JSON.stringify({ mcpServers: input.mcpServers }, null, 2));
+      args.push('--mcp-config', mcpConfigPath, '--strict-mcp-config');
     }
 
     return args;
