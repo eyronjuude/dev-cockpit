@@ -101,6 +101,7 @@ function makeProject(overrides: Partial<ProjectView> = {}): ProjectView {
       readyTimeoutMs: 120_000,
       autoStart: false,
     },
+    integrations: [],
     ...overrides,
   };
 }
