@@ -113,6 +113,27 @@ function switchFeedbackFor(from: ResolvedWorkMode, to: ResolvedWorkMode, note: s
     : 'Answer instead of continuing — say what you found, not what you would change.';
 }
 
+/**
+ * The feedback text for "Address review findings": one instruction line
+ * followed by the current review attempt's findings, formatted the same way
+ * the Independent Review panel shows them (`run-view.tsx`), so the two never
+ * disagree about what was flagged.
+ */
+function reviewFeedbackFor(findings: RunSnapshot['run']['findings']): string {
+  const items = findings.map((finding, index) => {
+    const location = finding.file
+      ? `${finding.file}${finding.line ? `:${finding.line}` : ''}`
+      : null;
+    const lines = [
+      `${index + 1}. [${finding.severity}] ${finding.title}${location ? ` (${location})` : ''}`,
+    ];
+    if (finding.detail) lines.push(`   ${finding.detail}`);
+    if (finding.suggestion) lines.push(`   Suggestion: ${finding.suggestion}`);
+    return lines.join('\n');
+  });
+  return `Address the following independent review findings:\n\n${items.join('\n\n')}`;
+}
+
 /** The button label for switching this run from `from` into `to`. */
 function switchModeLabel(from: ResolvedWorkMode, to: ResolvedWorkMode): string {
   if (to === 'build') return from === 'plan' ? 'Implement this plan' : 'Switch to Build';
@@ -172,6 +193,11 @@ type Dialog =
 export function RunActions({ snapshot, onChanged }: ActionsProps) {
   const router = useRouter();
   const { run, readiness, live, preview, worktrees, expiry } = snapshot;
+  // Not `Math.max` over `findings`: a clean review pass writes no rows, so the
+  // highest attempt actually present in `findings` can still be an earlier,
+  // now-stale pass. `lastReviewAttempt` is set by every pass, clean or not,
+  // which is what keeps this button from re-litigating already-fixed findings.
+  const currentFindings = run.findings.filter((f) => f.attempt === run.lastReviewAttempt);
 
   const [dialog, setDialog] = useState<Dialog>('none');
   const [busy, setBusy] = useState<string | null>(null);
@@ -356,6 +382,10 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
   const approvedReadOnly = readOnly && run.status === 'APPROVED';
   const reworkable = REWORKABLE_STATUSES.includes(run.status) || approvedReadOnly;
   const canRequestChanges = !active && reworkable && run.worktreePath !== null;
+  // Findings only ever exist on a build run's diff (a read-only run produces
+  // no diff, so no review runs against it), so this never needs a mode switch
+  // — it is "Request changes" with the findings as the canned feedback.
+  const canAddressReview = canRequestChanges && currentFindings.length > 0;
   // A read-only run has no diff, so there is nothing for the checks to run
   // against.
   const canRevalidate =
@@ -465,6 +495,21 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
             onClick={() => toggleAgentDialog('changes')}
           >
             {changesLabel}
+          </button>
+        ) : null}
+
+        {canAddressReview ? (
+          <button
+            type="button"
+            className="btn"
+            disabled={busy !== null}
+            onClick={() => {
+              const opening = dialog !== 'changes';
+              toggleAgentDialog('changes');
+              if (opening) setFeedback(reviewFeedbackFor(currentFindings));
+            }}
+          >
+            Address review findings
           </button>
         ) : null}
 

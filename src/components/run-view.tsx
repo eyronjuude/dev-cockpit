@@ -82,8 +82,10 @@ export function RunView({ initial }: { initial: RunSnapshot }) {
   );
 
   const latestIteration = run.iterations.at(-1) ?? null;
-  const latestFindingAttempt = run.findings.reduce((acc, f) => Math.max(acc, f.attempt), 0);
-  const currentFindings = run.findings.filter((f) => f.attempt === latestFindingAttempt);
+  // Not `Math.max` over `findings`: a clean review pass writes no rows, so the
+  // highest attempt actually present in `findings` can still be an earlier,
+  // now-stale pass. `lastReviewAttempt` is set by every pass, clean or not.
+  const currentFindings = run.findings.filter((f) => f.attempt === run.lastReviewAttempt);
 
   const workMode = effectiveWorkMode(run);
   const agentLabel =
@@ -386,7 +388,6 @@ function ImpactPanel({ run }: { run: RunSnapshot['run'] }) {
   if (run.iterations.length === 0) return null;
 
   const validationAttempt = run.validations.reduce((acc, v) => Math.max(acc, v.attempt), 0);
-  const findingAttempt = run.findings.reduce((acc, f) => Math.max(acc, f.attempt), 0);
 
   const impact = summariseRunImpact({
     profile: run.profile,
@@ -407,7 +408,7 @@ function ImpactPanel({ run }: { run: RunSnapshot['run'] }) {
       .filter((v) => v.attempt === validationAttempt)
       .map((v) => ({ outcome: v.outcome, blocking: v.blocking })),
     findings: run.findings
-      .filter((f) => f.attempt === findingAttempt)
+      .filter((f) => f.attempt === run.lastReviewAttempt)
       .map((f) => ({ severity: f.severity })),
   });
 

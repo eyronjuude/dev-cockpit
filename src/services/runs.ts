@@ -198,6 +198,13 @@ export interface RunView {
   agentModel: string | null;
   transformerProvider: string;
   reviewerProvider: string;
+  /**
+   * The `findings[].attempt` produced by the most recent review pass, set
+   * whether or not it found anything. Null when no review has run yet.
+   * `findings` alone cannot answer "what is current" once a clean pass has
+   * happened, because a clean pass inserts no rows.
+   */
+  lastReviewAttempt: number | null;
   disposition: Disposition | null;
   dispositionNote: string | null;
   error: string | null;
@@ -367,6 +374,7 @@ export function getRun(id: string): RunView | null {
     agentModel: row.agentModel,
     transformerProvider: row.transformerProvider,
     reviewerProvider: row.reviewerProvider,
+    lastReviewAttempt: row.lastReviewAttempt,
     disposition: row.disposition as Disposition | null,
     dispositionNote: row.dispositionNote,
     error: row.error,
@@ -1153,8 +1161,13 @@ export function insertFindings(
   provider: string,
   findings: readonly ReviewFinding[],
 ): ReviewFindingView[] {
-  if (findings.length === 0) return [];
   const db = getDb();
+  // Recorded whether or not this pass found anything: a clean pass adds no
+  // rows below, so without this the run has no way to tell "nothing is
+  // outstanding" apart from "nothing has been reviewed since an earlier,
+  // now-stale pass" — `findings` alone would keep pointing at that older one.
+  db.update(runs).set({ lastReviewAttempt: attempt }).where(eq(runs.id, runId)).run();
+  if (findings.length === 0) return [];
   const rows = findings.map((f, index) => ({
     id: `fnd_${runId}_${attempt}_${index}`,
     runId,
@@ -1213,11 +1226,16 @@ export function assessReadiness(run: RunView, project: ProjectView): ReadinessAs
   return mode === 'build' ? assessBuildReadiness(run, project) : assessReadOnlyReadiness(run, mode);
 }
 
-/** How many blocking findings the latest review attempt recorded. */
+/**
+ * How many blocking findings the latest review attempt recorded.
+ *
+ * Filtered against `lastReviewAttempt`, not the highest attempt actually
+ * present in `findings`: a clean pass inserts no rows, so the latter would
+ * keep pointing at an earlier, now-resolved pass instead of reporting zero.
+ */
 function countBlockingFindings(run: RunView): number {
-  const attempt = run.findings.reduce((acc, f) => Math.max(acc, f.attempt), 0);
   return run.findings.filter(
-    (f) => f.attempt === attempt && BLOCKING_SEVERITIES.includes(f.severity),
+    (f) => f.attempt === run.lastReviewAttempt && BLOCKING_SEVERITIES.includes(f.severity),
   ).length;
 }
 
