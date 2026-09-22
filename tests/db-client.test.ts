@@ -52,6 +52,14 @@ function seedDatabaseThatSkippedRunExpiryMigration(dbFile: string): void {
         run_id text NOT NULL
       );
 
+      -- Present since 0000, so a database that reached 0004 has it. 0013
+      -- reads this table to backfill runs.last_review_attempt.
+      CREATE TABLE "review_findings" (
+        id text PRIMARY KEY,
+        run_id text NOT NULL,
+        attempt integer DEFAULT 1 NOT NULL
+      );
+
       -- Present since 0000, with mode/resolved_mode added by 0002 — both
       -- before the out-of-order 0006 timestamp, so a database "at 0004" has
       -- every column below. Seeded in full because a later migration that

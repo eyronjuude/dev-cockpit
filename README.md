@@ -946,7 +946,15 @@ npm run lint           # eslint
 npm run test           # vitest
 npm run build          # next build
 npm run db:generate    # regenerate SQL migrations after a schema change
+npm run db:migrate     # apply pending migrations to data/cockpit.db without starting the app
 ```
+
+The app also applies pending migrations itself the first time it opens the database
+(`src/db/client.ts`), so `db:migrate` is only needed to apply them standalone — before a
+first request, in a script, or in CI. Both paths run the same `applyMigrations()`
+(`src/db/migrate.ts`), so a database migrated standalone gets the same additive-column
+repairs the app would apply on open — never a partial migration left for the app to
+finish later.
 
 The test suite uses real SQLite databases in temporary directories, real Git
 repositories and real child processes. Very little is mocked, because the things
