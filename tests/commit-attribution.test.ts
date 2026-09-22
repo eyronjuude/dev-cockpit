@@ -89,6 +89,17 @@ function makeRepo(name: string, identity: { name: string; email: string } | null
   return repo;
 }
 
+/**
+ * `approveRun` only accepts runs in READY or NEEDS_CHANGES — the states the
+ * real agent pipeline leaves behind — so a run built by hand for these tests
+ * has to walk the same transitions before it is approvable.
+ */
+function advanceToReady(runId: string): void {
+  runsService.setStatus(runId, 'PREPARING');
+  runsService.setStatus(runId, 'IMPLEMENTING');
+  runsService.setStatus(runId, 'READY');
+}
+
 /** Creates a project + run with a dirty (uncommitted) worktree, ready to approve. */
 async function makeDirtyRun(projectName: string, repo: string, fileText: string) {
   const project = await projectsService.createProject({ name: projectName, repositoryPath: repo });
@@ -110,6 +121,7 @@ async function makeDirtyRun(projectName: string, repo: string, fileText: string)
     baseCommit: prepared.baseCommit,
     baseBranch: 'main',
   });
+  advanceToReady(run.id);
 
   return { project, run: runsService.requireRun(run.id), runPath };
 }
@@ -174,6 +186,7 @@ describe('Conventional Commits formatting', () => {
       baseCommit: prepared.baseCommit,
       baseBranch: 'main',
     });
+    advanceToReady(run.id);
 
     await orchestrator.approveRun(run.id);
 
