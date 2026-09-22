@@ -8,7 +8,7 @@ import {
   type UploadedFile,
 } from '@/app/api/_lib/uploads';
 import { DEFAULT_WORK_MODE, workModeSchema } from '@/domain/modes';
-import { executionProfileSchema, runStatusSchema } from '@/domain/types';
+import { executionProfileSchema, findingSeveritySchema, runStatusSchema } from '@/domain/types';
 import { getAgent, startRun } from '@/orchestrator/orchestrator';
 import { addAttachments } from '@/services/attachments';
 import { tryRecordImplementationMap } from '@/services/implementation-map';
@@ -46,6 +46,8 @@ const createSchema = z.object({
   agentModel: z.string().trim().max(120).nullable().optional(),
   transformer: z.string().max(60).optional(),
   reviewer: z.string().max(60).optional(),
+  /** Minimum finding severity to auto-address. Omitted or null is fully manual. */
+  reviewAutoAddressMinSeverity: findingSeveritySchema.nullable().optional(),
   baseRef: z.string().max(200).optional(),
   /** Create the run without launching it. Used for review before starting. */
   startImmediately: z.boolean().optional(),
@@ -96,6 +98,7 @@ export function POST(request: Request) {
       agentModel: input.agentModel,
       transformer: input.transformer,
       reviewer: input.reviewer,
+      reviewAutoAddressMinSeverity: input.reviewAutoAddressMinSeverity,
       baseRef: input.baseRef,
     });
 

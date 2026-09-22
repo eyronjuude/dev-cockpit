@@ -21,6 +21,14 @@ const schema = z.object({
   agentModel: z.string().trim().max(120).nullable().optional(),
   /** Transformer for this and later iterations' summaries. */
   transformerProvider: z.string().trim().max(60).optional(),
+  /**
+   * Restricts the findings mentioned in the prompt to exactly these ids.
+   * Omitted mentions every current finding, as before selection existed.
+   * `min(1)`: a selection-scoped request naming zero ids is not "mention
+   * everything", it is a request with nothing to act on, and must fail here
+   * rather than reach `phaseImplement` with an empty, silently-accepted list.
+   */
+  findingIds: z.array(z.string().trim().min(1)).min(1).max(200).optional(),
 });
 
 /**
@@ -35,11 +43,16 @@ export function POST(request: Request, { params }: Params) {
   return handle(async () => {
     assertLocalRequest(request);
     const { runId } = await params;
-    const { feedback, mode, agentProvider, agentModel, transformerProvider } = schema.parse(
-      await readJson(request),
-    );
+    const { feedback, mode, agentProvider, agentModel, transformerProvider, findingIds } =
+      schema.parse(await readJson(request));
     const run = requireRun(runId);
-    requestChanges(run.id, feedback, { mode, agentProvider, agentModel, transformerProvider });
+    requestChanges(run.id, feedback, {
+      mode,
+      agentProvider,
+      agentModel,
+      transformerProvider,
+      findingIds,
+    });
 
     const selectedProvider = agentProvider?.trim() || run.agentProvider;
     return {

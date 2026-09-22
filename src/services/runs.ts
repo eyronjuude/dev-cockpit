@@ -37,6 +37,7 @@ import {
   BLOCKING_OUTCOMES,
   BLOCKING_SEVERITIES,
   executionProfileSchema,
+  findingSeveritySchema,
   VALIDATION_KINDS,
   type ChangeType,
   type Disposition,
@@ -83,6 +84,12 @@ export const createRunSchema = z.object({
   transformer: z.string().trim().max(60).optional(),
   /** Reviewer provider id, or 'none'. */
   reviewer: z.string().trim().max(60).optional(),
+  /**
+   * Minimum finding severity that gets sent back to the implementer
+   * automatically, without a person clicking "Address review findings"
+   * first. Omitted or null leaves review handling fully manual.
+   */
+  reviewAutoAddressMinSeverity: findingSeveritySchema.nullable().optional(),
   /** Branch or commit the run starts from. Defaults to the project default. */
   baseRef: z.string().trim().max(200).optional(),
 });
@@ -105,6 +112,8 @@ export interface IterationView {
   status: IterationStatus;
   sessionId: string | null;
   resumed: boolean;
+  /** True when the review-automation loop triggered this iteration, not a person. */
+  auto: boolean;
   exitCode: number | null;
   numTurns: number | null;
   costUsd: number | null;
@@ -205,6 +214,12 @@ export interface RunView {
    * happened, because a clean pass inserts no rows.
    */
   lastReviewAttempt: number | null;
+  /**
+   * Minimum finding severity that gets auto-addressed for this run. Null
+   * means fully manual — the same behaviour every run had before this field
+   * existed.
+   */
+  reviewAutoAddressMinSeverity: FindingSeverity | null;
   disposition: Disposition | null;
   dispositionNote: string | null;
   error: string | null;
@@ -276,6 +291,7 @@ function hydrateIteration(row: typeof iterations.$inferSelect): IterationView {
     status: row.status as IterationStatus,
     sessionId: row.sessionId,
     resumed: row.resumed,
+    auto: row.auto,
     exitCode: row.exitCode,
     numTurns: row.numTurns,
     costUsd: row.costUsd,
@@ -375,6 +391,7 @@ export function getRun(id: string): RunView | null {
     transformerProvider: row.transformerProvider,
     reviewerProvider: row.reviewerProvider,
     lastReviewAttempt: row.lastReviewAttempt,
+    reviewAutoAddressMinSeverity: row.reviewAutoAddressMinSeverity as FindingSeverity | null,
     disposition: row.disposition as Disposition | null,
     dispositionNote: row.dispositionNote,
     error: row.error,
@@ -585,6 +602,7 @@ export function createRun(input: CreateRunInput): RunView {
       agentModel: model.model,
       transformerProvider: parsed.transformer ?? project.defaultTransformerProvider ?? 'none',
       reviewerProvider: parsed.reviewer ?? project.defaultReviewerProvider ?? 'none',
+      reviewAutoAddressMinSeverity: parsed.reviewAutoAddressMinSeverity ?? null,
     })
     .run();
 
@@ -744,6 +762,7 @@ export function updateRunFields(
     agentSessionId: string | null;
     agentModel: string | null;
     transformerProvider: string;
+    reviewAutoAddressMinSeverity: FindingSeverity | null;
     commitSha: string | null;
     costUsd: number | null;
     disposition: Disposition | null;
@@ -849,6 +868,8 @@ export function createIteration(input: {
   prompt: string;
   sessionId: string | null;
   resumed: boolean;
+  /** True when the review-automation loop triggered this iteration, not a person. */
+  auto?: boolean;
   /**
    * What the agent was asked to run with. Written at creation rather than at
    * finish so an iteration that dies mid-flight still says what it was trying.
@@ -875,6 +896,7 @@ export function createIteration(input: {
       status: 'running',
       sessionId: input.sessionId,
       resumed: input.resumed,
+      auto: input.auto ?? false,
       model: input.settings?.model ?? null,
       effort: input.settings?.effort ?? null,
       permissionMode: input.settings?.permissionMode ?? null,

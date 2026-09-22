@@ -451,6 +451,13 @@ export const runs = sqliteTable(
      * since-resolved pass.
      */
     lastReviewAttempt: integer('last_review_attempt'),
+    /**
+     * The minimum finding severity that gets sent back to the implementer
+     * automatically, without a person clicking "Address review findings"
+     * first. Null (the default) leaves review handling fully manual, which is
+     * every run's behaviour before this column existed.
+     */
+    reviewAutoAddressMinSeverity: text('review_auto_address_min_severity'),
 
     /* Outcome */
     disposition: text('disposition'),
@@ -492,6 +499,13 @@ export const iterations = sqliteTable(
     /** Session id in effect for this iteration; lets resume be auditable. */
     sessionId: text('session_id'),
     resumed: integer('resumed', { mode: 'boolean' }).notNull().default(false),
+    /**
+     * True when the review-automation loop triggered this iteration rather
+     * than a person. Kept separate from `kind` so every existing reader of
+     * `kind === 'change_request'` keeps working unchanged; only the
+     * automation's own retry cap consults this.
+     */
+    auto: integer('auto', { mode: 'boolean' }).notNull().default(false),
     exitCode: integer('exit_code'),
     numTurns: integer('num_turns'),
     costUsd: real('cost_usd'),

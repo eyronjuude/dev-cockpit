@@ -76,6 +76,7 @@ export const EVENT_TYPES = [
   'review.finding',
   'review.completed',
   'review.skipped',
+  'review.auto_address_started',
 
   'landing.queued',
   'landing.dequeued',
@@ -362,6 +363,7 @@ export interface EventPayloads {
   };
   'review.completed': { provider: string; findingCount: number; blocking: boolean };
   'review.skipped': { provider: string; reason: string };
+  'review.auto_address_started': { findingIds: string[]; threshold: FindingSeverity | null };
 
   'landing.queued': {
     repositoryPath: string;
