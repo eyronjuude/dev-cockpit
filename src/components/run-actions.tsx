@@ -52,6 +52,8 @@ import type { RunSnapshot } from './use-run-stream';
 interface ActionsProps {
   snapshot: RunSnapshot;
   onChanged: () => void;
+  /** Which current findings are checked in the Independent Review panel. */
+  selectedFindingIds: ReadonlySet<string>;
 }
 
 const APPROVABLE_STATUSES: readonly RunStatus[] = [
@@ -113,27 +115,6 @@ function switchFeedbackFor(from: ResolvedWorkMode, to: ResolvedWorkMode, note: s
     : 'Answer instead of continuing — say what you found, not what you would change.';
 }
 
-/**
- * The feedback text for "Address review findings": one instruction line
- * followed by the current review attempt's findings, formatted the same way
- * the Independent Review panel shows them (`run-view.tsx`), so the two never
- * disagree about what was flagged.
- */
-function reviewFeedbackFor(findings: RunSnapshot['run']['findings']): string {
-  const items = findings.map((finding, index) => {
-    const location = finding.file
-      ? `${finding.file}${finding.line ? `:${finding.line}` : ''}`
-      : null;
-    const lines = [
-      `${index + 1}. [${finding.severity}] ${finding.title}${location ? ` (${location})` : ''}`,
-    ];
-    if (finding.detail) lines.push(`   ${finding.detail}`);
-    if (finding.suggestion) lines.push(`   Suggestion: ${finding.suggestion}`);
-    return lines.join('\n');
-  });
-  return `Address the following independent review findings:\n\n${items.join('\n\n')}`;
-}
-
 /** The button label for switching this run from `from` into `to`. */
 function switchModeLabel(from: ResolvedWorkMode, to: ResolvedWorkMode): string {
   if (to === 'build') return from === 'plan' ? 'Implement this plan' : 'Switch to Build';
@@ -190,7 +171,7 @@ type Dialog =
   | 'restart'
   | 'cleanup';
 
-export function RunActions({ snapshot, onChanged }: ActionsProps) {
+export function RunActions({ snapshot, onChanged, selectedFindingIds }: ActionsProps) {
   const router = useRouter();
   const { run, readiness, live, preview, worktrees, expiry } = snapshot;
   // Not `Math.max` over `findings`: a clean review pass writes no rows, so the
@@ -198,12 +179,53 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
   // now-stale pass. `lastReviewAttempt` is set by every pass, clean or not,
   // which is what keeps this button from re-litigating already-fixed findings.
   const currentFindings = run.findings.filter((f) => f.attempt === run.lastReviewAttempt);
+  const findingsToAddress = currentFindings.filter((f) => selectedFindingIds.has(f.id));
 
   const [dialog, setDialog] = useState<Dialog>('none');
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const [feedback, setFeedback] = useState('');
+  // Whether the open "changes" dialog was reached via "Address review
+  // findings" rather than plain "Request changes". Not the ids themselves:
+  // those are read fresh from `findingsToAddress` at send time, from
+  // whatever is still selected among the current attempt's findings, so a
+  // dialog left open across a newer review pass (which re-seeds the
+  // selection) sends what is current, never a frozen snapshot from when it
+  // was opened. Cleared whenever any other dialog opens or this one closes,
+  // so a mode-switch or a plain change request — neither of which reads
+  // this flag — can never inherit it either.
+  const [addressingSelectedFindings, setAddressingSelectedFindings] = useState(false);
+  // True when a findings-scoped dialog is open but nothing is selected any
+  // more — every checkbox was unticked after opening, or a newer, clean
+  // review pass emptied `currentFindings` out from under it. Sending in this
+  // state would submit an empty `findingIds`, which the server now refuses
+  // outright, so the button is disabled here instead of letting the user
+  // reach that error.
+  const selectionEmptied = addressingSelectedFindings && findingsToAddress.length === 0;
+  // A findings-scoped dialog is opened against one review attempt's
+  // findings. If a newer pass lands while it is still open, `RunView`
+  // re-seeds `selectedFindingIds` to that new attempt's findings entirely on
+  // its own (see run-view.tsx) — findings the user has not looked at — and
+  // `findingsToAddress` above would follow along, so sending would silently
+  // address a set the user never reviewed or chose. Adjusted during render,
+  // the same "reset state when a prop changes" pattern `RunView` uses for
+  // the selection itself, rather than in an effect: the moment the attempt
+  // changes, any open findings-scoped dialog is closed and the textarea
+  // cleared, so addressing the new findings needs a fresh, deliberate
+  // "Address review findings" click rather than an unnoticed carry-over.
+  const [seenReviewAttempt, setSeenReviewAttempt] = useState(run.lastReviewAttempt);
+  if (seenReviewAttempt !== run.lastReviewAttempt) {
+    setSeenReviewAttempt(run.lastReviewAttempt);
+    if (addressingSelectedFindings) {
+      setAddressingSelectedFindings(false);
+      setDialog('none');
+      setFeedback('');
+      setError(
+        'The independent review finished again while this was open. Its findings changed — review the new ones before addressing them.',
+      );
+    }
+  }
   const feedbackRef = useRef<HTMLTextAreaElement>(null);
   const [inlineAttaching, setInlineAttaching] = useState(false);
   const [inlineAttachError, setInlineAttachError] = useState<string | null>(null);
@@ -245,11 +267,16 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
   const toggleAgentDialog = (target: Dialog) => {
     if (dialog === target) {
       setDialog('none');
+      if (target === 'changes') setAddressingSelectedFindings(false);
       return;
     }
     setSelectedAgentProvider(run.agentProvider);
     setSelectedAgentModel(run.agentModel ?? '');
     setSelectedTransformerProvider(run.transformerProvider);
+    // Opening any dialog other than "changes" itself is never a findings
+    // request, and re-opening "changes" through this generic path (rather
+    // than the "Address" button below) is the plain "Request changes" case.
+    if (target !== 'changes') setAddressingSelectedFindings(false);
     setDialog(target);
   };
   // A separate opener rather than `toggleAgentDialog('implement')`: two
@@ -262,6 +289,7 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
     }
     setSelectedAgentProvider(run.agentProvider);
     setSelectedAgentModel(run.agentModel ?? '');
+    setAddressingSelectedFindings(false);
     setSwitchTarget(target);
     setDialog('implement');
   };
@@ -384,8 +412,17 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
   const canRequestChanges = !active && reworkable && run.worktreePath !== null;
   // Findings only ever exist on a build run's diff (a read-only run produces
   // no diff, so no review runs against it), so this never needs a mode switch
-  // — it is "Request changes" with the findings as the canned feedback.
-  const canAddressReview = canRequestChanges && currentFindings.length > 0;
+  // — it is "Request changes" with the selected findings as the canned
+  // feedback. Gated on the selection, not the full list, so clearing every
+  // checkbox reads as "nothing to send" rather than silently falling back to
+  // "send everything".
+  const canAddressReview = canRequestChanges && findingsToAddress.length > 0;
+  const addressReviewLabel =
+    findingsToAddress.length === currentFindings.length
+      ? 'Address review findings'
+      : `Address ${findingsToAddress.length} selected finding${
+          findingsToAddress.length === 1 ? '' : 's'
+        }`;
   // A read-only run has no diff, so there is nothing for the checks to run
   // against.
   const canRevalidate =
@@ -492,7 +529,10 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
             type="button"
             className="btn"
             disabled={busy !== null}
-            onClick={() => toggleAgentDialog('changes')}
+            onClick={() => {
+              setAddressingSelectedFindings(false);
+              toggleAgentDialog('changes');
+            }}
           >
             {changesLabel}
           </button>
@@ -506,10 +546,20 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
             onClick={() => {
               const opening = dialog !== 'changes';
               toggleAgentDialog('changes');
-              if (opening) setFeedback(reviewFeedbackFor(currentFindings));
+              if (opening) {
+                // Deliberately generic: the finding details (title, file,
+                // severity, suggestion) are not baked in here. This textarea
+                // can sit open for a while before it's sent, and a newer
+                // review pass can supersede the selection in that window —
+                // the server derives the actual finding text from the ids
+                // only after re-validating them against the current attempt,
+                // so nothing stale ever reaches the agent through this field.
+                setFeedback('Address the independent review findings.');
+                setAddressingSelectedFindings(true);
+              }
             }}
           >
-            Address review findings
+            {addressReviewLabel}
           </button>
         ) : null}
 
@@ -1040,28 +1090,48 @@ export function RunActions({ snapshot, onChanged }: ActionsProps) {
             onTransformerChange={setSelectedTransformerProvider}
           />
           <p className="hint">
-            {willResumeSelectedAgentSession
-              ? `Continues agent session ${run.agentSessionId!.slice(0, 8)}, so the ${
-                  readOnly ? `reading behind the ${wording.deliverable}` : 'implementation context'
-                } is kept. ${
-                  readOnly ? 'Still changes no files.' : 'Validation runs again afterwards.'
-                }`
-              : providerChanged
-                ? `Starts a fresh ${selectedAgentLabel} pass because the implementation provider is changing.`
-              : `No agent session is recorded for this run, so the ${wording.agentNoun} starts fresh from this run's stored request.`}
+            {selectionEmptied
+              ? 'Nothing is selected any more — everything was unticked, or a newer review pass cleared it. Select at least one finding, or use plain "Request changes" instead.'
+              : willResumeSelectedAgentSession
+                ? `Continues agent session ${run.agentSessionId!.slice(0, 8)}, so the ${
+                    readOnly ? `reading behind the ${wording.deliverable}` : 'implementation context'
+                  } is kept. ${
+                    readOnly ? 'Still changes no files.' : 'Validation runs again afterwards.'
+                  }`
+                : providerChanged
+                  ? `Starts a fresh ${selectedAgentLabel} pass because the implementation provider is changing.`
+                  : `No agent session is recorded for this run, so the ${wording.agentNoun} starts fresh from this run's stored request.`}
           </p>
           <div className="mt-2.5 flex justify-end gap-1.5">
-            <button type="button" className="btn btn-ghost" onClick={() => setDialog('none')}>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => {
+                setAddressingSelectedFindings(false);
+                setDialog('none');
+              }}
+            >
               Cancel
             </button>
             <button
               type="button"
               className="btn btn-primary"
-              disabled={feedback.trim().length === 0 || busy !== null}
+              disabled={feedback.trim().length === 0 || selectionEmptied || busy !== null}
               onClick={() =>
                 void post(
                   `/api/runs/${run.id}/changes`,
-                  { feedback, ...agentSelectionBody() },
+                  {
+                    feedback,
+                    // Read fresh here, not from a value captured when the
+                    // dialog opened: `findingsToAddress` follows whatever is
+                    // still selected among the current attempt's findings, so
+                    // a dialog left open across a newer review pass sends
+                    // what is current now, never a stale snapshot.
+                    findingIds: addressingSelectedFindings
+                      ? findingsToAddress.map((f) => f.id)
+                      : undefined,
+                    ...agentSelectionBody(),
+                  },
                   'changes',
                 )
               }

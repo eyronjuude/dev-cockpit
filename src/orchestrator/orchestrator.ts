@@ -59,9 +59,11 @@ import {
   canRestart,
   isLandableStatus,
   isTerminal,
+  meetsSeverityThreshold,
   type Disposition,
   type IterationKind,
 } from '@/domain/types';
+import { reviewFeedbackFor } from '@/domain/review-findings';
 import { parseEnvLines, secretValuesIn } from '@/domain/validation-steps';
 import {
   lintCommitSubject,
@@ -122,6 +124,7 @@ import {
   switchRunMode,
   updateRunFields,
   type IterationView,
+  type ReviewFindingView,
   type RunView,
 } from '@/services/runs';
 import { isUnresolvedBackgroundWait } from '@/transformers/prompts';
@@ -868,6 +871,13 @@ export interface RequestChangesOptions {
   agentModel?: string | null;
   /** Write this and later iterations' summaries with a different transformer. */
   transformerProvider?: string;
+  /**
+   * Restricts the findings mentioned in this change request's prompt to
+   * exactly these ids, instead of every current finding. Used by "Address
+   * review findings" when the user has selected a subset; omitted, every
+   * current finding is still mentioned, matching free-text "Request changes".
+   */
+  findingIds?: readonly string[] | null;
 }
 
 /** Continues an existing run with user feedback, resuming the agent session. */
@@ -878,6 +888,37 @@ export function requestChanges(
 ): void {
   const trimmed = feedback.trim();
   if (!trimmed) throw new AppError('Describe what should change.');
+
+  // A selection-scoped request (the ids named exactly which findings to
+  // address) must actually resolve to something. Checked here, synchronously,
+  // before the run's work slot is claimed — not left to be silently
+  // discovered deep in `phaseImplement` — because once the slot is claimed no
+  // other review pass for this run can complete before this one starts, so
+  // "current" now is "current" for the whole request. `options.findingIds`
+  // is checked for presence, not truthiness with a length guard: an empty
+  // array is still a selection-scoped request (the caller asked to restrict
+  // to specific findings), just one that named none, and it must fail here
+  // the same as a request naming only ids that are no longer current —
+  // either way the caller asked to address specific findings, and silently
+  // proceeding without any would invoke the implementer for nothing.
+  if (options.findingIds) {
+    if (options.findingIds.length === 0) {
+      throw new AppError('Select at least one finding to address.');
+    }
+    const run = requireRun(runId);
+    const current = latestFindings(run);
+    // Every id, not just one: a request naming N findings means "address
+    // exactly these N", and silently dropping the ones that no longer
+    // resolve would hand the implementer fewer findings than the user
+    // explicitly selected, with nothing telling them which were skipped.
+    const allStillCurrent = options.findingIds.every((id) => current.some((f) => f.id === id));
+    if (!allStillCurrent) {
+      throw new AppError(
+        'One or more selected findings are no longer current — a newer review pass has superseded them. Refresh and select again.',
+      );
+    }
+  }
+
   const agentOverride = normaliseAgentOverride(options);
   const transformerOverride = normaliseTransformerOverride(options);
 
@@ -886,6 +927,7 @@ export function requestChanges(
       kind: 'change_request',
       feedback: trimmed,
       switchTo: options.mode ?? null,
+      findingIds: options.findingIds ?? null,
       agentOverride,
       transformerOverride,
     }),
@@ -1329,12 +1371,26 @@ type ExecuteMode = {
   transformerOverride?: string | null;
 } & (
   | { kind: 'initial' }
-  | { kind: 'change_request'; feedback: string; switchTo: ResolvedWorkMode | null }
+  | {
+      kind: 'change_request';
+      feedback: string;
+      switchTo: ResolvedWorkMode | null;
+      /** Restricts the findings mentioned in the prompt to exactly these ids. */
+      findingIds?: readonly string[] | null;
+    }
   | { kind: 'retry_iteration' }
   | { kind: 'revalidate' }
 );
 
 type LandingMode = { kind: 'land' } | { kind: 'resolve_conflicts' };
+
+/**
+ * How many automatic "address review findings" rounds a single run is
+ * allowed. One nudge, then a human decides — an agent that cannot satisfy a
+ * reviewer within one automatic round is not made to retry on its own
+ * judgement forever.
+ */
+const AUTO_ADDRESS_MAX_ROUNDS = 1;
 
 async function execute(runId: string, signal: AbortSignal, mode: ExecuteMode): Promise<void> {
   let run = requireRun(runId);
@@ -1387,6 +1443,7 @@ async function execute(runId: string, signal: AbortSignal, mode: ExecuteMode): P
         kind: 'change_request',
         feedback: mode.feedback,
         switched,
+        findingIds: mode.findingIds ?? null,
       });
     } else if (mode.kind === 'retry_iteration') {
       run = await phaseImplement(run, project, profile, workMode, signal, { kind: 'retry' });
@@ -1413,6 +1470,63 @@ async function execute(runId: string, signal: AbortSignal, mode: ExecuteMode): P
     }
 
     run = await phaseReview(run, project, profile, workMode, signal);
+
+    // Findings at or above the run's configured threshold get sent back to
+    // the implementer automatically, the same way "Address review findings"
+    // would, before a person ever has to click it.
+    //
+    // The cap bounds a single *review cycle* — this one `execute()` call,
+    // which is the only place the loop below can run without a person
+    // choosing to trigger it again. It is not counted from the run's stored
+    // iteration history: doing that would make the allowance a one-shot for
+    // the run's entire lifetime, so a run left configured for automation
+    // would silently stop honouring it after its first automatic round even
+    // though nothing about the setting changed. Reset per cycle, each fresh
+    // trigger (a person requesting changes again, a retry, a restart) gets
+    // its own bounded chance, while a single call still cannot spin forever:
+    // an agent that cannot satisfy a reviewer within the cap leaves this
+    // cycle at its ordinary verdict, same as if automation were off.
+    let autoRounds = 0;
+    let autoCandidates = autoAddressCandidates(run);
+
+    while (autoCandidates.length > 0 && autoRounds < AUTO_ADDRESS_MAX_ROUNDS) {
+      autoRounds += 1;
+      appendEvent({
+        runId: run.id,
+        type: 'review.auto_address_started',
+        level: 'notice',
+        message: `Automatically addressing ${autoCandidates.length} finding(s) at or above ${run.reviewAutoAddressMinSeverity}`,
+        payload: {
+          findingIds: autoCandidates.map((f) => f.id),
+          threshold: run.reviewAutoAddressMinSeverity,
+        },
+      });
+
+      run = await phaseImplement(run, project, profile, workMode, signal, {
+        kind: 'change_request',
+        feedback: reviewFeedbackFor(autoCandidates),
+        switched: false,
+        auto: true,
+        findingIds: autoCandidates.map((f) => f.id),
+      });
+
+      if (signal.aborted) {
+        await finishCancelled(runId);
+        return;
+      }
+
+      run = await phaseCollectDiff(run, signal);
+      run = await phaseValidate(run, project, profile, workMode, signal);
+
+      if (signal.aborted) {
+        await finishCancelled(runId);
+        return;
+      }
+
+      run = await phaseReview(run, project, profile, workMode, signal);
+      autoCandidates = autoAddressCandidates(run);
+    }
+
     await phaseDecide(run, project, workMode);
   } catch (err) {
     if (signal.aborted) {
@@ -2107,7 +2221,15 @@ async function provisionWorktree(input: {
 
 type ImplementMode =
   | { kind: 'initial' }
-  | { kind: 'change_request'; feedback: string; switched: boolean }
+  | {
+      kind: 'change_request';
+      feedback: string;
+      switched: boolean;
+      /** Restricts the findings mentioned in the prompt to exactly these ids. */
+      findingIds?: readonly string[] | null;
+      /** True when the review-automation loop triggered this, not a person. */
+      auto?: boolean;
+    }
   /** The last implementation prompt, issued again unchanged. */
   | { kind: 'retry' };
 
@@ -2156,7 +2278,24 @@ async function phaseImplement(
   const preferredResumeSessionId = mode.kind === 'initial' ? null : run.agentSessionId;
   const priorOutput = latestIteration(run.id)?.finalText ?? null;
   const validationEvidence = latestValidationAttempt(run.id);
-  const findingEvidence = latestFindings(run);
+  // A selection-restricted "Address review findings" (or an automatic round)
+  // names exactly the findings it means to cover; anything else — free-text
+  // "Request changes" included — still gets every current finding, matching
+  // the behaviour this had before selection existed.
+  //
+  // Intersected with `latestFindings(run)`, not filtered out of the run's
+  // whole history: a selection is made against one snapshot, and the request
+  // it produces can still arrive after a newer review pass has superseded
+  // it (it sat in a textarea, or another change landed first). An id from
+  // that stale attempt must resolve to nothing rather than to the old,
+  // possibly since-changed finding it named — so a request left naming only
+  // ids that are no longer current mentions no findings at all here, same as
+  // a clean review pass does, rather than silently substituting a different
+  // set the user never selected.
+  const findingEvidence =
+    mode.kind === 'change_request' && mode.findingIds
+      ? latestFindings(run).filter((f) => mode.findingIds!.includes(f.id))
+      : latestFindings(run);
 
   // A retry re-issues the last implementation prompt verbatim: the instruction
   // is not the thing being changed, the attempt at it is. Falling back to the
@@ -2243,6 +2382,7 @@ async function phaseImplement(
       prompt,
       sessionId: resumeSessionId,
       resumed: resumeSessionId !== null,
+      auto: mode.kind === 'change_request' ? (mode.auto ?? false) : false,
       // The resolved settings, not the names they were resolved from. A
       // profile's effort can be edited later; what this iteration ran with
       // cannot.
@@ -2814,6 +2954,22 @@ async function phaseValidate(
 function latestFindings(run: RunView) {
   const attempt = run.findings.reduce((acc, f) => Math.max(acc, f.attempt), 0);
   return run.findings.filter((f) => f.attempt === attempt);
+}
+
+/**
+ * The current findings that qualify for automatic addressing, or an empty
+ * array when automation is off for this run.
+ *
+ * Filtered against `lastReviewAttempt`, not the highest attempt actually
+ * present in `findings`: a clean pass inserts no rows, so the latter would
+ * keep pointing at an earlier, now-resolved pass instead of reporting none.
+ */
+function autoAddressCandidates(run: RunView): ReviewFindingView[] {
+  const threshold = run.reviewAutoAddressMinSeverity;
+  if (!threshold) return [];
+  return run.findings.filter(
+    (f) => f.attempt === run.lastReviewAttempt && meetsSeverityThreshold(f.severity, threshold),
+  );
 }
 
 async function phaseReview(

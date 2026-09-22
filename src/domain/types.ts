@@ -465,6 +465,18 @@ export const findingSeveritySchema = z.enum(FINDING_SEVERITIES);
 /** Severities that block READY when the project treats review as blocking. */
 export const BLOCKING_SEVERITIES: readonly FindingSeverity[] = ['high', 'critical'];
 
+/**
+ * Whether `severity` sits at or above `threshold` on the `FINDING_SEVERITIES`
+ * scale (info < low < medium < high < critical). Used to decide which
+ * findings a run's review-automation threshold covers.
+ */
+export function meetsSeverityThreshold(
+  severity: FindingSeverity,
+  threshold: FindingSeverity,
+): boolean {
+  return FINDING_SEVERITIES.indexOf(severity) >= FINDING_SEVERITIES.indexOf(threshold);
+}
+
 /* ------------------------------------------------------------------ *
  * Iterations
  * ------------------------------------------------------------------ */

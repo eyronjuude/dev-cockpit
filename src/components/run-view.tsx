@@ -12,7 +12,7 @@ import {
   WORK_MODE_WORDING,
 } from '@/domain/modes';
 import { computeRunProgress } from '@/domain/progress';
-import type { ChangeType } from '@/domain/types';
+import { FINDING_SEVERITIES, type ChangeType } from '@/domain/types';
 import { CHANGE_TYPE_TONE, type BadgeTone } from '@/domain/vocabulary';
 import type { CommitView } from '@/services/commits';
 import { ArtifactPanel } from './artifact-panel';
@@ -86,6 +86,41 @@ export function RunView({ initial }: { initial: RunSnapshot }) {
   // highest attempt actually present in `findings` can still be an earlier,
   // now-stale pass. `lastReviewAttempt` is set by every pass, clean or not.
   const currentFindings = run.findings.filter((f) => f.attempt === run.lastReviewAttempt);
+
+  // Which of the current attempt's findings are checked for "Address review
+  // findings". Defaults to "every current finding", so the one-click "address
+  // everything" behaviour keeps working with zero extra clicks; re-seeded
+  // whenever a new attempt supersedes the one the selection was made against,
+  // since a finding id from a stale attempt would otherwise linger selected
+  // and silently mean nothing.
+  //
+  // Adjusted during render rather than in an effect — the pattern React
+  // itself recommends for "reset state when a prop changes" — so the reset
+  // and the render it belongs to commit together instead of the selection
+  // flashing stale for one frame.
+  const [selectedFindingIds, setSelectedFindingIds] = useState<Set<string>>(
+    () => new Set(currentFindings.map((f) => f.id)),
+  );
+  const [seededForAttempt, setSeededForAttempt] = useState(run.lastReviewAttempt);
+  if (seededForAttempt !== run.lastReviewAttempt) {
+    setSeededForAttempt(run.lastReviewAttempt);
+    setSelectedFindingIds(new Set(currentFindings.map((f) => f.id)));
+  }
+  const toggleFindingSelected = (id: string) => {
+    setSelectedFindingIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+  const allFindingsSelected =
+    currentFindings.length > 0 && currentFindings.every((f) => selectedFindingIds.has(f.id));
+  const toggleAllFindingsSelected = () => {
+    setSelectedFindingIds(
+      allFindingsSelected ? new Set() : new Set(currentFindings.map((f) => f.id)),
+    );
+  };
 
   const workMode = effectiveWorkMode(run);
   const agentLabel =
@@ -245,6 +280,10 @@ export function RunView({ initial }: { initial: RunSnapshot }) {
                 findings={currentFindings}
                 latestIteration={latestIteration}
                 onChanged={refresh}
+                selectedFindingIds={selectedFindingIds}
+                onToggleFinding={toggleFindingSelected}
+                allFindingsSelected={allFindingsSelected}
+                onToggleAllFindings={toggleAllFindingsSelected}
               />
             ) : null}
 
@@ -332,7 +371,11 @@ export function RunView({ initial }: { initial: RunSnapshot }) {
         {/* Right rail: actions above, progress pinned below */}
         <aside className="flex min-h-0 flex-col">
           <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3.5">
-            <RunActions snapshot={snapshot} onChanged={refresh} />
+            <RunActions
+              snapshot={snapshot}
+              onChanged={refresh}
+              selectedFindingIds={selectedFindingIds}
+            />
             <ReadinessNotice readiness={readiness} status={run.status} />
 
             {run.dispositionNote ? (
@@ -441,16 +484,70 @@ function ImpactPanel({ run }: { run: RunSnapshot['run'] }) {
   );
 }
 
+/**
+ * Changes how a run's review findings get auto-addressed, at any point in
+ * the run's life — the setting only governs future review passes, so
+ * changing it never rewrites a finding or event already recorded.
+ */
+function ReviewAutomationControl({
+  run,
+  onChanged,
+}: {
+  run: RunSnapshot['run'];
+  onChanged: () => void;
+}) {
+  const [saving, setSaving] = useState(false);
+
+  const change = async (value: string) => {
+    setSaving(true);
+    try {
+      const response = await fetch(`/api/runs/${run.id}/review-automation`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ minSeverity: value === 'off' ? null : value }),
+      });
+      if (response.ok) onChanged();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <select
+      className="select max-w-[180px] text-[11px]"
+      disabled={saving}
+      value={run.reviewAutoAddressMinSeverity ?? 'off'}
+      onChange={(e) => void change(e.target.value)}
+      title="Automatically address findings at or above this severity"
+    >
+      <option value="off">Manual</option>
+      {[...FINDING_SEVERITIES].reverse().map((severity) => (
+        <option key={severity} value={severity}>
+          Auto: {severity}+
+        </option>
+      ))}
+    </select>
+  );
+}
+
 function OverviewTab({
   snapshot,
   findings,
   latestIteration,
   onChanged,
+  selectedFindingIds,
+  onToggleFinding,
+  allFindingsSelected,
+  onToggleAllFindings,
 }: {
   snapshot: RunSnapshot;
   findings: RunSnapshot['run']['findings'];
   latestIteration: RunSnapshot['run']['iterations'][number] | null;
   onChanged: () => void;
+  selectedFindingIds: ReadonlySet<string>;
+  onToggleFinding: (id: string) => void;
+  allFindingsSelected: boolean;
+  onToggleAllFindings: () => void;
 }) {
   const { run, policies } = snapshot;
   const claim = latestIteration?.finalText ?? null;
@@ -588,7 +685,21 @@ function OverviewTab({
       <div className="panel">
         <div className="panel-head">
           <h2 className="panel-title">Independent review</h2>
-          <span className="text-[11px] text-ink-faint">opinions, not test results</span>
+          <div className="flex items-center gap-2">
+            {findings.length > 0 ? (
+              <button
+                type="button"
+                className="btn btn-ghost text-[11px]"
+                onClick={onToggleAllFindings}
+              >
+                {allFindingsSelected ? 'Select none' : 'Select all'}
+              </button>
+            ) : null}
+            {run.reviewerProvider !== 'none' ? (
+              <ReviewAutomationControl run={run} onChanged={onChanged} />
+            ) : null}
+            <span className="text-[11px] text-ink-faint">opinions, not test results</span>
+          </div>
         </div>
         {findings.length === 0 ? (
           <p className="empty-state">
@@ -603,6 +714,13 @@ function OverviewTab({
             {findings.map((finding) => (
               <li key={finding.id} className="px-3.5 py-2">
                 <div className="flex items-start gap-2">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5"
+                    checked={selectedFindingIds.has(finding.id)}
+                    onChange={() => onToggleFinding(finding.id)}
+                    aria-label={`Include "${finding.title}" when addressing review findings`}
+                  />
                   <SeverityBadge severity={finding.severity} />
                   <div className="min-w-0 flex-1">
                     <p className="text-[12.5px] font-medium">{finding.title}</p>

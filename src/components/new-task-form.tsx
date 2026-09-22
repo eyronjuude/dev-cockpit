@@ -24,8 +24,10 @@ import {
   type EffortResolution,
 } from '@/domain/models';
 import {
+  FINDING_SEVERITIES,
   permissionModeAllowsCommands,
   type ExecutionProfileName,
+  type FindingSeverity,
 } from '@/domain/types';
 import { recommendedModelFor, type ExecutionProfile } from '@/orchestrator/profiles';
 import type { ProjectView, RepositoryState } from '@/services/projects';
@@ -127,6 +129,12 @@ export function NewTaskForm({
   const [showCustomModel, setShowCustomModel] = useState(false);
   const [transformer, setTransformer] = useState(defaultTransformer);
   const [reviewer, setReviewer] = useState(defaultReviewer);
+  // Null means fully manual: a person always decides when a finding gets
+  // addressed. Set, findings at or above it are sent back to the implementer
+  // on their own, without anyone clicking anything.
+  const [autoAddressMinSeverity, setAutoAddressMinSeverity] = useState<FindingSeverity | null>(
+    null,
+  );
   // Prefilled with the checked-out branch when it differs from the project
   // default, so a run does not silently start from stale code.
   const [baseRef, setBaseRef] = useState(
@@ -187,6 +195,7 @@ export function NewTaskForm({
         model: model?.trim() || undefined,
         transformer,
         reviewer,
+        reviewAutoAddressMinSeverity: reviewer !== 'none' ? autoAddressMinSeverity : undefined,
         baseRef: baseRef.trim() || undefined,
       });
 
@@ -624,7 +633,11 @@ export function NewTaskForm({
               : reviewer === 'none'
                 ? 'None — findings are optional and off.'
                 : selectedProfile.runReviewer
-                  ? `${reviewers.find((r) => r.id === reviewer)?.label ?? reviewer}, read-only.`
+                  ? `${reviewers.find((r) => r.id === reviewer)?.label ?? reviewer}, read-only.${
+                      autoAddressMinSeverity
+                        ? ` ${autoAddressMinSeverity} and above findings are auto-addressed; the rest wait for you.`
+                        : ' You decide when findings get addressed.'
+                    }`
                   : `Configured, but the ${selectedProfile.label} profile skips it.`}
           </Row>
           <Row label="Approval">
@@ -695,6 +708,35 @@ export function NewTaskForm({
               value={reviewer}
               onChange={setReviewer}
             />
+
+            <div>
+              <label className="label" htmlFor="auto-address-severity">
+                Automatically address findings
+              </label>
+              <select
+                id="auto-address-severity"
+                className="select"
+                disabled={reviewer === 'none'}
+                value={autoAddressMinSeverity ?? 'off'}
+                onChange={(e) =>
+                  setAutoAddressMinSeverity(
+                    e.target.value === 'off' ? null : (e.target.value as FindingSeverity),
+                  )
+                }
+              >
+                <option value="off">Off — I&rsquo;ll address findings myself</option>
+                {[...FINDING_SEVERITIES].reverse().map((severity) => (
+                  <option key={severity} value={severity}>
+                    {severity} and above
+                  </option>
+                ))}
+              </select>
+              <p className="hint">
+                {reviewer === 'none'
+                  ? 'Pick an independent reviewer above to use this.'
+                  : 'Findings at or above this severity are sent back to the implementer on their own, without waiting for a click. Everything below stays manual. Changeable later from the run screen.'}
+              </p>
+            </div>
 
             <div>
               <label className="label" htmlFor="base-ref">

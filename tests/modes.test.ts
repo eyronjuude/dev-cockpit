@@ -131,6 +131,7 @@ function makeRun(overrides: Partial<RunView> = {}): RunView {
     transformerProvider: 'none',
     reviewerProvider: 'none',
     lastReviewAttempt: null,
+    reviewAutoAddressMinSeverity: null,
     disposition: null,
     dispositionNote: null,
     error: null,
