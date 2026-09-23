@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import {
   effectiveWorkMode,
@@ -20,7 +20,7 @@ import {
   RETRY_STAGE_LABELS,
 } from '@/domain/retry';
 import { isFinished, LANDABLE_STATUSES, type RunStatus } from '@/domain/types';
-import { AttachmentList, uploadAttachmentFiles } from './attachments';
+import { AttachmentList, dragOverStyle, uploadAttachmentFiles, useFileDropZone } from './attachments';
 import type { RunSnapshot } from './use-run-stream';
 
 /**
@@ -229,7 +229,6 @@ export function RunActions({ snapshot, onChanged, selectedFindingIds }: ActionsP
   const feedbackRef = useRef<HTMLTextAreaElement>(null);
   const [inlineAttaching, setInlineAttaching] = useState(false);
   const [inlineAttachError, setInlineAttachError] = useState<string | null>(null);
-  const [feedbackDragOver, setFeedbackDragOver] = useState(false);
   const attachmentNamesRef = useRef<Set<string>>(new Set(run.attachments.map((a) => a.fileName)));
   const [implementNote, setImplementNote] = useState('');
   const [switchTarget, setSwitchTarget] = useState<ResolvedWorkMode>('build');
@@ -368,20 +367,10 @@ export function RunActions({ snapshot, onChanged, selectedFindingIds }: ActionsP
 
   // Only intercepted when the drop or paste actually carries files: plain
   // text keeps behaving like a normal textarea.
-  const onFeedbackDrop = (event: DragEvent<HTMLTextAreaElement>) => {
-    setFeedbackDragOver(false);
-    const files = Array.from(event.dataTransfer.files);
-    if (files.length === 0) return;
-    event.preventDefault();
-    void attachFilesInline(files);
-  };
-
-  const onFeedbackPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
-    const files = Array.from(event.clipboardData.files);
-    if (files.length === 0) return;
-    event.preventDefault();
-    void attachFilesInline(files);
-  };
+  const feedbackDropZone = useFileDropZone<HTMLTextAreaElement>(
+    (files) => void attachFilesInline(files),
+    !snapshot.attachmentsMutable,
+  );
 
   // An inline `@name` token is only ever correct while that attachment still
   // exists: `AttachmentList`'s own Remove button (or the same file removed
@@ -1046,19 +1035,11 @@ export function RunActions({ snapshot, onChanged, selectedFindingIds }: ActionsP
                   : 'The endpoint returns 500 when the id is missing. It should return 400 with a message.'
             }
             onChange={(e) => setFeedback(e.target.value)}
-            onDrop={onFeedbackDrop}
-            onPaste={onFeedbackPaste}
-            onDragOver={(e) => {
-              if (!snapshot.attachmentsMutable) return;
-              e.preventDefault();
-              setFeedbackDragOver(true);
-            }}
-            onDragLeave={() => setFeedbackDragOver(false)}
-            style={
-              feedbackDragOver
-                ? { borderColor: 'var(--color-accent)', boxShadow: '0 0 0 3px rgb(76 154 255 / 0.14)' }
-                : undefined
-            }
+            onDrop={feedbackDropZone.onDrop}
+            onPaste={feedbackDropZone.onPaste}
+            onDragOver={feedbackDropZone.onDragOver}
+            onDragLeave={feedbackDropZone.onDragLeave}
+            style={feedbackDropZone.dragOver ? dragOverStyle : undefined}
           />
           {snapshot.attachmentsMutable ? (
             <p className="hint">
