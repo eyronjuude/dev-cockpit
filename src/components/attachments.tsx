@@ -1,6 +1,6 @@
 'use client';
 
-import { useId, useState } from 'react';
+import { useId, useState, type ClipboardEvent, type DragEvent } from 'react';
 
 import {
   attachmentLimitsHint,
@@ -25,6 +25,62 @@ import type { AttachmentView } from '@/services/attachments';
  * A client-side check is a courtesy — it saves uploading 200 MB to be told no
  * — never the control.
  */
+
+/* ------------------------------------------------------------------ *
+ * Drop and paste
+ * ------------------------------------------------------------------ */
+
+/**
+ * Turns a container into a drop zone and paste target for files, so
+ * attaching something is not limited to the file-picker button.
+ *
+ * Only intercepts a drop or paste that actually carries files: a dragged link
+ * or a copied line of text falls through to whatever the browser would
+ * normally do with it, rather than being swallowed here.
+ */
+export function useFileDropZone<T extends HTMLElement>(
+  onFiles: (files: File[]) => void,
+  disabled = false,
+) {
+  const [dragOver, setDragOver] = useState(false);
+
+  const onDrop = (event: DragEvent<T>) => {
+    setDragOver(false);
+    const files = Array.from(event.dataTransfer.files);
+    if (files.length === 0) return;
+    // Prevented whenever it's a file, even while disabled or full — otherwise
+    // the browser navigates to the dropped file instead of just rejecting it.
+    event.preventDefault();
+    if (disabled) return;
+    onFiles(files);
+  };
+
+  const onDragOver = (event: DragEvent<T>) => {
+    // Always prevented, so a drop the handler above will reject still lands
+    // here rather than the browser refusing the drop outright.
+    event.preventDefault();
+    if (disabled) return;
+    setDragOver(true);
+  };
+
+  const onDragLeave = () => setDragOver(false);
+
+  const onPaste = (event: ClipboardEvent<T>) => {
+    if (disabled) return;
+    const files = Array.from(event.clipboardData?.files ?? []);
+    if (files.length === 0) return;
+    event.preventDefault();
+    onFiles(files);
+  };
+
+  return { dragOver, onDrop, onDragOver, onDragLeave, onPaste };
+}
+
+/** The inline highlight a drop zone shows while something is dragged over it. */
+export const dragOverStyle = {
+  borderColor: 'var(--color-accent)',
+  boxShadow: '0 0 0 3px rgb(76 154 255 / 0.14)',
+} as const;
 
 /* ------------------------------------------------------------------ *
  * Icon
@@ -62,13 +118,13 @@ export function AttachmentPicker({
   const inputId = useId();
   const [rejected, setRejected] = useState<string[]>([]);
 
-  const accept = (picked: FileList | null) => {
-    if (!picked || picked.length === 0) return;
+  const accept = (incoming: File[]) => {
+    if (incoming.length === 0) return;
 
     const next = [...files];
     const problems: string[] = [];
 
-    for (const file of Array.from(picked)) {
+    for (const file of incoming) {
       const fileName = safeAttachmentFileName(file.name);
       const rejection = attachmentRejection({ fileName, bytes: file.size }, next.length);
       if (rejection) {
@@ -88,9 +144,20 @@ export function AttachmentPicker({
   };
 
   const full = files.length >= MAX_ATTACHMENTS_PER_RUN;
+  const dropZone = useFileDropZone<HTMLDivElement>(accept, disabled || full);
 
   return (
-    <div className="panel">
+    <div
+      className="panel"
+      tabIndex={0}
+      role="group"
+      aria-label="Attachments — attach files, or paste or drop them here"
+      onDrop={dropZone.onDrop}
+      onDragOver={dropZone.onDragOver}
+      onDragLeave={dropZone.onDragLeave}
+      onPaste={dropZone.onPaste}
+      style={dropZone.dragOver ? dragOverStyle : undefined}
+    >
       <div className="panel-head">
         <h2 className="panel-title">Attachments</h2>
         <span className="text-[11px] text-ink-faint">
@@ -143,7 +210,7 @@ export function AttachmentPicker({
             className="hidden"
             disabled={disabled || full}
             onChange={(event) => {
-              accept(event.target.files);
+              accept(Array.from(event.target.files ?? []));
               // Cleared so picking the same file again still fires a change.
               event.target.value = '';
             }}
@@ -151,7 +218,7 @@ export function AttachmentPicker({
           <span className="text-[11.5px] text-ink-faint">
             {full
               ? `That is the limit of ${MAX_ATTACHMENTS_PER_RUN}. Remove one to attach another.`
-              : 'Screenshots, logs, a spec, a design file.'}
+              : 'Screenshots, logs, a spec, a design file — or paste or drop them here.'}
           </span>
         </div>
 
@@ -254,11 +321,11 @@ export function AttachmentList({
     return body?.error ?? `${fallback} (${response.status})`;
   };
 
-  const upload = async (picked: FileList | null) => {
-    if (!picked || picked.length === 0) return;
+  const upload = async (incoming: File[]) => {
+    if (incoming.length === 0) return;
 
     setBusy(true);
-    const result = await uploadAttachmentFiles(runId, Array.from(picked), attachments.length);
+    const result = await uploadAttachmentFiles(runId, incoming, attachments.length);
     setError(result.error);
     if (result.added.length > 0) onChanged();
     setBusy(false);
@@ -283,10 +350,25 @@ export function AttachmentList({
     }
   };
 
+  const dropZone = useFileDropZone<HTMLDivElement>(
+    (files) => void upload(files),
+    !mutable || busy || full,
+  );
+
   if (attachments.length === 0 && !mutable) return null;
 
   return (
-    <div className="panel">
+    <div
+      className="panel"
+      tabIndex={mutable ? 0 : undefined}
+      role={mutable ? 'group' : undefined}
+      aria-label={mutable ? 'Attachments — attach files, or paste or drop them here' : undefined}
+      onDrop={mutable ? dropZone.onDrop : undefined}
+      onDragOver={mutable ? dropZone.onDragOver : undefined}
+      onDragLeave={mutable ? dropZone.onDragLeave : undefined}
+      onPaste={mutable ? dropZone.onPaste : undefined}
+      style={mutable && dropZone.dragOver ? dragOverStyle : undefined}
+    >
       <div className="panel-head">
         <h2 className="panel-title">Attachments</h2>
         <span className="text-[11px] text-ink-faint">
@@ -365,14 +447,14 @@ export function AttachmentList({
               className="hidden"
               disabled={busy || full}
               onChange={(event) => {
-                void upload(event.target.files);
+                void upload(Array.from(event.target.files ?? []));
                 event.target.value = '';
               }}
             />
             <span className="text-[11.5px] text-ink-faint">
               {full
                 ? `That is the limit of ${MAX_ATTACHMENTS_PER_RUN}.`
-                : 'The next iteration reads whatever is attached when it starts.'}
+                : 'Or paste or drop a file anywhere in this panel — the next iteration reads whatever is attached when it starts.'}
             </span>
           </div>
           <p className="hint">{attachmentLimitsHint()}</p>
