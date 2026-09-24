@@ -261,6 +261,7 @@ export function ProjectForm({
 
   const [probe, setProbe] = useState<RepositoryProbe | null>(null);
   const [probing, setProbing] = useState(false);
+  const [revealing, setRevealing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -448,6 +449,27 @@ export function ProjectForm({
     }
   };
 
+  const reveal = async () => {
+    if (!probe?.resolvedPath) return;
+    setRevealing(true);
+    setError(null);
+    try {
+      const response = await fetch('/api/projects/reveal', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: probe.resolvedPath }),
+      });
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as { error?: string } | null;
+        setError(body?.error ?? `Could not open File Explorer (${response.status})`);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not open File Explorer.');
+    } finally {
+      setRevealing(false);
+    }
+  };
+
   const submit = async () => {
     setSaving(true);
     setError(null);
@@ -589,6 +611,16 @@ export function ProjectForm({
                   onClick={() => void runProbe()}
                 >
                   {probing ? 'Checking…' : 'Check'}
+                </button>
+              ) : null}
+              {!editing ? (
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={revealing || !probe?.ok || !probe.resolvedPath}
+                  onClick={() => void reveal()}
+                >
+                  {revealing ? 'Opening…' : 'File Explorer'}
                 </button>
               ) : null}
             </div>
