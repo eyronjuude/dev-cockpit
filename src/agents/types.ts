@@ -47,6 +47,11 @@ export interface AgentStartInput {
    * empty means no `.mcp.json` is written and nothing about the run changes.
    */
   mcpServers?: Record<string, McpServerConfig>;
+  /**
+   * The project's own `env` field, parsed. Layered over the server's
+   * environment for CLI providers; API providers spawn nothing and ignore it.
+   */
+  env?: Record<string, string>;
   model?: string | null;
   /** Claude Code permission mode, or the provider's equivalent. */
   permissionMode?: string;

@@ -1130,7 +1130,7 @@ export function ProjectForm({
 
           <div>
             <label className="label" htmlFor="setup-env">
-              Environment for the setup command
+              Environment for setup and the agent
             </label>
             <textarea
               id="setup-env"
@@ -1142,9 +1142,10 @@ export function ProjectForm({
             />
             <p className="hint">
               One <code className="mono">KEY=VALUE</code> per line, injected directly into the
-              setup command&apos;s process. Unlike linked files, this reaches the command even if
-              nothing in the project loads an env file for itself — useful for a setup command
-              that runs a migration. Secret-looking values are masked in captured output.
+              setup command, the implementation agent and operational commands. Unlike linked
+              files, this reaches them even if nothing in the project loads an env file for
+              itself. Point database URLs at a scratch database: the agent runs commands with
+              these values. Secret-looking values are masked in captured output.
             </p>
           </div>
 

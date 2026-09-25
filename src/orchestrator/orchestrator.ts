@@ -2344,6 +2344,7 @@ async function phaseImplement(
       : project.agentAddDirs;
 
   const mcpServers = buildMcpServers(project.integrations);
+  const agentEnv = parseEnvLines(project.env.join('\n'));
 
   const agents = implementationFallbackOrder(run.agentProvider);
   const capacityAttempts: CapacityAttempt[] = [];
@@ -2417,6 +2418,7 @@ async function phaseImplement(
       worktreePath: run.worktreePath,
       additionalDirs,
       mcpServers,
+      env: agentEnv,
       model,
       permissionMode,
       effort: effort.effort,
@@ -3738,6 +3740,7 @@ async function runLandingAgentIteration(input: {
     worktreePath: landingPath,
     additionalDirs: project.agentAddDirs,
     mcpServers: buildMcpServers(project.integrations),
+    env: parseEnvLines(project.env.join('\n')),
     model,
     permissionMode: project.effectivePermissionMode,
     effort: effort.effort,

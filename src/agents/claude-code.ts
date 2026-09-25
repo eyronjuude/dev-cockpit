@@ -13,6 +13,7 @@ import { secretValuesIn } from '@/domain/validation-steps';
 import { describeUnavailable, planSpawn, resolveExecutable, withRetries } from '@/process/exec';
 import { killTree } from '@/process/spawn';
 import { claudePermissionArgs, resolvePermissionMode } from './permissions';
+import { agentProcessEnv } from './spawn-env';
 import { NdjsonSplitter, parseStreamMessage, summariseToolInput } from './stream-parser';
 import type {
   AgentAvailability,
@@ -284,13 +285,7 @@ export class ClaudeCodeAgent implements ImplementationAgent {
         windowsHide: true,
         windowsVerbatimArguments: plan.windowsVerbatimArguments,
         detached: process.platform !== 'win32',
-        env: {
-          ...process.env,
-          // Keeps the CLI from emitting decorative output it would otherwise
-          // add when it thinks a human is watching.
-          CI: '1',
-          FORCE_COLOR: '0',
-        },
+        env: agentProcessEnv(input.env),
       });
     } catch (err) {
       logStream.end();

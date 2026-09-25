@@ -10,6 +10,7 @@ import { ensureDir, runArtifactDir } from '@/core/paths';
 import { planSpawn } from '@/process/exec';
 import { killTree } from '@/process/spawn';
 import { codexPermissionArgs, resolvePermissionMode } from './permissions';
+import { agentProcessEnv } from './spawn-env';
 import { checkCodexAvailable, codexBinary } from './codex-query';
 import type {
   AgentAvailability,
@@ -197,7 +198,7 @@ export class CodexCodeAgent implements ImplementationAgent {
         windowsHide: true,
         windowsVerbatimArguments: plan.windowsVerbatimArguments,
         detached: process.platform !== 'win32',
-        env: { ...process.env, CI: '1', FORCE_COLOR: '0' },
+        env: agentProcessEnv(input.env),
       });
     } catch (err) {
       logStream.end();

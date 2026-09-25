@@ -132,7 +132,7 @@ export const createProjectSchema = z.object({
   setupCommand: z.string().trim().max(2_000).nullable().optional(),
   openCommand: z.string().trim().max(2_000).nullable().optional(),
   linkPaths: z.array(z.string()).optional(),
-  /** Extra environment for `setupCommand` and operational commands. */
+  /** Extra environment for `setupCommand`, operational commands and the implementation agent. */
   env: z.array(z.string().max(2_000)).max(50).optional(),
   protectedBranches: z.array(z.string()).optional(),
   requireValidation: z.boolean().optional(),
