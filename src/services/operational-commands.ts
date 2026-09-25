@@ -17,6 +17,7 @@ import {
   type CommandTarget,
   type OperationalRunOutcome,
 } from '@/domain/types';
+import { interpolateRunTokens } from '@/domain/env-tokens';
 import { parseEnvLines, secretValuesIn } from '@/domain/validation-steps';
 import { assertTargetCheckoutReady } from '@/git/landing';
 import { runCommand } from '@/process/spawn';
@@ -294,10 +295,14 @@ export async function runOperationalCommand(
   // Neither field ever reaches `process.env`, so the redactor's environment
   // scan cannot see either — registered here for the same reason a
   // validation step's env is registered in the validation engine.
-  const env = {
+  const configured = {
     ...parseEnvLines(project.env.join('\n')),
     ...parseEnvLines(command.env.join('\n')),
   };
+  // Tokens name a run, and production has none. Left unresolved there, a
+  // `{runId}` in a database URL fails as an unknown database rather than
+  // quietly pointing somewhere plausible.
+  const env = runId ? interpolateRunTokens(configured, { runId, worktree: 'run' }) : configured;
   registerExtraSecrets(secretValuesIn(env));
 
   const db = getDb();

@@ -1069,8 +1069,9 @@ export function ProjectForm({
                   onChange={(e) => setPreviewEnv(e.target.value)}
                 />
                 <p className="hint">
-                  One <span className="mono">KEY=VALUE</span> per line. Secret-looking values are
-                  masked in captured output.
+                  One <span className="mono">KEY=VALUE</span> per line.{' '}
+                  <span className="mono">{'{runId}'}</span> resolves to the run&apos;s id.
+                  Secret-looking values are masked in captured output.
                 </p>
               </div>
 
@@ -1145,7 +1146,11 @@ export function ProjectForm({
               setup command, the implementation agent and operational commands. Unlike linked
               files, this reaches them even if nothing in the project loads an env file for
               itself. Point database URLs at a scratch database: the agent runs commands with
-              these values. Secret-looking values are masked in captured output.
+              these values. <code className="mono">{'{runId}'}</code> and{' '}
+              <code className="mono">{'{worktree}'}</code> (<code className="mono">run</code> or{' '}
+              <code className="mono">landing</code>) give each worktree its own, e.g.{' '}
+              <code className="mono">app_{'{runId}'}_{'{worktree}'}</code>. Production operational
+              commands leave them unresolved. Secret-looking values are masked in captured output.
             </p>
           </div>
 

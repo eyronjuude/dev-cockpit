@@ -6,6 +6,7 @@ import path from 'node:path';
 import { newValidationId } from '@/core/ids';
 import { isInside } from '@/core/paths';
 import { registerExtraSecrets } from '@/core/redact';
+import { interpolateRunTokens, type WorktreeKind } from '@/domain/env-tokens';
 import { runCommand, type CommandResult } from '@/process/spawn';
 import {
   BLOCKING_OUTCOMES,
@@ -46,6 +47,8 @@ import type { ProjectView, ValidationStepView } from '@/services/projects';
 export interface ValidatorContext {
   runId: string;
   worktreePath: string;
+  /** Which of the run's worktrees this is; resolves `{worktree}`. Defaults to `run`. */
+  worktree?: WorktreeKind;
   project: ProjectView;
   profile: ExecutionProfileName;
   /**
@@ -136,7 +139,10 @@ export class CommandValidator implements Validator {
     // environment scan cannot see it. Register the secret-looking values here
     // or the one field a user is most likely to put a credential in is the one
     // field that would not be masked.
-    const stepEnv = parseEnvLines(this.config.env.join('\n'));
+    const stepEnv = interpolateRunTokens(parseEnvLines(this.config.env.join('\n')), {
+      runId: context.runId,
+      worktree: context.worktree ?? 'run',
+    });
     registerExtraSecrets(secretValuesIn(stepEnv));
 
     const result: CommandResult = await runCommand({

@@ -16,6 +16,7 @@ import type {
 } from '@/agents/types';
 import { landingBranchName, runAttemptBranchName } from '@/core/ids';
 import { AppError, errorMessage } from '@/core/errors';
+import { interpolateRunTokens, type WorktreeKind } from '@/domain/env-tokens';
 import { buildMcpServers } from '@/domain/mcp-integrations';
 import {
   normaliseRepositoryPath,
@@ -1736,6 +1737,7 @@ async function executeLanding(
     let validation = await runValidation({
       runId: run.id,
       worktreePath: landing.worktreePath,
+      worktree: 'landing',
       project,
       profile: profile.id,
       changedPaths,
@@ -1797,6 +1799,7 @@ async function executeLanding(
       validation = await runValidation({
         runId: run.id,
         worktreePath: landing.worktreePath,
+        worktree: 'landing',
         project,
         profile: profile.id,
         changedPaths,
@@ -2064,6 +2067,15 @@ async function phasePrepare(
   return requireRun(run.id);
 }
 
+/** The project's `env` field, parsed, with `{runId}` and `{worktree}` resolved. */
+function projectEnvFor(
+  project: ProjectView,
+  runId: string,
+  worktree: WorktreeKind,
+): Record<string, string> {
+  return interpolateRunTokens(parseEnvLines(project.env.join('\n')), { runId, worktree });
+}
+
 export interface WorktreeProvisionResult {
   linked: string[];
   failed: { path: string; error: string }[];
@@ -2118,7 +2130,7 @@ async function provisionWorktree(input: {
     // server process happens to have, which is almost never the target
     // project's secrets. Registered before running so redaction can mask it,
     // the same way a validation step's env is registered in the engine.
-    const setupEnv = parseEnvLines(project.env.join('\n'));
+    const setupEnv = projectEnvFor(project, run.id, kind);
     registerExtraSecrets(secretValuesIn(setupEnv));
     const result = await runCommand({
       command: setupCommand,
@@ -2344,7 +2356,7 @@ async function phaseImplement(
       : project.agentAddDirs;
 
   const mcpServers = buildMcpServers(project.integrations);
-  const agentEnv = parseEnvLines(project.env.join('\n'));
+  const agentEnv = projectEnvFor(project, run.id, 'run');
 
   const agents = implementationFallbackOrder(run.agentProvider);
   const capacityAttempts: CapacityAttempt[] = [];
@@ -3740,7 +3752,7 @@ async function runLandingAgentIteration(input: {
     worktreePath: landingPath,
     additionalDirs: project.agentAddDirs,
     mcpServers: buildMcpServers(project.integrations),
-    env: parseEnvLines(project.env.join('\n')),
+    env: projectEnvFor(project, run.id, 'landing'),
     model,
     permissionMode: project.effectivePermissionMode,
     effort: effort.effort,

@@ -182,4 +182,85 @@ describe('the orchestrator hands the project env to the agent', () => {
       FEATURE_FLAG: 'on',
     });
   });
+
+  it('resolves per-run tokens for the agent, validation and operational commands', async () => {
+    const printUrl = 'node -e "console.log(process.env.DATABASE_URL)"';
+    // Outside the repository, so recording it never dirties a checkout.
+    const setupLog = path.join(dataDir, 'agent-env-tokens-setup.log');
+    const project = await projectsService.createProject({
+      name: 'agent-env-tokens',
+      repositoryPath: makeRepo('agent-env-tokens'),
+      setupCommand:
+        'node -e "require(\'fs\').appendFileSync(process.env.SETUP_LOG, process.env.DATABASE_URL + \'\\n\')"',
+      env: ['DATABASE_URL=postgres://localhost/app_{runId}_{worktree}', `SETUP_LOG=${setupLog}`],
+      validationSteps: [
+        {
+          key: 'db-url',
+          label: 'Print database URL',
+          command: printUrl,
+          env: ['DATABASE_URL=postgres://localhost/check_{runId}_{worktree}'],
+        },
+      ],
+    });
+    const created = runsService.createRun({
+      projectId: project.id,
+      request: 'Write a marker file',
+      mode: 'build',
+    });
+
+    const seen: AgentStartInput[] = [];
+    const restore = orchestrator.registerAgent(capturingAgent(seen));
+    try {
+      orchestrator.startRun(created.id);
+      await waitForIdle(created.id);
+    } finally {
+      restore();
+    }
+
+    const runId = created.id;
+    expect(seen[0]?.env?.DATABASE_URL).toBe(`postgres://localhost/app_${runId}_run`);
+
+    const step = runsService.latestValidationAttempt(runId).find((r) => r.stepKey === 'db-url');
+    expect(step?.stdout?.trim()).toBe(`postgres://localhost/check_${runId}_run`);
+
+    const opsService = await import('@/services/operational-commands');
+    const scratch = opsService.createOperationalCommand(project.id, {
+      label: 'Print scratch URL',
+      command: printUrl,
+      target: 'non_production',
+    });
+    const scratchRun = await opsService.runOperationalCommand(scratch.id, {
+      runId,
+      confirmed: true,
+    });
+    expect(scratchRun.stdout?.trim()).toBe(`postgres://localhost/app_${runId}_run`);
+
+    // Production has no run to name. A token left in place fails loudly as an
+    // unknown database, which beats resolving it to something plausible.
+    const production = opsService.createOperationalCommand(project.id, {
+      label: 'Print production URL',
+      command: printUrl,
+      target: 'production',
+    });
+    const productionRun = await opsService.runOperationalCommand(production.id, {
+      confirmed: true,
+    });
+    expect(productionRun.stdout?.trim()).toBe('postgres://localhost/app_{runId}_{worktree}');
+
+    // Landing merges the target branch in, so it gets a database of its own.
+    await orchestrator.approveRun(runId);
+    orchestrator.landRun(runId);
+    await waitForIdle(runId);
+    expect(runsService.requireRun(runId).status).toBe('LANDED');
+
+    const landingStep = runsService
+      .latestValidationAttempt(runId)
+      .find((r) => r.stepKey === 'db-url');
+    expect(landingStep?.stdout?.trim()).toBe(`postgres://localhost/check_${runId}_landing`);
+
+    expect(fs.readFileSync(setupLog, 'utf8').trim().split(/\r?\n/)).toEqual([
+      `postgres://localhost/app_${runId}_run`,
+      `postgres://localhost/app_${runId}_landing`,
+    ]);
+  });
 });

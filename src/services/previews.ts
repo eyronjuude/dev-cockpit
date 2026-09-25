@@ -9,6 +9,7 @@ import path from 'node:path';
 import { AppError, errorMessage } from '@/core/errors';
 import { ensureDir, isInside, runArtifactDir } from '@/core/paths';
 import { redact, registerExtraSecrets } from '@/core/redact';
+import { interpolateRunTokens } from '@/domain/env-tokens';
 import { parseEnvLines, secretValuesIn } from '@/domain/validation-steps';
 import { joinPreviewPath, type PreviewStatus, type PreviewView } from '@/domain/previews';
 import type { PreviewConfigView } from './projects';
@@ -251,7 +252,10 @@ export async function startRunPreview(runId: string): Promise<PreviewView> {
 
   // Configured values never reach `process.env`, so the redactor cannot see
   // them without being told. Same gap, same fix as a validation step's env.
-  const previewEnv = parseEnvLines(config.env.join('\n'));
+  const previewEnv = interpolateRunTokens(parseEnvLines(config.env.join('\n')), {
+    runId,
+    worktree: 'run',
+  });
   registerExtraSecrets(secretValuesIn(previewEnv));
 
   let child: ChildProcess;

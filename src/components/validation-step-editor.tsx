@@ -246,8 +246,10 @@ export function StepEditor({
               onChange={(e) => onChange({ env: e.target.value })}
             />
             <p className="hint">
-              One <span className="mono">KEY=VALUE</span> per line. Secret-looking values are
-              masked in captured output.
+              One <span className="mono">KEY=VALUE</span> per line.{' '}
+              <span className="mono">{'{runId}'}</span> and <span className="mono">{'{worktree}'}</span>{' '}
+              (<span className="mono">run</span> or <span className="mono">landing</span>) name the
+              worktree the check runs in. Secret-looking values are masked in captured output.
             </p>
           </div>
 

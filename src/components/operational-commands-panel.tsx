@@ -255,7 +255,9 @@ export function OperationalCommandsPanel({
               />
               <p className="hint">
                 One <code className="mono">KEY=VALUE</code> per line, merged over the project&apos;s
-                own environment for this command only.
+                own environment for this command only. Non-production commands resolve{' '}
+                <code className="mono">{'{runId}'}</code> to the borrowed run; production leaves
+                it as written.
               </p>
             </div>
             <div className="flex justify-end">
