@@ -24,6 +24,11 @@ export const projects = sqliteTable(
     developmentCommand: text('development_command'),
     /** Runs once in a fresh worktree, e.g. `pnpm install --prefer-offline`. */
     setupCommand: text('setup_command'),
+    /**
+     * Runs inside a worktree just before it is removed, e.g. dropping the
+     * scratch database `setupCommand` created. Same env as setup.
+     */
+    teardownCommand: text('teardown_command'),
     /** Command used by "Open worktree", e.g. `code {path}`. */
     openCommand: text('open_command'),
 

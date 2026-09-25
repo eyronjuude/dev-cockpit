@@ -90,6 +90,7 @@ export function ProjectForm({
     existing?.developmentCommand ?? '',
   );
   const [setupCommand, setSetupCommand] = useState(existing?.setupCommand ?? '');
+  const [teardownCommand, setTeardownCommand] = useState(existing?.teardownCommand ?? '');
   const [openCommand, setOpenCommand] = useState(existing?.openCommand ?? '');
   const [linkPaths, setLinkPaths] = useState((existing?.linkPaths ?? []).join('\n'));
   const [env, setEnv] = useState((existing?.env ?? []).join('\n'));
@@ -480,6 +481,7 @@ export function ProjectForm({
       defaultBranch: defaultBranch || undefined,
       developmentCommand: developmentCommand || null,
       setupCommand: setupCommand || null,
+      teardownCommand: teardownCommand || null,
       openCommand: openCommand || null,
       linkPaths: splitLines(linkPaths),
       env: splitLines(env),
@@ -1127,6 +1129,24 @@ export function ProjectForm({
               onChange={(e) => setSetupCommand(e.target.value)}
             />
             <p className="hint">Runs once in each new worktree, after linking.</p>
+          </div>
+
+          <div>
+            <label className="label" htmlFor="teardown-command">
+              Teardown command
+            </label>
+            <input
+              id="teardown-command"
+              className="input input-mono"
+              value={teardownCommand}
+              placeholder="npm run db:drop"
+              onChange={(e) => setTeardownCommand(e.target.value)}
+            />
+            <p className="hint">
+              Runs inside a worktree just before it is removed, with the same environment as
+              setup — the place to drop the scratch database setup created. Skipped for a
+              worktree that is kept; a failure is logged and the worktree is removed anyway.
+            </p>
           </div>
 
           <div>

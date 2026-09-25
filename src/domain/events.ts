@@ -38,6 +38,7 @@ export const EVENT_TYPES = [
 
   'worktree.prepared',
   'worktree.setup',
+  'worktree.teardown',
   'worktree.removed',
   'run.expired',
 
@@ -203,6 +204,19 @@ export interface EventPayloads {
     /** Set when the checks were about to run without their dependencies. */
     missingDependencyDirs?: string[];
     expectedDependencyDirs?: string[];
+  };
+  /**
+   * The project's teardown command ran in a worktree about to be removed.
+   * Recorded per worktree, and whatever the exit code: the removal goes ahead
+   * regardless, so this is the only place a failed teardown shows up.
+   */
+  'worktree.teardown': {
+    worktreeKind: 'run' | 'landing';
+    path: string;
+    teardownCommand: string;
+    /** Null when the command could not start or timed out. */
+    exitCode: number | null;
+    durationMs: number | null;
   };
   /**
    * A cleanup pass over the run's worktrees. One entry per worktree it looked

@@ -16,7 +16,6 @@ import type {
 } from '@/agents/types';
 import { landingBranchName, runAttemptBranchName } from '@/core/ids';
 import { AppError, errorMessage } from '@/core/errors';
-import { interpolateRunTokens, type WorktreeKind } from '@/domain/env-tokens';
 import { buildMcpServers } from '@/domain/mcp-integrations';
 import {
   normaliseRepositoryPath,
@@ -65,7 +64,7 @@ import {
   type IterationKind,
 } from '@/domain/types';
 import { reviewFeedbackFor } from '@/domain/review-findings';
-import { parseEnvLines, secretValuesIn } from '@/domain/validation-steps';
+import { secretValuesIn } from '@/domain/validation-steps';
 import {
   lintCommitSubject,
   resolveCommitConvention,
@@ -102,9 +101,13 @@ import { appendEvent } from '@/services/events';
 import { tryRecordImplementationMap } from '@/services/implementation-map';
 import { tryRecordOutputPages } from '@/services/output-pages';
 import { startRunPreview, stopRunPreview } from '@/services/previews';
-import { requireProject, type ProjectView } from '@/services/projects';
+import { projectRunEnv, requireProject, type ProjectView } from '@/services/projects';
 import { checkDependencyReadiness } from '@/services/repo-evidence';
-import { cleanUpFinishedRunWorktrees, cleanUpRunWorktrees } from '@/services/worktrees';
+import {
+  cleanUpFinishedRunWorktrees,
+  cleanUpRunWorktrees,
+  runTeardown,
+} from '@/services/worktrees';
 import {
   addRunCost,
   assessReadiness,
@@ -1322,6 +1325,9 @@ export async function restartRun(
           // junction out into the original checkout.
           expectBranch: run.branch,
           linkedPaths: project.linkPaths,
+          // The next attempt keeps this run's id, so without this it would
+          // inherit this attempt's scratch database, schema and all.
+          beforeRemove: () => runTeardown(run.id, project, run.worktreePath!, 'run'),
         },
       );
       if (!removal.removed) {
@@ -2067,15 +2073,6 @@ async function phasePrepare(
   return requireRun(run.id);
 }
 
-/** The project's `env` field, parsed, with `{runId}` and `{worktree}` resolved. */
-function projectEnvFor(
-  project: ProjectView,
-  runId: string,
-  worktree: WorktreeKind,
-): Record<string, string> {
-  return interpolateRunTokens(parseEnvLines(project.env.join('\n')), { runId, worktree });
-}
-
 export interface WorktreeProvisionResult {
   linked: string[];
   failed: { path: string; error: string }[];
@@ -2130,7 +2127,7 @@ async function provisionWorktree(input: {
     // server process happens to have, which is almost never the target
     // project's secrets. Registered before running so redaction can mask it,
     // the same way a validation step's env is registered in the engine.
-    const setupEnv = projectEnvFor(project, run.id, kind);
+    const setupEnv = projectRunEnv(project, run.id, kind);
     registerExtraSecrets(secretValuesIn(setupEnv));
     const result = await runCommand({
       command: setupCommand,
@@ -2356,7 +2353,7 @@ async function phaseImplement(
       : project.agentAddDirs;
 
   const mcpServers = buildMcpServers(project.integrations);
-  const agentEnv = projectEnvFor(project, run.id, 'run');
+  const agentEnv = projectRunEnv(project, run.id, 'run');
 
   const agents = implementationFallbackOrder(run.agentProvider);
   const capacityAttempts: CapacityAttempt[] = [];
@@ -3752,7 +3749,7 @@ async function runLandingAgentIteration(input: {
     worktreePath: landingPath,
     additionalDirs: project.agentAddDirs,
     mcpServers: buildMcpServers(project.integrations),
-    env: projectEnvFor(project, run.id, 'landing'),
+    env: projectRunEnv(project, run.id, 'landing'),
     model,
     permissionMode: project.effectivePermissionMode,
     effort: effort.effort,

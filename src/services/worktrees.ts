@@ -1,15 +1,21 @@
 import 'server-only';
 
 import fs from 'node:fs';
+import path from 'node:path';
 
-import { AppError } from '@/core/errors';
+import { AppError, errorMessage } from '@/core/errors';
 import { landingBranchName } from '@/core/ids';
 import { landingsDir, runLandingDir, worktreesDir } from '@/core/paths';
+import { registerExtraSecrets } from '@/core/redact';
+import type { WorktreeKind } from '@/domain/env-tokens';
 import { AUTO_CLEANUP_STATUSES, FINISHED_STATUSES } from '@/domain/types';
+import { secretValuesIn } from '@/domain/validation-steps';
 import { pruneWorktrees, removeWorktree } from '@/git/worktree';
+import { runCommand } from '@/process/spawn';
+import { writeTextArtifact } from './artifacts';
 import { appendEvent } from './events';
 import { stopRunPreview } from './previews';
-import { requireProject, type ProjectView } from './projects';
+import { projectRunEnv, requireProject, type ProjectView } from './projects';
 import { requireRun, updateRunFields, type RunView } from './runs';
 
 /**
@@ -25,7 +31,7 @@ import { requireRun, updateRunFields, type RunView } from './runs';
  * cleanup can be exercised without starting an agent.
  */
 
-export type WorktreeKind = 'run' | 'landing';
+export type { WorktreeKind } from '@/domain/env-tokens';
 
 export interface RunWorktree {
   kind: WorktreeKind;
@@ -126,6 +132,7 @@ export async function cleanUpRunWorktrees(
       root: target.kind === 'landing' ? landingsDir() : worktreesDir(),
       expectBranch: target.branch,
       linkedPaths: project.linkPaths,
+      beforeRemove: () => runTeardown(run.id, project, target.path, target.kind),
     });
 
     targets.push({
@@ -171,6 +178,90 @@ export async function cleanUpRunWorktrees(
   });
 
   return { runId: run.id, removed, kept, targets };
+}
+
+const TEARDOWN_TIMEOUT_MS = 10 * 60 * 1000;
+
+/**
+ * Runs the project's teardown command inside a worktree about to be removed.
+ *
+ * The counterpart of the setup command: same env, tokens resolved for the same
+ * worktree, so `dropdb app_{runId}_{worktree}` names exactly the database
+ * setup created. Passed to `removeWorktree` as `beforeRemove`, which only calls
+ * it once the worktree is definitely going — a worktree kept for its
+ * uncommitted changes keeps its database too.
+ *
+ * Never throws and never blocks the removal. A teardown that fails leaves a
+ * database behind, which is recoverable; one that could veto removal would
+ * leave the worktree behind forever, which is the problem retention exists to
+ * solve. So the outcome is recorded, at `notice` when it failed, and that is
+ * all.
+ */
+export async function runTeardown(
+  runId: string,
+  project: ProjectView,
+  worktreePath: string,
+  kind: WorktreeKind,
+): Promise<void> {
+  const teardownCommand = project.teardownCommand?.trim() ?? '';
+  if (!teardownCommand) return;
+
+  try {
+    const env = projectRunEnv(project, runId, kind);
+    registerExtraSecrets(secretValuesIn(env));
+    const result = await runCommand({
+      command: teardownCommand,
+      cwd: worktreePath,
+      env,
+      timeoutMs: TEARDOWN_TIMEOUT_MS,
+    });
+
+    await writeTextArtifact({
+      runId,
+      kind: 'stdout_log',
+      label: kind === 'landing' ? 'Landing worktree teardown output' : 'Worktree teardown output',
+      fileName: path.join('teardown', `${kind}-${Date.now()}.log`),
+      content: `Command: ${teardownCommand}\nExit code: ${result.exitCode}\n\n--- stdout ---\n${result.stdout}\n\n--- stderr ---\n${result.stderr}`,
+      meta: { exitCode: result.exitCode, durationMs: result.durationMs, worktreeKind: kind },
+    });
+
+    const failed = result.exitCode !== 0;
+    appendEvent({
+      runId,
+      type: 'worktree.teardown',
+      level: failed ? 'notice' : 'info',
+      message: failed
+        ? `${kind === 'landing' ? 'Landing worktree' : 'Worktree'} teardown ${
+            result.spawnError
+              ? `could not start: ${result.spawnError}`
+              : result.timedOut
+                ? 'timed out'
+                : `exited ${result.exitCode}`
+          }; removing the worktree anyway`
+        : `Ran the teardown command in the ${kind} worktree`,
+      payload: {
+        worktreeKind: kind,
+        path: worktreePath,
+        teardownCommand,
+        exitCode: result.exitCode,
+        durationMs: result.durationMs,
+      },
+    });
+  } catch (err) {
+    appendEvent({
+      runId,
+      type: 'worktree.teardown',
+      level: 'notice',
+      message: `Teardown in the ${kind} worktree failed: ${errorMessage(err)}; removing the worktree anyway`,
+      payload: {
+        worktreeKind: kind,
+        path: worktreePath,
+        teardownCommand,
+        exitCode: null,
+        durationMs: null,
+      },
+    });
+  }
 }
 
 /**

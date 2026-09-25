@@ -275,6 +275,13 @@ export interface RemoveWorktreeOptions {
   expectBranch?: string | null;
   /** Paths linked in by `linkIntoWorktree`, unlinked before deletion. */
   linkedPaths?: readonly string[];
+  /**
+   * Called once every refusal check has passed and the directory still
+   * exists, just before anything is deleted — the project's teardown command
+   * runs here. Not called for a worktree that is kept. It must not throw:
+   * a failed teardown is reported, never a reason to keep the worktree.
+   */
+  beforeRemove?: () => Promise<void>;
 }
 
 export interface RemoveWorktreeResult {
@@ -302,6 +309,7 @@ export async function removeWorktree(
     root = worktreesDir(),
     expectBranch = null,
     linkedPaths = [],
+    beforeRemove,
   } = opts;
 
   if (!isInside(root, worktreePath)) {
@@ -342,6 +350,7 @@ export async function removeWorktree(
       };
     }
 
+    await beforeRemove?.();
     await unlinkWorktreeLinks(worktreePath, linkedPaths);
     try {
       await fsp.rm(worktreePath, { recursive: true, force: true });
@@ -369,7 +378,10 @@ export async function removeWorktree(
     }
   }
 
-  if (exists) await unlinkWorktreeLinks(worktreePath, linkedPaths);
+  if (exists) {
+    await beforeRemove?.();
+    await unlinkWorktreeLinks(worktreePath, linkedPaths);
+  }
 
   const args = ['worktree', 'remove', worktreePath];
   if (force) args.push('--force');

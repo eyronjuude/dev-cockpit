@@ -43,6 +43,7 @@ function makeProject(overrides: Partial<ProjectView> = {}): ProjectView {
     defaultBranch: 'main',
     developmentCommand: null,
     setupCommand: null,
+    teardownCommand: null,
     openCommand: null,
     linkPaths: [],
     env: [],

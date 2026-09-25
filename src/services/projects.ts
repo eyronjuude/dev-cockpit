@@ -28,9 +28,11 @@ import {
   type RunWhenCondition,
   type ValidationKind,
 } from '@/domain/types';
+import { interpolateRunTokens, type WorktreeKind } from '@/domain/env-tokens';
 import {
   nextPosition,
   orderSteps,
+  parseEnvLines,
   slugifyStepKey,
   STEP_KEY_PATTERN,
   uniqueStepKey,
@@ -130,6 +132,8 @@ export const createProjectSchema = z.object({
   defaultBranch: z.string().trim().max(200).optional(),
   developmentCommand: z.string().trim().max(2_000).nullable().optional(),
   setupCommand: z.string().trim().max(2_000).nullable().optional(),
+  /** Runs inside a worktree just before it is removed, with the setup env. */
+  teardownCommand: z.string().trim().max(2_000).nullable().optional(),
   openCommand: z.string().trim().max(2_000).nullable().optional(),
   linkPaths: z.array(z.string()).optional(),
   /** Extra environment for `setupCommand`, operational commands and the implementation agent. */
@@ -230,6 +234,7 @@ export interface ProjectView {
   defaultBranch: string;
   developmentCommand: string | null;
   setupCommand: string | null;
+  teardownCommand: string | null;
   openCommand: string | null;
   linkPaths: string[];
   /** Raw `KEY=VALUE` lines; parse with `parseEnvLines`. */
@@ -335,6 +340,7 @@ function toProjectView(
     defaultBranch: row.defaultBranch,
     developmentCommand: row.developmentCommand,
     setupCommand: row.setupCommand,
+    teardownCommand: row.teardownCommand,
     openCommand: row.openCommand,
     linkPaths: fromLines(row.linkPaths),
     env: fromLines(row.env),
@@ -414,6 +420,18 @@ export function requireProject(id: string): ProjectView {
   const project = getProject(id);
   if (!project) throw notFound(`Project ${id}`);
   return project;
+}
+
+/**
+ * The project's `env` field for one of a run's worktrees: parsed, with
+ * `{runId}` and `{worktree}` resolved. What setup, the agent and teardown see.
+ */
+export function projectRunEnv(
+  project: ProjectView,
+  runId: string,
+  worktree: WorktreeKind,
+): Record<string, string> {
+  return interpolateRunTokens(parseEnvLines(project.env.join('\n')), { runId, worktree });
 }
 
 export function projectRunCounts(projectId: string): { total: number; active: number } {
@@ -521,6 +539,7 @@ export async function createProject(input: CreateProjectInput): Promise<ProjectV
       defaultBranch,
       developmentCommand: parsed.developmentCommand ?? null,
       setupCommand: parsed.setupCommand ?? null,
+      teardownCommand: parsed.teardownCommand ?? null,
       openCommand: parsed.openCommand ?? null,
       linkPaths: toLines(parsed.linkPaths) ?? null,
       env: toLines(parsed.env) ?? null,
@@ -649,6 +668,8 @@ export function updateProject(id: string, input: UpdateProjectInput): ProjectVie
           : parsed.developmentCommand,
       setupCommand:
         parsed.setupCommand === undefined ? existing.setupCommand : parsed.setupCommand,
+      teardownCommand:
+        parsed.teardownCommand === undefined ? existing.teardownCommand : parsed.teardownCommand,
       openCommand: parsed.openCommand === undefined ? existing.openCommand : parsed.openCommand,
       linkPaths: toLines(parsed.linkPaths) ?? existing.linkPaths.join('\n'),
       env: toLines(parsed.env) ?? existing.env.join('\n'),
