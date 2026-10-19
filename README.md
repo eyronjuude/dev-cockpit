@@ -339,8 +339,10 @@ work sequentially; only the engineer edits the worktree. This is a shared-contex
 handoff workflow, not simultaneous autonomous agents editing the same checkout.
 
 **Add direction** saves a message for the next role handoff or implementation
-pass. It does not interrupt a running CLI or start a new run. Follow-up work can
-be started through the existing run actions. Conversation history is persisted;
+pass. It does not interrupt a running CLI or start a new run. **Request changes**
+starts a follow-up pass in the same run and also records your prompt as a **You**
+message before the team responds, including when switching a plan to Build.
+Conversation history is persisted;
 model context includes only recent messages and bounded evidence.
 
 All four review reports form one review attempt. High and critical findings

@@ -1445,6 +1445,15 @@ async function execute(runId: string, signal: AbortSignal, mode: ExecuteMode): P
 
     const workMode = getWorkMode(effectiveWorkMode(run));
 
+    // Accepted follow-up prompts belong to the public conversation before the
+    // lead or engineer responds. Automatic repairs call phaseImplement directly,
+    // so they are never attributed to the user here.
+    if (run.team && mode.kind === 'change_request') {
+      teamActivity(run.id, {
+        role: 'user', to: 'team', kind: 'message', text: mode.feedback,
+      });
+    }
+
     if (mode.kind === 'initial') {
       run = await phaseTransform(run, project, profile, signal);
       run = await phasePrepare(run, project, signal);

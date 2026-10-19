@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { defaultTeam, TEAM_ROLES, teamConfigSchema } from '@/domain/team';
+import { defaultTeam, TEAM_ROLES, teamConfigSchema, type TeamActivity } from '@/domain/team';
 import type { AgentOutcome, AgentStartInput, ImplementationAgent } from '@/agents/types';
 import type { ClaudeQueryOptions } from '@/agents/claude-query';
 
@@ -150,6 +150,58 @@ describe('engineering team', () => {
     expect(result.findings.some((f) => f.title.includes('[Functional QA]'))).toBe(true);
     expect(result.findings.filter((f) => f.attempt === result.lastReviewAttempt)).toHaveLength(0);
     expect(query).toHaveBeenCalledTimes(10);
+    expect(events.listEvents(result.id, { types: ['team.activity'] }).filter((e) =>
+      (e.payload as TeamActivity).role === 'user')).toHaveLength(0);
+  });
+
+  it('records follow-up prompts once as user messages before team responses in the same run', async () => {
+    const project = await makeProject();
+    const calls: AgentStartInput[] = [];
+    const first = await executeRun({ projectId: project.id, request: 'Add a marker', mode: 'build' }, calls);
+    expect(first.status).toBe('READY');
+    const feedback = 'Preserve the base line and add a second marker.';
+    const restore = orchestrator.registerAgent(fakeEngineer(calls));
+    try {
+      orchestrator.requestChanges(first.id, `  ${feedback}  `);
+      const result = await idle(first.id);
+      expect(result.id).toBe(first.id);
+      expect(result.status).toBe('READY');
+      expect(result.iterations).toHaveLength(2);
+      const activity = events.listEvents(first.id, { types: ['team.activity'] });
+      const userMessages = activity.filter((e) => (e.payload as TeamActivity).role === 'user');
+      expect(userMessages).toHaveLength(1);
+      const message = userMessages[0]!;
+      expect(message.payload).toMatchObject({ role: 'user', to: 'team', kind: 'message', text: feedback });
+      const leadResponses = activity.filter((e) => (e.payload as TeamActivity).role === 'lead' && e.seq > message.seq);
+      expect(leadResponses.length).toBeGreaterThan(0);
+      const leadPrompt = JSON.parse(query.mock.calls[5]![0].prompt);
+      expect(leadPrompt.conversation).toContain(`user -> team: ${feedback}`);
+      expect(calls[1]!.prompt).toContain(`user -> team: ${feedback}`);
+      // Retrying the saved iteration must not invent another user submission.
+      orchestrator.retryIteration(first.id);
+      await idle(first.id);
+      expect(events.listEvents(first.id, { types: ['team.activity'] }).filter((e) =>
+        (e.payload as TeamActivity).role === 'user')).toHaveLength(1);
+    } finally { restore(); }
+  });
+
+  it('includes the prompt when a plan is handed to the team for Build', async () => {
+    const project = await makeProject();
+    const run = runs.createRun({ projectId: project.id, request: 'Plan the marker change', mode: 'plan' });
+    const restorePlanner = orchestrator.registerAgent(fakeEngineer([], false));
+    try { orchestrator.startRun(run.id); expect((await idle(run.id)).status).toBe('READY'); }
+    finally { restorePlanner(); }
+    const restoreEngineer = orchestrator.registerAgent(fakeEngineer([]));
+    try {
+      orchestrator.requestChanges(run.id, 'Implement this plan and preserve compatibility.', { mode: 'build' });
+      const result = await idle(run.id);
+      expect(result.status).toBe('READY');
+      expect(result.resolvedMode).toBe('build');
+      const userMessages = events.listEvents(run.id, { types: ['team.activity'] }).filter((e) =>
+        (e.payload as TeamActivity).role === 'user');
+      expect(userMessages).toHaveLength(1);
+      expect(userMessages[0]!.payload).toMatchObject({ text: 'Implement this plan and preserve compatibility.' });
+    } finally { restoreEngineer(); }
   });
 
   it('bounds automatic repair and leaves persistent team defects blocking', async () => {
@@ -194,6 +246,9 @@ describe('engineering team', () => {
     try {
       orchestrator.startRun(run.id);
       await started;
+      expect(() => orchestrator.requestChanges(run.id, 'This request cannot be accepted while busy.')).toThrow();
+      expect(events.listEvents(run.id, { types: ['team.activity'] }).filter((e) =>
+        (e.payload as TeamActivity).role === 'user')).toHaveLength(0);
       expect(orchestrator.cancelRun(run.id)).toBe(true);
       const result = await idle(run.id);
       expect(result.status).toBe('CANCELLED');

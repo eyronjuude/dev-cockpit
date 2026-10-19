@@ -1,0 +1,901 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><meta name="description" content="Visual-first messenger concept for Dev Cockpit. Standalone offline preview with fictional agent diagrams and evidence cards."><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'"><title>Dev Cockpit · Visual team messenger</title><style>/*! tailwindcss v4.3.3 | MIT License | https://tailwindcss.com */
+@layer properties;
+@layer theme, base, components, utilities;
+@layer theme {
+  :root, :host {
+    --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    --font-mono: ui-monospace, 'Cascadia Code', 'JetBrains Mono', Consolas, monospace;
+    --spacing: 0.25rem;
+    --font-weight-semibold: 600;
+    --default-font-family: var(--font-sans);
+    --default-mono-font-family: var(--font-mono);
+    --color-base: #0b0d10;
+    --color-surface: #12151a;
+    --color-surface-raised: #171b22;
+    --color-surface-hover: #1d222b;
+    --color-line: #232935;
+    --color-line-strong: #303845;
+    --color-ink: #e6e9ef;
+    --color-ink-muted: #9aa4b2;
+    --color-ink-faint: #6b7480;
+    --color-accent: #4c9aff;
+    --color-accent-soft: #1b3557;
+    --color-pass: #3fb950;
+    --color-pass-soft: #123018;
+    --color-fail: #f85149;
+    --color-fail-soft: #3d1418;
+    --color-warn: #d29922;
+    --color-warn-soft: #3a2c0a;
+    --color-running: #58a6ff;
+    --color-running-soft: #10243e;
+    --color-idle-soft: #1a1e24;
+  }
+}
+@layer base {
+  *, ::after, ::before, ::backdrop, ::file-selector-button {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    border: 0 solid;
+  }
+  html, :host {
+    line-height: 1.5;
+    -webkit-text-size-adjust: 100%;
+    tab-size: 4;
+    font-family: var(--default-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", "Noto Sans", Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji");
+    font-feature-settings: var(--default-font-feature-settings, normal);
+    font-variation-settings: var(--default-font-variation-settings, normal);
+    -webkit-tap-highlight-color: transparent;
+  }
+  hr {
+    height: 0;
+    color: inherit;
+    border-top-width: 1px;
+  }
+  abbr:where([title]) {
+    -webkit-text-decoration: underline dotted;
+    text-decoration: underline dotted;
+  }
+  h1, h2, h3, h4, h5, h6 {
+    font-size: inherit;
+    font-weight: inherit;
+  }
+  a {
+    color: inherit;
+    -webkit-text-decoration: inherit;
+    text-decoration: inherit;
+  }
+  b, strong {
+    font-weight: bolder;
+  }
+  code, kbd, samp, pre {
+    font-family: var(--default-mono-font-family, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace);
+    font-feature-settings: var(--default-mono-font-feature-settings, normal);
+    font-variation-settings: var(--default-mono-font-variation-settings, normal);
+    font-size: 1em;
+  }
+  small {
+    font-size: 80%;
+  }
+  sub, sup {
+    font-size: 75%;
+    line-height: 0;
+    position: relative;
+    vertical-align: baseline;
+  }
+  sub {
+    bottom: -0.25em;
+  }
+  sup {
+    top: -0.5em;
+  }
+  table {
+    text-indent: 0;
+    border-color: inherit;
+    border-collapse: collapse;
+  }
+  :-moz-focusring:where(:not(iframe)) {
+    outline: auto;
+  }
+  progress {
+    vertical-align: baseline;
+  }
+  summary {
+    display: list-item;
+  }
+  ol, ul, menu {
+    list-style: none;
+  }
+  img, svg, video, canvas, audio, iframe, embed, object {
+    display: block;
+    vertical-align: middle;
+  }
+  img, video {
+    max-width: 100%;
+    height: auto;
+  }
+  button, input, select, optgroup, textarea, ::file-selector-button {
+    font: inherit;
+    font-feature-settings: inherit;
+    font-variation-settings: inherit;
+    letter-spacing: inherit;
+    color: inherit;
+    border-radius: 0;
+    background-color: transparent;
+    opacity: 1;
+  }
+  :where(select:is([multiple], [size])) optgroup {
+    font-weight: bolder;
+  }
+  :where(select:is([multiple], [size])) optgroup option {
+    padding-inline-start: 20px;
+  }
+  ::file-selector-button {
+    margin-inline-end: 4px;
+  }
+  ::placeholder {
+    opacity: 1;
+  }
+  @supports (not (-webkit-appearance: -apple-pay-button))  or (contain-intrinsic-size: 1px) {
+    ::placeholder {
+      color: currentcolor;
+      @supports (color: color-mix(in lab, red, red)) {
+        color: color-mix(in oklab, currentcolor 50%, transparent);
+      }
+    }
+  }
+  textarea {
+    resize: vertical;
+  }
+  ::-webkit-search-decoration {
+    -webkit-appearance: none;
+  }
+  ::-webkit-date-and-time-value {
+    min-height: 1lh;
+    text-align: inherit;
+  }
+  ::-webkit-datetime-edit {
+    display: inline-flex;
+  }
+  ::-webkit-datetime-edit-fields-wrapper {
+    padding: 0;
+  }
+  ::-webkit-datetime-edit, ::-webkit-datetime-edit-year-field, ::-webkit-datetime-edit-month-field, ::-webkit-datetime-edit-day-field, ::-webkit-datetime-edit-hour-field, ::-webkit-datetime-edit-minute-field, ::-webkit-datetime-edit-second-field, ::-webkit-datetime-edit-millisecond-field, ::-webkit-datetime-edit-meridiem-field {
+    padding-block: 0;
+  }
+  ::-webkit-calendar-picker-indicator {
+    line-height: 1;
+  }
+  :-moz-ui-invalid {
+    box-shadow: none;
+  }
+  button, input:where([type="button"], [type="reset"], [type="submit"]), ::file-selector-button {
+    appearance: button;
+  }
+  ::-webkit-inner-spin-button, ::-webkit-outer-spin-button {
+    height: auto;
+  }
+  [hidden]:where(:not([hidden="until-found"])) {
+    display: none !important;
+  }
+}
+@layer utilities {
+  .mt-1 {
+    margin-top: var(--spacing);
+  }
+  .mt-3 {
+    margin-top: calc(var(--spacing) * 3);
+  }
+  .mb-2 {
+    margin-bottom: calc(var(--spacing) * 2);
+  }
+  .mb-3 {
+    margin-bottom: calc(var(--spacing) * 3);
+  }
+  .ml-auto {
+    margin-left: auto;
+  }
+  .block {
+    display: block;
+  }
+  .flex {
+    display: flex;
+  }
+  .grid {
+    display: grid;
+  }
+  .min-h-20 {
+    min-height: calc(var(--spacing) * 20);
+  }
+  .min-w-0 {
+    min-width: 0px;
+  }
+  .cursor-pointer {
+    cursor: pointer;
+  }
+  .flex-wrap {
+    flex-wrap: wrap;
+  }
+  .items-center {
+    align-items: center;
+  }
+  .justify-between {
+    justify-content: space-between;
+  }
+  .gap-1\.5 {
+    gap: calc(var(--spacing) * 1.5);
+  }
+  .gap-2 {
+    gap: calc(var(--spacing) * 2);
+  }
+  .gap-3 {
+    gap: calc(var(--spacing) * 3);
+  }
+  :where(.space-y-2 > :not(:last-child)) {
+    --tw-space-y-reverse: 0;
+    margin-block-start: calc(calc(var(--spacing) * 2) * var(--tw-space-y-reverse));
+    margin-block-end: calc(calc(var(--spacing) * 2) * calc(1 - var(--tw-space-y-reverse)));
+  }
+  :where(.space-y-3 > :not(:last-child)) {
+    --tw-space-y-reverse: 0;
+    margin-block-start: calc(calc(var(--spacing) * 3) * var(--tw-space-y-reverse));
+    margin-block-end: calc(calc(var(--spacing) * 3) * calc(1 - var(--tw-space-y-reverse)));
+  }
+  :where(.space-y-4 > :not(:last-child)) {
+    --tw-space-y-reverse: 0;
+    margin-block-start: calc(calc(var(--spacing) * 4) * var(--tw-space-y-reverse));
+    margin-block-end: calc(calc(var(--spacing) * 4) * calc(1 - var(--tw-space-y-reverse)));
+  }
+  .rounded {
+    border-radius: 0.25rem;
+  }
+  .border {
+    border-style: var(--tw-border-style);
+    border-width: 1px;
+  }
+  .border-t {
+    border-top-style: var(--tw-border-style);
+    border-top-width: 1px;
+  }
+  .border-dashed {
+    --tw-border-style: dashed;
+    border-style: dashed;
+  }
+  .border-accent {
+    border-color: var(--color-accent);
+  }
+  .border-line {
+    border-color: var(--color-line);
+  }
+  .bg-accent-soft {
+    background-color: var(--color-accent-soft);
+  }
+  .bg-surface-raised {
+    background-color: var(--color-surface-raised);
+  }
+  .p-2\.5 {
+    padding: calc(var(--spacing) * 2.5);
+  }
+  .p-3 {
+    padding: calc(var(--spacing) * 3);
+  }
+  .p-4 {
+    padding: calc(var(--spacing) * 4);
+  }
+  .p-5 {
+    padding: calc(var(--spacing) * 5);
+  }
+  .px-1 {
+    padding-inline: var(--spacing);
+  }
+  .px-3\.5 {
+    padding-inline: calc(var(--spacing) * 3.5);
+  }
+  .py-3 {
+    padding-block: calc(var(--spacing) * 3);
+  }
+  .pt-3 {
+    padding-top: calc(var(--spacing) * 3);
+  }
+  .text-\[11\.5px\] {
+    font-size: 11.5px;
+  }
+  .text-\[11px\] {
+    font-size: 11px;
+  }
+  .text-\[12\.5px\] {
+    font-size: 12.5px;
+  }
+  .text-\[12px\] {
+    font-size: 12px;
+  }
+  .text-\[13px\] {
+    font-size: 13px;
+  }
+  .text-\[15px\] {
+    font-size: 15px;
+  }
+  .font-semibold {
+    --tw-font-weight: var(--font-weight-semibold);
+    font-weight: var(--font-weight-semibold);
+  }
+  .break-words {
+    overflow-wrap: break-word;
+  }
+  .text-fail {
+    color: var(--color-fail);
+  }
+  .text-ink-faint {
+    color: var(--color-ink-faint);
+  }
+  .text-ink-muted {
+    color: var(--color-ink-muted);
+  }
+  @media (width >= 40rem) {
+    .sm\:grid-cols-2 {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .sm\:grid-cols-3 {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+  }
+  @media (width >= 64rem) {
+    .lg\:grid-cols-2 {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+  @media (width >= 80rem) {
+    .xl\:grid-cols-3 {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+  }
+}
+:root {
+  color-scheme: dark;
+}
+html,
+body {
+  height: 100%;
+}
+body {
+  background: var(--color-base);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+* {
+  border-color: var(--color-line);
+}
+::selection {
+  background: var(--color-accent-soft);
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-line-strong);
+  border-radius: 5px;
+  border: 2px solid var(--color-base);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #3d4655;
+}
+.panel {
+  background: var(--color-surface);
+  border: 1px solid var(--color-line);
+  border-radius: 8px;
+}
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.625rem 0.875rem;
+  border-bottom: 1px solid var(--color-line);
+}
+.panel-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-ink-muted);
+}
+.mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+  padding: 0.375rem 0.75rem;
+  border-radius: 6px;
+  border: 1px solid var(--color-line-strong);
+  background: var(--color-surface-raised);
+  color: var(--color-ink);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 120ms ease, border-color 120ms ease, opacity 120ms ease;
+}
+.btn:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+  border-color: #3d4655;
+}
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.btn:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+.btn-primary {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: #04101f;
+  font-weight: 600;
+}
+.btn-primary:hover:not(:disabled) {
+  background: #62a8ff;
+  border-color: #62a8ff;
+}
+.btn-approve {
+  background: var(--color-pass);
+  border-color: var(--color-pass);
+  color: #04120a;
+  font-weight: 600;
+}
+.btn-approve:hover:not(:disabled) {
+  background: #4fc95f;
+  border-color: #4fc95f;
+}
+.btn-danger {
+  color: var(--color-fail);
+  border-color: #5a2226;
+}
+.btn-danger:hover:not(:disabled) {
+  background: var(--color-fail-soft);
+  border-color: #7a2f34;
+}
+.btn-ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--color-ink-muted);
+}
+.btn-ghost:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+  color: var(--color-ink);
+}
+.btn-sm {
+  padding: 0.25rem 0.5rem;
+  font-size: 11.5px;
+}
+.input,
+.textarea,
+.select {
+  width: 100%;
+  background: var(--color-base);
+  border: 1px solid var(--color-line-strong);
+  border-radius: 6px;
+  padding: 0.4375rem 0.625rem;
+  color: var(--color-ink);
+  font-size: 13px;
+  font-family: inherit;
+}
+.input:focus,
+.textarea:focus,
+.select:focus {
+  outline: none;
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px rgb(76 154 255 / 0.14);
+}
+.input::placeholder,
+.textarea::placeholder {
+  color: var(--color-ink-faint);
+}
+.input-mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.textarea {
+  resize: vertical;
+  line-height: 1.6;
+}
+.label {
+  display: block;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--color-ink-muted);
+  margin-bottom: 0.3125rem;
+}
+.hint {
+  font-size: 11.5px;
+  color: var(--color-ink-faint);
+  margin-top: 0.3125rem;
+  line-height: 1.5;
+}
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3125rem;
+  padding: 0.125rem 0.4375rem;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.badge-pass {
+  background: var(--color-pass-soft);
+  color: var(--color-pass);
+  border-color: #1d4d28;
+}
+.badge-fail {
+  background: var(--color-fail-soft);
+  color: var(--color-fail);
+  border-color: #5f2429;
+}
+.badge-warn {
+  background: var(--color-warn-soft);
+  color: var(--color-warn);
+  border-color: #57420f;
+}
+.badge-running {
+  background: var(--color-running-soft);
+  color: var(--color-running);
+  border-color: #1f4a7d;
+}
+.badge-idle {
+  background: var(--color-idle-soft);
+  color: var(--color-ink-faint);
+  border-color: var(--color-line);
+}
+.badge-accent {
+  background: var(--color-accent-soft);
+  color: #8fc0ff;
+  border-color: #2a4d7d;
+}
+.pulse-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: pulse 1.6s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+.progress-active {
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgb(255 255 255 / 0.45) 50%,
+    transparent 100%
+  );
+  background-size: 220% 100%;
+  animation: progress-sweep 1.5s linear infinite;
+}
+@keyframes progress-sweep {
+  from {
+    background-position: 220% 0;
+  }
+  to {
+    background-position: -220% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pulse-dot {
+    animation: none;
+  }
+  .progress-active {
+    animation: none;
+    background-image: none;
+  }
+  .btn {
+    transition: none;
+  }
+}
+.diff {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-x: auto;
+  tab-size: 2;
+}
+.diff-line {
+  display: block;
+  padding: 0 0.75rem;
+  white-space: pre;
+  min-height: 1.15rem;
+}
+.diff-add {
+  background: rgb(63 185 80 / 0.13);
+  color: #7ee787;
+}
+.diff-del {
+  background: rgb(248 81 73 / 0.12);
+  color: #ffa198;
+}
+.diff-hunk {
+  background: var(--color-accent-soft);
+  color: #8fc0ff;
+}
+.diff-meta {
+  color: var(--color-ink-faint);
+}
+.diff-file {
+  background: var(--color-surface-raised);
+  color: var(--color-ink);
+  font-weight: 600;
+  border-top: 1px solid var(--color-line);
+  border-bottom: 1px solid var(--color-line);
+}
+.log {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--color-ink-muted);
+}
+.tab {
+  padding: 0.4375rem 0.75rem;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--color-ink-muted);
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  background: none;
+  border-left: none;
+  border-right: none;
+  border-top: none;
+}
+.tab:hover {
+  color: var(--color-ink);
+}
+.tab-active {
+  color: var(--color-ink);
+  border-bottom-color: var(--color-accent);
+}
+.nav-link {
+  display: block;
+  padding: 0.375rem 0.625rem;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--color-ink-muted);
+}
+.nav-link:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-ink);
+}
+.nav-link-active {
+  background: var(--color-surface-raised);
+  color: var(--color-ink);
+  font-weight: 500;
+}
+.prose-spec {
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--color-ink);
+}
+.prose-spec h1,
+.prose-spec h2,
+.prose-spec h3 {
+  font-weight: 600;
+  margin: 1rem 0 0.375rem;
+  color: var(--color-ink);
+}
+.prose-spec h1 {
+  font-size: 15px;
+}
+.prose-spec h2 {
+  font-size: 13.5px;
+  color: var(--color-ink-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 11px;
+}
+.prose-spec h3 {
+  font-size: 13px;
+}
+.prose-spec > :first-child {
+  margin-top: 0;
+}
+.prose-spec ul {
+  list-style: disc;
+  padding-left: 1.125rem;
+  margin: 0.375rem 0;
+}
+.prose-spec li {
+  margin: 0.1875rem 0;
+}
+.prose-spec p {
+  margin: 0.5rem 0;
+}
+.prose-spec code {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  background: var(--color-surface-raised);
+  padding: 0.0625rem 0.25rem;
+  border-radius: 3px;
+}
+.prose-spec table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.5rem 0;
+  font-size: 12px;
+}
+.prose-spec th,
+.prose-spec td {
+  border: 1px solid var(--color-line);
+  padding: 0.25rem 0.5rem;
+  text-align: left;
+}
+.prose-spec th {
+  background: var(--color-surface-raised);
+  font-weight: 600;
+}
+.prose-spec hr {
+  border: none;
+  border-top: 1px solid var(--color-line);
+  margin: 0.875rem 0;
+}
+.prose-spec strong {
+  font-weight: 600;
+}
+.truncate-path {
+  direction: rtl;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.empty-state {
+  padding: 2.5rem 1rem;
+  text-align: center;
+  color: var(--color-ink-faint);
+  font-size: 13px;
+}
+@property --tw-space-y-reverse {
+  syntax: "*";
+  inherits: false;
+  initial-value: 0;
+}
+@property --tw-border-style {
+  syntax: "*";
+  inherits: false;
+  initial-value: solid;
+}
+@property --tw-font-weight {
+  syntax: "*";
+  inherits: false;
+}
+@keyframes pulse {
+  50% {
+    opacity: 0.5;
+  }
+}
+@layer properties {
+  @supports ((-webkit-hyphens: none) and (not (margin-trim: inline))) or ((-moz-orient: inline) and (not (color:rgb(from red r g b)))) {
+    *, ::before, ::after, ::backdrop {
+      --tw-space-y-reverse: 0;
+      --tw-border-style: solid;
+      --tw-font-weight: initial;
+    }
+  }
+}
+
+
+/* Messenger concept. Existing application palette and setup form styles are retained. */
+*{box-sizing:border-box}body{margin:0;height:100dvh;display:flex;flex-direction:column;overflow:hidden;background:#0e1118;color:#e6edf8;font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}button,input,textarea,select{font:inherit}button{cursor:pointer}button:focus-visible,input:focus-visible,textarea:focus-visible,summary:focus-visible{outline:2px solid #64a7ff;outline-offset:3px}[hidden]{display:none!important}input[type=checkbox]{accent-color:#64a7ff}.preview-bar{flex:none;min-height:43px;background:#182135;border-bottom:1px solid #2a3853;display:flex;align-items:center;justify-content:space-between;padding:8px 20px;gap:12px;font-size:11px;color:#9cacc7}.preview-bar strong{color:#d0e1ff;font-weight:600}.preview-bar .preview-note{margin-left:10px}.preview-actions{display:flex;align-items:center;gap:12px}.preview-actions button{background:none;border:0;padding:0;color:#b8cff3;font-size:11px}.messenger{display:grid;grid-template-columns:264px minmax(0,1fr) 290px;flex:1;min-height:0}.thread-sidebar{background:#121721;border-right:1px solid #252e3d;padding:22px 13px;overflow:auto;display:flex;flex-direction:column;gap:23px}.brand{display:flex;align-items:center;gap:10px;padding:0 8px;font-size:16px;font-weight:650;letter-spacing:-.4px}.brand-mark{display:grid;place-items:center;width:29px;height:29px;background:#3585f9;border-radius:9px;color:white;font-size:14px}.workspace-name{color:#7f90aa;font-size:11px;font-weight:400;letter-spacing:0;margin-top:3px}.section-label{display:flex;justify-content:space-between;padding:0 10px;color:#74859e;font-size:10px;font-weight:650;letter-spacing:1.3px;margin-bottom:11px}.thread-row{display:flex;gap:10px;align-items:center;width:100%;text-align:left;border:1px solid #2b4c7b;background:#1b2e4b;border-radius:11px;padding:13px 10px;color:#e6edf8}.group-icon{width:37px;height:37px;flex:none;display:grid;place-items:center;border-radius:12px;background:#2a4b76;color:#9ac7ff;font-size:22px}.thread-row strong{display:block;font-size:12px;font-weight:600}.thread-row small{display:block;color:#94a9c7;font-size:10px;margin-top:4px}.thread-mark{margin-left:auto;width:7px;height:7px;border-radius:50%;background:#72afff}.search{display:flex;align-items:center;gap:8px;padding:9px 11px;border:1px solid #293344;border-radius:9px;background:#0e131c;margin-bottom:12px;color:#7284a0}.search input{width:100%;min-width:0;background:none;color:#dbe6f7;border:0;outline:none;font-size:11px}.search input::placeholder{color:#7284a0}.member-row{display:flex;align-items:center;gap:10px;width:100%;background:none;border:1px solid transparent;border-radius:10px;padding:9px;color:#d9e4f4;text-align:left;margin:2px 0}.member-row:hover,.member-row[aria-pressed=true]{background:#1b2433;border-color:#2c3a50}.member-row strong{display:block;font-size:12px;font-weight:550}.member-row small{display:block;font-size:10px;color:#7c8da7;margin-top:2px}.avatar{--role:#60a5fa;position:relative;display:grid;place-items:center;width:34px;height:34px;border-radius:12px;flex:none;background:color-mix(in srgb,var(--role) 15%,#131b28);border:1px solid color-mix(in srgb,var(--role) 30%,#243044);color:var(--role);font-size:10px;font-weight:700;letter-spacing:.3px}.avatar.small{width:27px;height:27px;font-size:8px;border-radius:9px}.member-dot{margin-left:auto;width:6px;height:6px;flex:none;border-radius:50%;background:#4d6b60}.member-dot.working{background:#f472b6;box-shadow:0 0 0 4px #f472b610}.sidebar-bottom{margin-top:auto;padding:12px 9px 0;border-top:1px solid #252e3d}.sidebar-bottom button{width:100%;text-align:left;border:0;background:none;color:#9fb3d0;font-size:12px;padding:7px 0}.sidebar-bottom p{font-size:10px;color:#667a96;margin:6px 0 0}.chat{min-width:0;min-height:0;display:flex;flex-direction:column;background:#0e131d}.chat-header{flex:none;padding:19px 24px 14px;border-bottom:1px solid #252e3d;background:#121925}.chat-top{display:flex;align-items:center;justify-content:space-between;gap:14px}.chat-title{display:flex;gap:12px;align-items:center;min-width:0}.chat-title h1{font-size:16px;font-weight:650;letter-spacing:-.3px;margin:0}.chat-subtitle{margin-top:4px;color:#8599b5;font-size:11px}.chat-subtitle b{font-weight:500;color:#e199c1}.header-buttons{display:flex;gap:7px}.icon-button{display:grid;place-items:center;width:32px;height:32px;border:1px solid #2c384d;background:#182132;border-radius:10px;color:#9cb6d7;font-size:16px}.header-bottom{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:16px}.avatar-stack{display:flex;align-items:center;padding-left:3px}.avatar-stack .avatar{margin-left:-3px;box-shadow:0 0 0 3px #121925}.avatar-stack-label{margin-left:10px;color:#7f93af;font-size:10px}.header-links{display:flex;align-items:center;gap:7px}.header-links button{font-size:10px;background:#182333;color:#9db8dc;border:1px solid #2b3b51;border-radius:7px;padding:5px 9px}.header-links .checks-link{color:#74cba7;background:#142a24;border-color:#294b3d}.chat-scroll{flex:1;min-height:0;overflow:auto;padding:22px 30px 10px;scroll-behavior:smooth}.day-marker{display:flex;align-items:center;gap:13px;color:#62758f;font-size:10px;margin:3px 0 24px;text-align:center}.day-marker:before,.day-marker:after{content:"";height:1px;background:#222c3c;flex:1}.message{display:flex;align-items:flex-start;gap:11px;margin-bottom:24px}.message>.avatar{margin-top:24px}.message-body{min-width:0;width:min(100%,630px)}.sender{display:flex;align-items:center;gap:10px;font-size:11px;color:#d5e1f3;margin:0 0 7px 2px}.sender strong{font-weight:600}.sender time{font-size:9px;color:#617691}.bubble{background:#182130;border:1px solid #2a3548;border-radius:4px 16px 16px 16px;padding:13px 15px}.caption{font-size:12px;line-height:1.6;margin:0 0 11px;color:#cedbef}.outgoing{justify-content:flex-end;margin-bottom:29px}.outgoing .message-body{width:auto;max-width:min(85%,480px)}.outgoing .sender{justify-content:flex-end}.outgoing .bubble{background:#235b9c;border-color:#326fb4;border-radius:16px 4px 16px 16px;color:white}.outgoing .caption{color:#edf5ff;margin-bottom:4px}.outgoing-note{font-size:10px;color:#a9cdf8}.delivery{text-align:right;color:#617c9f;font-size:9px;margin-top:6px}.visual-card{background:#111925;border:1px solid #2c3a4e;border-radius:10px;overflow:hidden}.visual-card svg{display:block;width:100%;height:auto}.visual-head{display:flex;justify-content:space-between;align-items:center;padding:9px 12px;border-bottom:1px solid #233146;color:#7f95b4;font-size:9px;font-weight:650;letter-spacing:1px}.expand-visual{background:none;border:none;color:#6883a6;font-size:16px;line-height:1;padding:0 2px}.expand-visual:hover{color:#d5e6ff}.visual-footer{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 11px;border-top:1px solid #233146;color:#647b9b;font-size:9px}.micro-pill{border-radius:5px;padding:3px 6px;background:#202c41;color:#9bb6dc;font-size:9px;white-space:nowrap}.micro-pill.purple{background:#2b2344;color:#b9a3ef}.micro-pill.blue{background:#1b3150;color:#8cbafa}.micro-pill.green{background:#153027;color:#79d5ad}.micro-pill.amber{background:#332a18;color:#dfbd69}.micro-pill.pink{background:#362338;color:#e7a1cc}.evidence-details{margin-top:10px;font-size:10px;color:#6781a4}.evidence-details summary{cursor:pointer;width:fit-content;list-style:none}.evidence-details summary:before{content:"＋";margin-right:5px}.evidence-details[open] summary:before{content:"−"}.evidence-details p{font-size:11px;color:#90a4c0;line-height:1.65;margin:9px 0 1px;border-top:1px solid #2a3548;padding-top:9px}.file-map{padding:13px 13px 10px}.file-node{display:flex;align-items:center;gap:10px;padding:10px;background:#182437;border:1px solid #2c3e58;border-radius:9px}.file-icon{display:grid;place-items:center;flex:none;width:29px;height:29px;background:#213856;color:#82b0f1;border-radius:7px;font-family:monospace;font-size:12px}.file-node strong{display:block;font-size:11px;font-family:ui-monospace,Consolas,monospace;font-weight:500;color:#c4d8f4}.file-node small{display:block;color:#7f98b9;font-size:9px;margin-top:3px}.delta{margin-left:auto;font-size:10px;color:#68c99d}.map-connector{color:#496384;text-align:center;height:19px;line-height:19px}.code-strip{margin:0 13px 13px;padding:10px;border:1px dashed #2c415f;background:#0e1623;border-radius:7px;overflow:auto}.code-note{display:block;font-size:8px;letter-spacing:1px;color:#4e709b;margin-bottom:5px}.code-strip code{font-size:10px;white-space:nowrap;color:#9bc2ec}.code-purple{color:#ba9ee9}.review-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;padding:17px 13px}.review-grid>div{text-align:center;border:1px solid #273d36;background:#14241f;border-radius:8px;padding:12px 5px}.review-icon{display:grid;place-items:center;margin:0 auto 8px;width:24px;height:24px;border-radius:50%;background:#234c3c;color:#73d2a8;font-size:13px}.review-grid strong{display:block;color:#b6d9ca;font-size:10px;font-weight:500}.review-grid small{display:block;margin-top:5px;color:#6e9384;font-size:8px}.check-board{padding:15px 13px;display:grid;gap:13px}.check-board>div{display:grid;grid-template-columns:76px 1fr 46px;gap:13px;align-items:center;font-size:10px;color:#8ea5c3}.check-board strong{text-align:right;color:#72cda6;font-size:9px;font-weight:500}.check-track{height:5px;background:#1d3440;border-radius:5px;overflow:hidden}.check-track i{display:block;width:100%;height:100%;background:linear-gradient(90deg,#356e63,#58aa89);border-radius:5px}.wireframes{display:flex;align-items:center;justify-content:center;gap:15px;padding:19px 22px 29px}.wireframe{width:43%;max-width:190px;position:relative;border:1px solid #3c435c;border-radius:8px;background:#161d2e}.wire-browser{display:flex;gap:3px;padding:7px;border-bottom:1px solid #303a51;background:#20273b;border-radius:8px 8px 0 0}.wire-browser i{width:4px;height:4px;border-radius:50%;background:#596580}.wire-screen{height:100px;display:flex;padding:9px;gap:9px}.wire-nav{width:20%;border-right:1px solid #303a51;display:grid;align-content:start;gap:9px;padding-top:4px;padding-right:8px}.wire-nav span{height:4px;background:#35425c;border-radius:2px}.wire-content{flex:1;display:grid;align-content:start;gap:8px;padding-top:4px}.wire-content i{height:7px;background:#2c3951;border-radius:2px}.wire-content i:nth-child(2){width:65%;height:4px}.wire-content b{font-weight:400;font-size:8px;color:#d7a0c4;border:1px solid #6d4067;border-radius:4px;text-align:center;padding:5px 0;margin-top:7px;width:75%}.wire-arrow{color:#6e6688;font-size:20px}.wire-label{position:absolute;bottom:-20px;font-size:8px;color:#8a84a0;white-space:nowrap;left:50%;transform:translateX(-50%)}.wire-screen.signed-out{flex-direction:column;align-items:center;justify-content:center;gap:5px}.wire-lock{color:#ca8fbd;font-size:17px;line-height:1}.wire-input{width:67%;height:7px;border:1px solid #3d425e;border-radius:2px}.wire-input.short{width:67%}.signed-out b{font-size:7px;font-weight:400;background:#543c5b;border:1px solid #805e86;color:#e8c7e9;padding:3px 18px;border-radius:3px}.composer{flex:none;padding:12px 24px 15px;background:#111925;border-top:1px solid #273246}.composer-box{display:flex;align-items:flex-end;gap:12px;background:#1b2638;border:1px solid #344762;border-radius:14px;padding:11px 12px 11px 15px}.composer textarea{resize:none;width:100%;min-height:26px;max-height:96px;background:none;border:0;color:#d6e5f9;outline:none;font-size:12px;line-height:1.7;padding:0;box-shadow:none}.composer textarea::placeholder{color:#6e87a9}.send-button{flex:none;width:31px;height:31px;border-radius:10px;border:0;background:#398df5;color:white;display:grid;place-items:center}.send-button:disabled{background:#233b59;color:#547499;cursor:not-allowed}.send-button svg{width:15px;height:15px}.composer-foot{display:flex;justify-content:space-between;gap:10px;font-size:9px;color:#617997;margin-top:8px;padding:0 3px}.detail-panel{background:#121923;border-left:1px solid #273246;padding:21px 19px;overflow:auto}.detail-title{display:flex;justify-content:space-between;align-items:center;font-size:12px;font-weight:600;color:#c6d6ed;margin-bottom:19px}.detail-group{margin:0 0 24px}.detail-group h2{font-size:9px;color:#6d84a4;letter-spacing:1.2px;font-weight:650;margin:0 0 12px}.task-title{font-size:14px;color:#dae7fa;line-height:1.5;margin:0 0 9px}.detail-copy{font-size:11px;line-height:1.65;color:#8399b6;margin:0}.review-state{display:flex;gap:7px;align-items:center;color:#d2a1c0;font-size:10px;margin-top:12px}.review-state i{width:6px;height:6px;background:#e395c2;border-radius:50%}.mini-progress{display:flex;gap:4px;margin:15px 0 7px}.mini-progress span{height:4px;flex:1;background:#28354a;border-radius:4px}.mini-progress .done{background:#467f70}.mini-progress .current{background:#7f5e93}.progress-labels{display:flex;justify-content:space-between;color:#697f9e;font-size:8px}.detail-member{display:flex;align-items:center;gap:9px;padding:8px 0}.detail-member strong{display:block;font-size:10px;font-weight:500;color:#b6cbe8}.detail-member small{display:block;font-size:8px;color:#657c9d;margin-top:3px}.tiny-status{margin-left:auto;color:#5d8976;font-size:8px}.tiny-status.working-text{color:#d394bb}.evidence-link{display:flex;align-items:center;gap:10px;width:100%;background:#172233;border:1px solid #2c3a50;border-radius:8px;padding:10px;color:#9db8db;font-size:10px;margin:7px 0;text-align:left}.evidence-link span:last-child{margin-left:auto;color:#58779e}.detail-note{padding:10px;border:1px dashed #30415b;border-radius:8px;font-size:10px;line-height:1.65;color:#7990b0}.filter-banner{flex:none;display:flex;align-items:center;justify-content:space-between;background:#1d2a40;border-bottom:1px solid #344765;padding:9px 24px;color:#a6bfdf;font-size:11px}.filter-banner button{background:none;border:0;color:#8cbcff;font-size:10px}.toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);max-width:min(90vw,600px);padding:12px 18px;border-radius:10px;border:1px solid #345988;background:#1c3555;color:#dfeeff;box-shadow:0 8px 30px #0008;font-size:12px;z-index:50}dialog{margin:auto;overflow:auto;background:#121923;color:#e6edf8;border:1px solid #34435b;border-radius:16px;padding:0;width:min(1040px,94vw);max-height:90dvh}dialog::backdrop{background:#040912b8;backdrop-filter:blur(4px)}.modal-head{display:flex;justify-content:space-between;align-items:center;padding:15px 22px;border-bottom:1px solid #29374d;position:sticky;top:0;background:#121923;z-index:1;font-size:13px;font-weight:600}.modal-content{padding:22px}.setup-wrap{padding:22px;max-width:1024px;margin:auto}.setup-wrap h1{font-size:19px;font-weight:600;margin:4px 0}.crumbs{font-size:10px;color:#687e9d}.setup-intro{font-size:12px;color:#8ca2be;line-height:1.7;margin:5px 0 20px}.preview-apply{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:15px}.preview-apply p{font-size:11px;color:#6e86a7}.sample-notice{padding:12px;margin-top:14px;background:#1b2638;border:1px solid #344762;border-radius:8px;font-size:12px;color:#91a8c7}.evidence-modal h2{font-size:14px;margin:0 0 14px}.evidence-modal p{font-size:12px;color:#92a8c5;line-height:1.7}.sample-table{width:100%;border-collapse:collapse;font-size:11px}.sample-table th,.sample-table td{text-align:left;padding:12px;border-bottom:1px solid #2b394f}.sample-table th{color:#7289ab;font-weight:500}.sample-table td{color:#b1c7e5}.pass{color:#75cca7!important}.visual-large .visual-card{max-width:900px;margin:auto}.visual-large .visual-card svg{min-height:230px}.visual-large .visual-head{font-size:12px}.visual-large .caption{font-size:14px}.modal-disclaimer{font-size:10px;color:#6c84a6;margin:15px 0 0}.details-hidden .messenger{grid-template-columns:264px minmax(0,1fr)}.details-hidden .detail-panel{display:none}.empty-search{font-size:11px;color:#6f86a8;padding:10px}.visually-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}.system-event{font-size:10px;text-align:center;color:#6e86a7;margin:2px 0 20px}
+@media(min-width:1700px){.messenger{grid-template-columns:290px minmax(0,1fr) 320px}.details-hidden .messenger{grid-template-columns:290px minmax(0,1fr)}}
+@media(max-width:1150px){.messenger{grid-template-columns:230px minmax(0,1fr)}.detail-panel{display:none}.details-hidden .messenger{grid-template-columns:230px minmax(0,1fr)}body.details-open .detail-panel{display:block;position:fixed;z-index:5;right:0;top:43px;bottom:0;width:290px;box-shadow:-20px 0 40px #0007}.chat-scroll{padding:20px}.chat-header{padding:17px 20px 14px}}
+@media(max-width:760px){.messenger,.details-hidden .messenger{grid-template-columns:70px minmax(0,1fr)}.thread-sidebar{padding:18px 7px;gap:20px;align-items:center}.brand{padding:0}.brand-copy,.section-label,.thread-row,.member-row>span:not(.avatar),.search,.sidebar-bottom p{display:none}.thread-sidebar>section{width:100%}.member-row{justify-content:center;padding:8px 0}.sidebar-bottom{padding:10px 0 0}.sidebar-bottom button{font-size:9px;text-align:center}.chat-title h1{font-size:14px}.group-icon{width:32px;height:32px;font-size:18px;border-radius:10px}.chat-header{padding:15px}.header-bottom{align-items:flex-start;gap:10px;flex-direction:column}.avatar-stack-label{font-size:9px}.header-links button{font-size:9px}.chat-scroll{padding:17px 13px}.message{gap:8px;margin-bottom:20px}.message>.avatar{width:28px;height:28px;border-radius:10px;font-size:8px}.bubble{padding:11px}.caption{font-size:11px}.visual-footer{font-size:8px;padding:8px;gap:5px;flex-wrap:wrap}.micro-pill{font-size:8px}.review-grid{gap:5px;padding:12px 8px}.review-grid small{font-size:7px}.review-grid strong{font-size:9px}.composer{padding:10px 13px 12px}.composer-foot{font-size:8px}.preview-note{display:none}.preview-bar{padding:9px 12px;font-size:10px}.preview-actions{gap:10px}.preview-actions button{font-size:10px}.setup-wrap{padding:15px}.preview-apply{align-items:flex-start;flex-direction:column}.file-node strong{font-size:10px}.code-strip code{font-size:9px}.wireframes{padding:16px 12px 29px;gap:8px}.wire-screen{height:83px}.outgoing .message-body{max-width:92%}}
+@media(prefers-reduced-motion:reduce){.chat-scroll{scroll-behavior:auto}}
+</style></head><body>
+<div class="preview-bar"><div><strong>Messenger-style concept</strong><span class="preview-note">Offline preview · fictional activity · no agents running</span></div><div class="preview-actions"><button data-open="setup-modal">Team setup</button><button id="reset-preview">Reset</button></div></div>
+<div class="messenger"><aside class="thread-sidebar" aria-label="Conversations and teammates"><div class="brand"><span class="brand-mark">D</span><div class="brand-copy">Dev Cockpit<div class="workspace-name">Example project</div></div></div><section><div class="section-label">CONVERSATIONS <span>1</span></div><button class="thread-row" id="show-team"><span class="group-icon">⌘</span><span><strong>Logout session race</strong><small>UX QA shared a flow sketch</small></span><span class="thread-mark"></span></button></section><section><div class="section-label">TEAM <span>6</span></div><label class="search"><span aria-hidden="true">⌕</span><input id="member-search" placeholder="Find a teammate…" aria-label="Find a teammate"></label><div id="member-list"><button class="member-row" data-filter="lead" aria-pressed="false"><span class="avatar" style="--role:#a78bfa" aria-hidden="true">TL</span><span><strong>Tech lead</strong><small>Approach & handoffs</small></span><span class="member-dot" title="Finished handoff"></span></button><button class="member-row" data-filter="engineer" aria-pressed="false"><span class="avatar" style="--role:#60a5fa" aria-hidden="true">EN</span><span><strong>Engineer</strong><small>Implementation</small></span><span class="member-dot" title="Finished handoff"></span></button><button class="member-row" data-filter="reviewer" aria-pressed="false"><span class="avatar" style="--role:#2dd4bf" aria-hidden="true">RV</span><span><strong>Reviewer</strong><small>Code & architecture</small></span><span class="member-dot" title="0 findings"></span></button><button class="member-row" data-filter="functional-qa" aria-pressed="false"><span class="avatar" style="--role:#fbbf24" aria-hidden="true">FQ</span><span><strong>Functional QA</strong><small>Behavior & edge cases</small></span><span class="member-dot" title="0 findings"></span></button><button class="member-row" data-filter="regression-qa" aria-pressed="false"><span class="avatar" style="--role:#fb923c" aria-hidden="true">RQ</span><span><strong>Regression QA</strong><small>Checks & compatibility</small></span><span class="member-dot" title="0 findings"></span></button><button class="member-row" data-filter="ux-qa" aria-pressed="false"><span class="avatar" style="--role:#f472b6" aria-hidden="true">UX</span><span><strong>UX QA</strong><small>Flows & accessibility</small></span><span class="member-dot working" title="Assessing evidence"></span></button></div><p id="empty-search" class="empty-search" hidden>No matching teammate.</p></section><div class="sidebar-bottom"><button data-open="setup-modal">⚙ &nbsp; Team setup</button><p>Choose a teammate to focus their updates. This remains one shared team room.</p></div></aside>
+<main class="chat"><header class="chat-header"><div class="chat-top"><div class="chat-title"><span class="group-icon">⌘</span><div><h1>Logout session race</h1><div class="chat-subtitle">Engineering team · <b>UX QA assessing</b></div></div></div><div class="header-buttons"><button class="icon-button" id="toggle-details" title="Toggle team details" aria-label="Toggle team details" aria-expanded="true">ⓘ</button></div></div><div class="header-bottom"><div class="avatar-stack"><span class="avatar small" style="--role:#a78bfa" aria-hidden="true">TL</span><span class="avatar small" style="--role:#60a5fa" aria-hidden="true">EN</span><span class="avatar small" style="--role:#2dd4bf" aria-hidden="true">RV</span><span class="avatar small" style="--role:#fbbf24" aria-hidden="true">FQ</span><span class="avatar small" style="--role:#fb923c" aria-hidden="true">RQ</span><span class="avatar small" style="--role:#f472b6" aria-hidden="true">UX</span><span class="avatar-stack-label">6 teammates · shared context</span></div><div class="header-links"><button data-evidence="diff">⌘ &nbsp; Code diff</button><button class="checks-link" data-evidence="checks">✓ &nbsp; 4 checks passed</button></div></div></header><div id="filter-banner" class="filter-banner" hidden><span id="filter-label"></span><button id="clear-filter">Show all updates</button></div><div id="conversation" class="chat-scroll" role="log" aria-label="Visual engineering team conversation" aria-live="polite" aria-relevant="additions"><div class="day-marker"><span>Today · sample conversation</span></div><article class="message outgoing" data-role="user"><div class="message-body"><div class="sender"><strong>You</strong><time>10:40</time></div><div class="bubble"><p class="caption">Fix the logout race. A late refresh response must not sign the user back in.</p><span class="outgoing-note">Keep normal refresh working.</span></div><div class="delivery">Added to team context ✓</div></div></article><article class="message incoming" data-role="lead"><span class="avatar" style="--role:#a78bfa" aria-hidden="true">TL</span><div class="message-body"><div class="sender"><strong>Tech lead</strong><time>10:40</time></div><div class="bubble"><p class="caption">Here’s the approach. Engineer, start with the refresh callback.</p><div class="visual-card" id="visual-lead"><div class="visual-head"><span>APPROACH</span><button class="expand-visual" data-visual="visual-lead" aria-label="Expand approach diagram" title="Expand visual">↗</button></div><svg viewBox="0 0 580 154" role="img" aria-label="Plan: inspect the refresh race, add a stale-response guard, verify the logout scenario, then review"><defs><marker id="arrow-plan" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0 0L6 3L0 6" fill="#66758e"/></marker></defs><path d="M128 64H155M268 64H295M408 64H435" stroke="#66758e" stroke-width="2" marker-end="url(#arrow-plan)"/><g fill="#1a2233" stroke="#344158"><rect x="14" y="28" width="114" height="73" rx="12"/><rect x="155" y="28" width="113" height="73" rx="12"/><rect x="295" y="28" width="113" height="73" rx="12"/><rect x="435" y="28" width="129" height="73" rx="12"/></g><g text-anchor="middle" font-family="system-ui" font-size="12" fill="#e6edf8"><text x="71" y="57">Inspect race</text><text x="211" y="57">Add guard</text><text x="351" y="57">Verify behavior</text><text x="500" y="57">Review + 3 QAs</text></g><g text-anchor="middle" font-family="system-ui" font-size="10" fill="#93a4bd"><text x="71" y="80">Engineer</text><text x="211" y="80">Engineer</text><text x="351" y="80">Recorded checks</text><text x="500" y="80">Evidence assessments</text></g><path d="M500 103V126H211V104" fill="none" stroke="#a78bfa" stroke-dasharray="4 4"/><text x="353" y="144" fill="#b6a2ea" text-anchor="middle" font-family="system-ui" font-size="10">Blocking finding → repair → recheck · max 2 rounds</text></svg><div class="visual-footer"><span class="micro-pill purple">Lead → Engineer</span><span>One editor. Shared context.</span></div></div><details class="evidence-details"><summary>Evidence &amp; limitations</summary><p>The lead proposes the approach and hands it to the engineer. Only the engineer edits the worktree. Review and QA assess the resulting evidence; high and critical findings can trigger up to two repair rounds.</p></details></div></div></article><article class="message incoming" data-role="engineer"><span class="avatar" style="--role:#60a5fa" aria-hidden="true">EN</span><div class="message-body"><div class="sender"><strong>Engineer</strong><time>10:41</time></div><div class="bubble"><p class="caption">Guard added. The change is focused on two files.</p><div class="visual-card" id="visual-engineer"><div class="visual-head"><span>CHANGE MAP</span><button class="expand-visual" data-visual="visual-engineer" aria-label="Expand file change map" title="Expand visual">↗</button></div><div class="file-map"><div class="file-node"><span class="file-icon">{ }</span><div><strong>session.ts</strong><small>Ignore stale responses</small></div><span class="delta">+3</span></div><div class="map-connector">↕</div><div class="file-node"><span class="file-icon">✓</span><div><strong>session.test.ts</strong><small>Logout during refresh</small></div><span class="delta">+1 case</span></div></div><div class="code-strip"><span class="code-note">NEW GUARD</span><code><span class="code-purple">if</span> (version !== sessionVersion) <span class="code-purple">return</span>;</code></div><div class="visual-footer"><span class="micro-pill blue">2 files</span><span>Preserves normal refresh</span></div></div><details class="evidence-details"><summary>Evidence &amp; limitations</summary><p>Illustrative files: src/auth/session.ts and tests/session.test.ts. The code shown here is fictional sample content, not a patch to Dev Cockpit. Open Code diff for the example.</p></details></div></div></article><article class="message incoming" data-role="reviewer"><span class="avatar" style="--role:#2dd4bf" aria-hidden="true">RV</span><div class="message-body"><div class="sender"><strong>Reviewer</strong><time>10:41</time></div><div class="bubble"><p class="caption">No blocking defect evident in this diff.</p><div class="visual-card" id="visual-reviewer"><div class="visual-head"><span>CODE REVIEW</span><button class="expand-visual" data-visual="visual-reviewer" aria-label="Expand review assessment" title="Expand visual">↗</button></div><div class="review-grid"><div><span class="review-icon">✓</span><strong>Correctness</strong><small>Stale response ignored</small></div><div><span class="review-icon">✓</span><strong>Scope</strong><small>Localized change</small></div><div><span class="review-icon">✓</span><strong>Coverage</strong><small>Race has a test</small></div></div><div class="visual-footer"><span class="micro-pill green">0 blocking findings</span><span>Code assessment</span></div></div><details class="evidence-details"><summary>Evidence &amp; limitations</summary><p>This is a code assessment, not an executed test. The reviewer sees the request, diff, implementation summary, recorded checks, and shared conversation.</p></details></div></div></article><article class="message incoming" data-role="functional-qa"><span class="avatar" style="--role:#fbbf24" aria-hidden="true">FQ</span><div class="message-body"><div class="sender"><strong>Functional QA</strong><time>10:42</time></div><div class="bubble"><p class="caption">The logout race follows the expected path.</p><div class="visual-card" id="visual-functional-qa"><div class="visual-head"><span>BEHAVIOR CHECK</span><button class="expand-visual" data-visual="visual-functional-qa" aria-label="Expand logout scenario diagram" title="Expand visual">↗</button></div><svg viewBox="0 0 580 153" role="img" aria-label="Expected scenario: refresh pending, user logs out, late response is ignored, user stays signed out"><defs><marker id="arrow-flow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0 0L6 3L0 6" fill="#66758e"/></marker></defs><path d="M130 65H155M275 65H300M420 65H445" stroke="#66758e" stroke-width="2" marker-end="url(#arrow-flow)"/><rect x="10" y="34" width="120" height="65" rx="12" fill="#1a2233" stroke="#344158"/><rect x="155" y="34" width="120" height="65" rx="12" fill="#1a2233" stroke="#344158"/><rect x="300" y="34" width="120" height="65" rx="12" fill="#2d2419" stroke="#68512a"/><rect x="445" y="34" width="125" height="65" rx="12" fill="#142b24" stroke="#2d6d54"/><g text-anchor="middle" font-family="system-ui" font-size="12" fill="#e6edf8"><text x="70" y="60">Refresh pending</text><text x="215" y="60">User logs out</text><text x="360" y="60">Late response</text><text x="507" y="60">Still signed out</text></g><g text-anchor="middle" font-family="system-ui" font-size="10"><text x="70" y="81" fill="#93a4bd">Request in flight</text><text x="215" y="81" fill="#93a4bd">Version changes</text><text x="360" y="81" fill="#fbbf24">Ignored by guard</text><text x="507" y="81" fill="#67d6a7">Expected outcome</text></g><text x="290" y="132" fill="#93a4bd" text-anchor="middle" font-family="system-ui" font-size="10">Assessed from the sample diff and test. Browser scenario not exercised.</text></svg><div class="visual-footer"><span class="micro-pill amber">Acceptance criterion covered</span><span>Evidence review</span></div></div><details class="evidence-details"><summary>Evidence &amp; limitations</summary><p>The scenario is assessed from the supplied code and test. No real browser session has been exercised. Normal refresh remains outside the invalidated session version.</p></details></div></div></article><article class="message incoming" data-role="regression-qa"><span class="avatar" style="--role:#fb923c" aria-hidden="true">RQ</span><div class="message-body"><div class="sender"><strong>Regression QA</strong><time>10:42</time></div><div class="bubble"><p class="caption">Recorded checks are green. The race has regression coverage.</p><div class="visual-card" id="visual-regression-qa"><div class="visual-head"><span>RECORDED CHECKS</span><button class="expand-visual" data-visual="visual-regression-qa" aria-label="Expand validation scorecard" title="Expand visual">↗</button></div><div class="check-board"><div><span>Typecheck</span><div class="check-track"><i></i></div><strong>Pass</strong></div><div><span>Lint</span><div class="check-track"><i></i></div><strong>Pass</strong></div><div><span>Unit tests</span><div class="check-track"><i></i></div><strong>28 / 28</strong></div><div><span>Build</span><div class="check-track"><i></i></div><strong>Pass</strong></div></div><div class="visual-footer"><span class="micro-pill green">4 checks · exit 0</span><span>Fictional sample results</span></div></div><details class="evidence-details"><summary>Evidence &amp; limitations</summary><p>These results are fictional sample evidence. QA does not run these commands in this HTML file. In the app, the orchestrator runs configured commands and stores their exit codes and output.</p></details></div></div></article><article class="message incoming" data-role="ux-qa"><span class="avatar" style="--role:#f472b6" aria-hidden="true">UX</span><div class="message-body"><div class="sender"><strong>UX QA</strong><time>10:42</time></div><div class="bubble"><p class="caption">Expected user flow below. Browser confirmation is still needed.</p><div class="visual-card" id="visual-ux-qa"><div class="visual-head"><span>FLOW SKETCH</span><button class="expand-visual" data-visual="visual-ux-qa" aria-label="Expand logout interface sketch" title="Expand visual">↗</button></div><div class="wireframes"><div class="wireframe"><div class="wire-browser"><i></i><i></i><i></i></div><div class="wire-screen"><div class="wire-nav"><span></span><span></span><span></span></div><div class="wire-content"><i></i><i></i><b>Sign out</b></div></div><span class="wire-label">Signed in</span></div><span class="wire-arrow">→</span><div class="wireframe"><div class="wire-browser"><i></i><i></i><i></i></div><div class="wire-screen signed-out"><div class="wire-lock">◇</div><div class="wire-input"></div><div class="wire-input short"></div><b>Sign in</b></div><span class="wire-label">Signed out · stays here</span></div></div><div class="visual-footer"><span class="micro-pill pink">Browser check still needed</span><span>Illustrative wireframe</span></div></div><details class="evidence-details"><summary>Evidence &amp; limitations</summary><p>This is an illustrative wireframe, not a screenshot. Loading states, keyboard behavior, responsive layout, and actual navigation need a browser check. No automated visual verification is implied.</p></details></div></div></article><div class="system-event">UX QA is assessing the supplied evidence · sample state</div><div id="chat-tail"></div></div><form id="message-form" class="composer"><label for="message-input" class="visually-hidden">Message the team</label><div class="composer-box"><textarea id="message-input" rows="1" maxlength="8000" placeholder="Message the team… or point to something in a diagram"></textarea><button type="submit" id="send-message" class="send-button" disabled aria-label="Send direction"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 12h15M13 5l7 7-7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div><div class="composer-foot"><span>Direction is read at the next handoff.</span><span>Enter to send · Shift + Enter for a new line</span></div></form></main>
+<aside class="detail-panel" aria-label="Team details"><div class="detail-title">Team details<button class="icon-button" data-open="setup-modal" title="Configure team" aria-label="Configure team">⚙</button></div><section class="detail-group"><h2>THIS FEATURE</h2><p class="task-title">Keep logout effective.</p><p class="detail-copy">Late refresh responses must not restore a signed-out session.</p><div class="review-state"><i></i>Review &amp; QA in progress</div><div class="mini-progress" aria-label="Implementation complete; review in progress; approval pending"><span class="done"></span><span class="done"></span><span class="done"></span><span class="current"></span><span></span></div><div class="progress-labels"><span>Plan</span><span>Build</span><span>Checks</span><span>Review</span><span>Approve</span></div></section><section class="detail-group"><h2>TEAMMATES</h2><div class="detail-member"><span class="avatar small" style="--role:#a78bfa" aria-hidden="true">TL</span><span><strong>Tech lead</strong><small data-member-config="lead">Claude Code · high</small></span><span class="tiny-status">Done</span></div><div class="detail-member"><span class="avatar small" style="--role:#60a5fa" aria-hidden="true">EN</span><span><strong>Engineer</strong><small data-member-config="engineer">Claude Code · high</small></span><span class="tiny-status">Done</span></div><div class="detail-member"><span class="avatar small" style="--role:#2dd4bf" aria-hidden="true">RV</span><span><strong>Reviewer</strong><small data-member-config="reviewer">Codex CLI · high</small></span><span class="tiny-status">Done</span></div><div class="detail-member"><span class="avatar small" style="--role:#fbbf24" aria-hidden="true">FQ</span><span><strong>Functional QA</strong><small data-member-config="functional-qa">Claude Code · high</small></span><span class="tiny-status">Done</span></div><div class="detail-member"><span class="avatar small" style="--role:#fb923c" aria-hidden="true">RQ</span><span><strong>Regression QA</strong><small data-member-config="regression-qa">Claude Code · high</small></span><span class="tiny-status">Done</span></div><div class="detail-member"><span class="avatar small" style="--role:#f472b6" aria-hidden="true">UX</span><span><strong>UX QA</strong><small data-member-config="ux-qa">Claude Code · high</small></span><span class="tiny-status working-text">Assessing</span></div></section><section class="detail-group"><h2>EVIDENCE</h2><button class="evidence-link" data-evidence="diff"><span>⌘</span>2 changed files<span>↗</span></button><button class="evidence-link" data-evidence="checks"><span>✓</span>4 recorded checks<span>↗</span></button><button class="evidence-link" data-evidence="review"><span>◇</span>Findings &amp; approval<span>↗</span></button></section><div class="detail-note">Diagrams summarize the evidence. Browser and visual checks are still unverified.<br><br>Sample content only. These visuals illustrate the proposed interface.</div></aside></div>
+<dialog id="setup-modal" aria-label="Engineering team configuration"><div class="modal-head"><span>Engineering team</span><button class="icon-button" data-close aria-label="Close team setup">×</button></div><section id="setup-screen"><div class="setup-wrap"><div class="crumbs">Projects &nbsp;/&nbsp; Example project &nbsp;/&nbsp; Settings</div><h1>Configure your engineering team</h1><p class="setup-intro">Six teammates. Separate providers, models, effort, and instructions. Changes stay in this preview.</p><section class="panel"><div class="panel-head flex flex-wrap items-center justify-between gap-2"><h2 class="panel-title">Engineering team</h2><label class="flex cursor-pointer items-center gap-2 text-[12px]"><input type="checkbox" checked=""/>Enable six-role team</label></div><div class="space-y-3 px-3.5 py-3"><p class="text-[12.5px] text-ink-muted">A tech lead, engineer, reviewer and three QA specialists share a live team room. Build runs follow explicit handoffs, with up to two automatic repair rounds for high or critical findings. Ask and Plan use the normal single-agent workflow.</p><p class="text-[12px] text-ink-muted">Each role makes separate model calls using your local CLI login. Blank models use the provider default. The Engineer settings below control implementation. Review and QA assess the diff and recorded checks; browser and visual testing are not automated. High and critical findings block readiness.</p><div class="grid gap-3 lg:grid-cols-2"><fieldset class="min-w-0 rounded border border-line p-3"><legend class="px-1 text-[13px] font-semibold">Tech lead</legend><p class="mb-3 text-[12px] text-ink-muted">Propose an actionable approach, identify risks and acceptance criteria, and hand the work to the engineer. Reconcile feedback from the team.</p><div class="grid gap-2 sm:grid-cols-3"><label class="text-[12px]">Provider<select class="select mt-1"><option value="claude-code" selected="">Claude Code</option><option value="codex-code">Codex CLI</option></select></label><label class="text-[12px]">Model<input class="input mt-1" placeholder="Provider default" maxLength="120" value=""/></label><label class="text-[12px]">Effort<select class="select mt-1"><option>low</option><option>medium</option><option selected="">high</option><option>xhigh</option></select></label></div><label class="mt-3 block text-[12px]">Additional instructions<textarea class="input mt-1 min-h-20" rows="2" maxLength="8000" placeholder="Project-specific focus for this teammate">Sketch the approach as a flowchart. Keep captions to one or two sentences; expand risks separately.</textarea></label></fieldset><fieldset class="min-w-0 rounded border border-line p-3"><legend class="px-1 text-[13px] font-semibold">Engineer</legend><p class="mb-3 text-[12px] text-ink-muted">Implement the agreed approach, address team findings, and report changes and verification evidence.</p><div class="grid gap-2 sm:grid-cols-3"><label class="text-[12px]">Provider<select class="select mt-1"><option value="claude-code" selected="">Claude Code</option><option value="codex-code">Codex CLI</option></select></label><label class="text-[12px]">Model<input class="input mt-1" placeholder="Provider default" maxLength="120" value=""/></label><label class="text-[12px]">Effort<select class="select mt-1"><option>low</option><option>medium</option><option selected="">high</option><option>xhigh</option></select></label></div><label class="mt-3 block text-[12px]">Additional instructions<textarea class="input mt-1 min-h-20" rows="2" maxLength="8000" placeholder="Project-specific focus for this teammate">Draw a file-change map and show a minimal code excerpt. Keep implementation notes brief.</textarea></label></fieldset><fieldset class="min-w-0 rounded border border-line p-3"><legend class="px-1 text-[13px] font-semibold">Reviewer</legend><p class="mb-3 text-[12px] text-ink-muted">Inspect architecture, correctness, security, and maintainability. Challenge unsupported assumptions and cite specific files and lines.</p><div class="grid gap-2 sm:grid-cols-3"><label class="text-[12px]">Provider<select class="select mt-1"><option value="claude-code">Claude Code</option><option value="codex-code" selected="">Codex CLI</option></select></label><label class="text-[12px]">Model<input class="input mt-1" placeholder="Provider default" maxLength="120" value=""/></label><label class="text-[12px]">Effort<select class="select mt-1"><option>low</option><option>medium</option><option selected="">high</option><option>xhigh</option></select></label></div><label class="mt-3 block text-[12px]">Additional instructions<textarea class="input mt-1 min-h-20" rows="2" maxLength="8000" placeholder="Project-specific focus for this teammate">Present a compact review card or annotated diagram. Keep detailed findings in expandable evidence.</textarea></label></fieldset><fieldset class="min-w-0 rounded border border-line p-3"><legend class="px-1 text-[13px] font-semibold">Functional QA</legend><p class="mb-3 text-[12px] text-ink-muted">Assess the request and acceptance criteria against the changes. Look for missing behavior and edge cases.</p><div class="grid gap-2 sm:grid-cols-3"><label class="text-[12px]">Provider<select class="select mt-1"><option value="claude-code" selected="">Claude Code</option><option value="codex-code">Codex CLI</option></select></label><label class="text-[12px]">Model<input class="input mt-1" placeholder="Provider default" maxLength="120" value=""/></label><label class="text-[12px]">Effort<select class="select mt-1"><option>low</option><option>medium</option><option selected="">high</option><option>xhigh</option></select></label></div><label class="mt-3 block text-[12px]">Additional instructions<textarea class="input mt-1 min-h-20" rows="2" maxLength="8000" placeholder="Project-specific focus for this teammate">Draw acceptance scenarios and expected outcomes. Clearly mark behavior that has not been verified.</textarea></label></fieldset><fieldset class="min-w-0 rounded border border-line p-3"><legend class="px-1 text-[13px] font-semibold">Regression QA</legend><p class="mb-3 text-[12px] text-ink-muted">Assess compatibility, integrations, regression risks, test coverage, and the recorded validation results.</p><div class="grid gap-2 sm:grid-cols-3"><label class="text-[12px]">Provider<select class="select mt-1"><option value="claude-code" selected="">Claude Code</option><option value="codex-code">Codex CLI</option></select></label><label class="text-[12px]">Model<input class="input mt-1" placeholder="Provider default" maxLength="120" value=""/></label><label class="text-[12px]">Effort<select class="select mt-1"><option>low</option><option>medium</option><option selected="">high</option><option>xhigh</option></select></label></div><label class="mt-3 block text-[12px]">Additional instructions<textarea class="input mt-1 min-h-20" rows="2" maxLength="8000" placeholder="Project-specific focus for this teammate">Show a coverage matrix or check scorecard from recorded results. Clearly label missing evidence.</textarea></label></fieldset><fieldset class="min-w-0 rounded border border-line p-3"><legend class="px-1 text-[13px] font-semibold">UX QA</legend><p class="mb-3 text-[12px] text-ink-muted">Assess user flows, accessibility, loading and error states, and responsive behavior from the supplied code. Clearly identify browser and visual checks that have not been performed. For changes without UI, say this role is not applicable.</p><div class="grid gap-2 sm:grid-cols-3"><label class="text-[12px]">Provider<select class="select mt-1"><option value="claude-code" selected="">Claude Code</option><option value="codex-code">Codex CLI</option></select></label><label class="text-[12px]">Model<input class="input mt-1" placeholder="Provider default" maxLength="120" value=""/></label><label class="text-[12px]">Effort<select class="select mt-1"><option>low</option><option>medium</option><option selected="">high</option><option>xhigh</option></select></label></div><label class="mt-3 block text-[12px]">Additional instructions<textarea class="input mt-1 min-h-20" rows="2" maxLength="8000" placeholder="Project-specific focus for this teammate">Sketch flows and wireframes. Distinguish drawings from screenshots, and mark browser checks not performed.</textarea></label></fieldset></div></div></section><p id="disabled-explanation" class="sample-notice" hidden>Team disabled in this preview. Enable it again to see the six role configurations.</p><div class="preview-apply"><p class="faint" style="font-size:12px">Preview controls only. Your real project settings are untouched.</p><button type="button" class="btn btn-primary" id="apply-preview">Apply to this preview</button></div></div></section></dialog>
+<dialog id="visual-modal" aria-label="Expanded agent visual"><div class="modal-head"><span id="visual-modal-title">Team visual</span><button class="icon-button" data-close aria-label="Close expanded visual">×</button></div><div class="modal-content visual-large" id="visual-content"></div></dialog>
+<dialog id="evidence-modal" aria-label="Sample run evidence"><div class="modal-head"><span id="evidence-title">Evidence</span><button class="icon-button" data-close aria-label="Close evidence">×</button></div><div id="evidence-content" class="modal-content evidence-modal"></div></dialog>
+<template id="diff-template"><h2>2 changed files</h2><p>Illustrative sample code, not a patch to Dev Cockpit.</p><div class="visual-card"><div class="visual-head">src/auth/session.ts</div><pre class="diff"><span class="diff-line diff-add">+ const version = sessionVersion;</span><span class="diff-line">  const next = await fetchSession();</span><span class="diff-line diff-add">+ if (version !== sessionVersion) return;</span><span class="diff-line">  applySession(next);</span><span class="diff-line diff-hunk">  // logout()</span><span class="diff-line diff-add">+ sessionVersion += 1;</span><span class="diff-line">  clearSession();</span></pre></div><div class="visual-card" style="margin-top:12px"><div class="visual-head">tests/session.test.ts</div><pre class="diff"><span class="diff-line diff-add">+ ignores a refresh response received after logout</span></pre></div></template>
+<template id="checks-template"><h2>Recorded validation</h2><table class="sample-table"><thead><tr><th>Check</th><th>Command</th><th>Result</th><th>Exit</th></tr></thead><tbody><tr><td>Typecheck</td><td>npm run typecheck</td><td class="pass">Pass</td><td>0</td></tr><tr><td>Lint</td><td>npm run lint</td><td class="pass">Pass</td><td>0</td></tr><tr><td>Unit</td><td>npm test</td><td class="pass">28 / 28</td><td>0</td></tr><tr><td>Build</td><td>npm run build</td><td class="pass">Pass</td><td>0</td></tr></tbody></table><p>Fictional sample results. QA interprets recorded evidence; this preview executes no tests.</p></template>
+<template id="review-template"><h2>Team review is still in progress</h2><p>The completed reports show no blocking finding. UX QA has not finished its assessment.</p><div class="review-grid"><div><span class="review-icon">✓</span><strong>Reviewer</strong><small>0 findings</small></div><div><span class="review-icon">✓</span><strong>Functional QA</strong><small>0 findings</small></div><div><span class="review-icon">✓</span><strong>Regression QA</strong><small>0 findings</small></div></div><p>High and critical findings block readiness and can trigger up to two repair rounds. Final approval remains yours.</p><button class="btn btn-approve" disabled>Awaiting completed review</button><p class="modal-disclaimer">Preview only. No approval, merge, or agent call is performed.</p></template>
+<div id="preview-toast" class="toast" role="status" hidden></div><noscript><p class="sample-notice">JavaScript is disabled. The conversation is readable, but filtering, expanded visuals, configuration, and local messages require JavaScript.</p></noscript>
+<script>
+(() => {
+  'use strict';
+  const roleData = [["lead", "Tech lead", "TL", "Approach & handoffs", "#a78bfa", "Finished handoff"], ["engineer", "Engineer", "EN", "Implementation", "#60a5fa", "Finished handoff"], ["reviewer", "Reviewer", "RV", "Code & architecture", "#2dd4bf", "0 findings"], ["functional-qa", "Functional QA", "FQ", "Behavior & edge cases", "#fbbf24", "0 findings"], ["regression-qa", "Regression QA", "RQ", "Checks & compatibility", "#fb923c", "0 findings"], ["ux-qa", "UX QA", "UX", "Flows & accessibility", "#f472b6", "Assessing evidence"]];
+  const chat = document.getElementById('conversation');
+  const input = document.getElementById('message-input');
+  const send = document.getElementById('send-message');
+  let filter = null, toastTimer;
+  function notify(text) {
+    const box = document.getElementById('preview-toast'); box.textContent = text; box.hidden = false;
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => { box.hidden = true; }, 5000);
+  }
+  function setFilter(role) {
+    filter = role;
+    document.querySelectorAll('.message[data-role]').forEach(message => { message.hidden = role !== null && message.dataset.role !== role; });
+    document.querySelectorAll('[data-filter]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.filter === role)));
+    document.getElementById('filter-banner').hidden = role === null;
+    document.getElementById('filter-label').textContent = role ? roleData.find(item => item[0] === role)[1] + ' · visual updates' : '';
+    chat.scrollTop = 0;
+  }
+  document.querySelectorAll('[data-filter]').forEach(button => button.addEventListener('click', () => setFilter(filter === button.dataset.filter ? null : button.dataset.filter)));
+  document.getElementById('show-team').addEventListener('click', () => setFilter(null));
+  document.getElementById('clear-filter').addEventListener('click', () => setFilter(null));
+  document.getElementById('member-search').addEventListener('input', event => {
+    const search = event.target.value.toLowerCase().trim(); let found = 0;
+    document.querySelectorAll('.member-row').forEach(button => { button.hidden = !button.textContent.toLowerCase().includes(search); if (!button.hidden) found++; });
+    document.getElementById('empty-search').hidden = found > 0;
+  });
+  document.querySelectorAll('[data-open]').forEach(button => button.addEventListener('click', () => document.getElementById(button.dataset.open).showModal()));
+  document.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', () => button.closest('dialog').close()));
+  document.querySelectorAll('dialog').forEach(dialog => dialog.addEventListener('click', event => { if (event.target === dialog) { const rect = dialog.getBoundingClientRect(); if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) dialog.close(); } }));
+  document.querySelectorAll('.expand-visual').forEach(button => button.addEventListener('click', () => {
+    const source = document.getElementById(button.dataset.visual); const copy = source.cloneNode(true);
+    copy.removeAttribute('id');
+    // Inline SVG markers need unique IDs when cloned into the dialog.
+    const svg = copy.querySelector('svg');
+    if (svg) svg.querySelectorAll('marker').forEach((marker, index) => { const previous = marker.getAttribute('id'); if (previous) { const next = previous + '-zoom-' + index; marker.id = next; svg.querySelectorAll('[marker-end]').forEach(path => { if (path.getAttribute('marker-end') === 'url(#' + previous + ')') path.setAttribute('marker-end', 'url(#' + next + ')'); }); } });
+    copy.querySelectorAll('button').forEach(node => node.remove());
+    document.getElementById('visual-modal-title').textContent = source.closest('.message').querySelector('.sender strong').textContent + ' · visual';
+    document.getElementById('visual-content').replaceChildren(copy);
+    document.getElementById('visual-modal').showModal();
+  }));
+  document.querySelectorAll('[data-evidence]').forEach(button => button.addEventListener('click', () => {
+    const type = button.dataset.evidence;
+    document.getElementById('evidence-title').textContent = { diff: 'Code diff', checks: 'Recorded checks', review: 'Findings & approval' }[type];
+    document.getElementById('evidence-content').replaceChildren(document.getElementById(type + '-template').content.cloneNode(true));
+    document.getElementById('evidence-modal').showModal();
+  }));
+  document.getElementById('toggle-details').addEventListener('click', event => {
+    if (window.matchMedia('(max-width:1150px)').matches) { document.body.classList.toggle('details-open'); event.currentTarget.setAttribute('aria-expanded', String(document.body.classList.contains('details-open'))); }
+    else { document.body.classList.toggle('details-hidden'); event.currentTarget.setAttribute('aria-expanded', String(!document.body.classList.contains('details-hidden'))); }
+  });
+  function resize() { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 96) + 'px'; send.disabled = !input.value.trim(); }
+  input.addEventListener('input', resize);
+  input.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); if (input.value.trim()) document.getElementById('message-form').requestSubmit(); } });
+  document.getElementById('message-form').addEventListener('submit', event => {
+    event.preventDefault(); const text = input.value.trim(); if (!text) return;
+    setFilter(null);
+    const article = document.createElement('article'); article.className = 'message outgoing'; article.dataset.role = 'user';
+    const body = document.createElement('div'); body.className = 'message-body';
+    const sender = document.createElement('div'); sender.className = 'sender';
+    const who = document.createElement('strong'); who.textContent = 'You'; const time = document.createElement('time'); time.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); sender.append(who, time);
+    const bubble = document.createElement('div'); bubble.className = 'bubble'; const textNode = document.createElement('p'); textNode.className = 'caption'; textNode.style.whiteSpace = 'pre-wrap'; textNode.textContent = text; bubble.append(textNode);
+    const delivery = document.createElement('div'); delivery.className = 'delivery'; delivery.textContent = 'Preview only · no agent contacted'; body.append(sender, bubble, delivery); article.append(body); chat.insertBefore(article, document.getElementById('chat-tail'));
+    input.value = ''; resize(); chat.scrollTop = chat.scrollHeight;
+    notify('Added locally to this preview. No message was sent to an agent.');
+  });
+  const setup = document.getElementById('setup-modal');
+  const enabled = setup.querySelector('input[type=checkbox]'); const fields = Array.from(setup.querySelectorAll('fieldset')); const grid = fields[0].parentElement;
+  enabled.addEventListener('change', () => { grid.hidden = !enabled.checked; document.getElementById('disabled-explanation').hidden = enabled.checked; document.getElementById('apply-preview').disabled = !enabled.checked; });
+  fields.forEach(field => field.querySelector('select').addEventListener('change', () => { field.querySelector('input').value = ''; }));
+  document.getElementById('apply-preview').addEventListener('click', () => {
+    fields.forEach((field,index) => { const selects = field.querySelectorAll('select'); const model = field.querySelector('input').value.trim(); const label = (selects[0].value === 'codex-code' ? 'Codex CLI' : 'Claude Code') + (model ? ' · ' + model : '') + ' · ' + selects[1].value; document.querySelector('[data-member-config="' + roleData[index][0] + '"]').textContent = label; });
+    setup.close(); notify('Updated the preview team details only. Your project settings are unchanged.');
+  });
+  document.getElementById('reset-preview').addEventListener('click', () => window.location.reload());
+})();
+</script></body></html>
