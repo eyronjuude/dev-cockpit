@@ -1,5 +1,8 @@
 'use client';
 
+import { TeamEditor } from './team-editor';
+import type { TeamConfig } from '@/domain/team';
+
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 
@@ -116,7 +119,9 @@ export function NewTaskForm({
   const [attachments, setAttachments] = useState<File[]>([]);
   const [mode, setMode] = useState<WorkMode>(DEFAULT_WORK_MODE);
   const [profile, setProfile] = useState<ExecutionProfileName>('standard');
-  const [implementer, setImplementer] = useState(defaultImplementer);
+  const [team, setTeam] = useState<TeamConfig | null>(project.team ?? null);
+  const [soloImplementer, setImplementer] = useState(defaultImplementer);
+  const implementer = team?.members.engineer.provider ?? soloImplementer;
   /**
    * The model chosen for this run, or null to follow the profile.
    *
@@ -167,12 +172,12 @@ export function NewTaskForm({
   // The saved default is a Claude Code setting, matching what the server does
   // with it, so switching implementer does not carry it onto another CLI.
   const projectModel = implementer === CLAUDE_CODE_PROVIDER ? project.agentModel : null;
-  const modelChoice = resolveAgentModel({
+  const modelChoice = team ? { model: team.members.engineer.model, source: 'run' as const } : resolveAgentModel({
     requested: model,
     projectDefault: projectModel,
     recommended: recommendedModel,
   });
-  const effort = resolveAgentEffort(modelChoice.model, selectedProfile.agentEffort);
+  const effort = resolveAgentEffort(modelChoice.model, team?.members.engineer.effort ?? selectedProfile.agentEffort);
   // What "Follow the profile" would land on, which is the project's default
   // when one is set — a recommendation is the weakest of the three.
   const inheritedChoice = resolveAgentModel({
@@ -189,13 +194,14 @@ export function NewTaskForm({
         request,
         mode,
         profile,
+        team,
         agentProvider: implementer,
         // Only when it was chosen here. Omitted, the server applies the same
         // project-then-profile precedence this form previewed.
         model: model?.trim() || undefined,
         transformer,
         reviewer,
-        reviewAutoAddressMinSeverity: reviewer !== 'none' ? autoAddressMinSeverity : undefined,
+        reviewAutoAddressMinSeverity: team ? 'high' : reviewer !== 'none' ? autoAddressMinSeverity : undefined,
         baseRef: baseRef.trim() || undefined,
       });
 
@@ -409,7 +415,7 @@ export function NewTaskForm({
                   {/* The model it suggests, so switching profile does not move
                       the model out from under the user unannounced. */}
                   {suggested ? ` · ${agentModelLabel(suggested)}` : ''}
-                  {readOnly ? '' : ` · reviewer ${option.runReviewer ? 'on' : 'off'}`}
+                  {readOnly ? '' : ` · reviewer ${team || option.runReviewer ? 'on' : 'off'}`}
                 </span>
               </button>
             );
@@ -423,7 +429,9 @@ export function NewTaskForm({
         ) : null}
       </div>
 
-      <div className="panel">
+      <TeamEditor value={team} onChange={setTeam} />
+
+      {!team ? <div className="panel">
         <div className="panel-head">
           <h2 className="panel-title">Model</h2>
           <span className="text-[11px] text-ink-faint">what does the work</span>
@@ -536,6 +544,8 @@ export function NewTaskForm({
         ) : null}
       </div>
 
+      : null}
+
       <div className="panel">
         <div className="panel-head">
           <h2 className="panel-title">What will run</h2>
@@ -628,7 +638,7 @@ export function NewTaskForm({
             )}
           </Row>
           <Row label="Review">
-            {readOnly
+            {team && !readOnly ? 'Reviewer + Functional QA + Regression QA + UX QA. High and critical findings block readiness; up to two automatic repair rounds.' : readOnly
               ? `None — there is no diff to review. You read the ${wording.deliverable}.`
               : reviewer === 'none'
                 ? 'None — findings are optional and off.'
@@ -659,7 +669,7 @@ export function NewTaskForm({
       {showAdvanced ? (
         <div className="panel">
           <div className="space-y-3 px-3.5 py-3">
-            <ProviderSelect
+            {!team ? <ProviderSelect
               id="implementer"
               label="Implementation agent"
               hint="Runs the task in the isolated worktree. If it runs out of provider capacity, the configured fallback is tried."
@@ -672,6 +682,8 @@ export function NewTaskForm({
                 setModel(null);
               }}
             />
+
+            : null}
 
             <ProviderSelect
               id="transformer"
@@ -691,6 +703,7 @@ export function NewTaskForm({
               onChange={setTransformer}
             />
 
+            {!team ? <>
             <ProviderSelect
               id="reviewer"
               label="Independent reviewer"
@@ -737,6 +750,8 @@ export function NewTaskForm({
                   : 'Findings at or above this severity are sent back to the implementer on their own, without waiting for a click. Everything below stays manual. Changeable later from the run screen.'}
               </p>
             </div>
+
+            </> : null}
 
             <div>
               <label className="label" htmlFor="base-ref">

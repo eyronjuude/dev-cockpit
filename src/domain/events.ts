@@ -1,3 +1,4 @@
+import type { TeamActivity } from './team';
 import type { ExpiryTarget } from './expiry';
 import type { RunImpact, SettingChange } from './impact';
 import type { ResolvedWorkMode, WorkMode } from './modes';
@@ -19,6 +20,7 @@ import type {
  * which is why the payloads are structured instead of pre-rendered strings.
  */
 export const EVENT_TYPES = [
+  'team.activity',
   'run.created',
   'run.status_changed',
   'run.mode_selected',
@@ -120,6 +122,7 @@ export type EventLevel = (typeof EVENT_LEVELS)[number];
  * ------------------------------------------------------------------ */
 
 export interface EventPayloads {
+  'team.activity': TeamActivity;
   'run.created': {
     title: string;
     request: string;

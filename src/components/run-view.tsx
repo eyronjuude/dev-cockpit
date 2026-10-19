@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { TeamRoom } from './team-room';
 import { useEffect, useMemo, useState } from 'react';
 
 import type { RunEvent } from '@/domain/events';
@@ -36,6 +37,7 @@ import { useRunStream, type RunSnapshot } from './use-run-stream';
 
 const TABS = [
   'Overview',
+  'Team',
   'Preview',
   'Map',
   'Changes',
@@ -65,7 +67,7 @@ const changeTone = (type: ChangeType): string => TONE_TEXT[CHANGE_TYPE_TONE[type
 export function RunView({ initial }: { initial: RunSnapshot }) {
   const { events, snapshot, connected, refresh } = useRunStream(initial.run.id, initial);
   const { run, readiness, artifacts, live } = snapshot;
-  const [tab, setTab] = useState<Tab>('Overview');
+  const [tab, setTab] = useState<Tab>(initial.run.team ? 'Team' : 'Overview');
 
   const latestAttempt = useMemo(
     () => run.validations.reduce((acc, v) => Math.max(acc, v.attempt), 0),
@@ -286,6 +288,8 @@ export function RunView({ initial }: { initial: RunSnapshot }) {
                 onToggleAllFindings={toggleAllFindingsSelected}
               />
             ) : null}
+
+            {tab === 'Team' ? <TeamRoom runId={run.id} team={run.team ?? null} events={events} active={live.active} connected={connected} readOnly={isReadOnlyMode(effectiveWorkMode(run))} canSend={run.status !== 'LANDED' && run.status !== 'REJECTED'} onEvidence={setTab} /> : null}
 
             {tab === 'Map' ? <MapTab artifacts={mapArtifacts} /> : null}
 

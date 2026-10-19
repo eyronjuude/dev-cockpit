@@ -42,6 +42,7 @@ describe('run lifecycle', () => {
   });
 
   it('allows a change request to re-enter implementation', () => {
+    expect(canTransition('REVIEWING', 'IMPLEMENTING')).toBe(true);
     expect(canTransition('NEEDS_CHANGES', 'IMPLEMENTING')).toBe(true);
     expect(canTransition('READY', 'IMPLEMENTING')).toBe(true);
     expect(canTransition('PAUSED', 'IMPLEMENTING')).toBe(true);

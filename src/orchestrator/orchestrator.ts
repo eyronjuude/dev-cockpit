@@ -1,5 +1,8 @@
 import 'server-only';
 
+import { consultTeammate, engineerTeamContext, planWithTeam, teamActivity } from '@/services/team';
+import { TEAM_LABELS } from '@/domain/team';
+
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -568,6 +571,7 @@ function modelForAgent(
   project: ProjectView,
   profile: ExecutionProfile,
 ): string | null {
+  if (run.team && agentId === run.agentProvider) return run.agentModel;
   return modelForProvider({
     provider: agentId,
     runProvider: run.agentProvider,
@@ -1496,7 +1500,8 @@ async function execute(runId: string, signal: AbortSignal, mode: ExecuteMode): P
     let autoRounds = 0;
     let autoCandidates = autoAddressCandidates(run);
 
-    while (autoCandidates.length > 0 && autoRounds < AUTO_ADDRESS_MAX_ROUNDS) {
+    const maxAutoRounds = run.team ? 2 : AUTO_ADDRESS_MAX_ROUNDS;
+    while (autoCandidates.length > 0 && autoRounds < maxAutoRounds) {
       autoRounds += 1;
       appendEvent({
         runId: run.id,
@@ -2275,11 +2280,15 @@ async function phaseImplement(
     throw new AppError('This run has no worktree. Start it before requesting changes.');
   }
 
+  const teamEnabled = Boolean(run.team && workMode.id === 'build');
   const wording = WORK_MODE_WORDING[workMode.id];
   const modeLabel = WORK_MODE_LABELS[workMode.id];
 
   setStatus(run.id, 'IMPLEMENTING', { started: run.startedAt === null });
   setPhase(run.id, wording.activity);
+  if (teamEnabled && mode.kind !== 'retry') {
+    await planWithTeam(run, mode.kind === 'change_request' ? mode.feedback : null, signal);
+  }
 
   // Resume when a session exists, so a change request or a retry keeps
   // context. A first pass has no session to resume, and a forced restart
@@ -2367,7 +2376,8 @@ async function phaseImplement(
     // The model decides the effort it will accept, not the other way round: a
     // profile's level is clamped to what this model takes rather than the model
     // being swapped back to suit the profile.
-    const effort = resolveAgentEffort(model, profile.agentEffort);
+    const engineerEffort = teamEnabled ? run.team!.members.engineer.effort : profile.agentEffort;
+    const effort = resolveAgentEffort(model, engineerEffort);
     const availability: AgentAvailability = await agent.checkAvailability();
 
     if (!availability.available) {
@@ -2385,7 +2395,7 @@ async function phaseImplement(
       });
     }
 
-    const prompt = promptForAttempt(resumeSessionId);
+    const prompt = promptForAttempt(resumeSessionId) + (teamEnabled && mode.kind !== 'retry' ? engineerTeamContext(run) : '');
     const iteration = createIteration({
       runId: run.id,
       kind: ITERATION_KIND_FOR_MODE[mode.kind],
@@ -2396,7 +2406,7 @@ async function phaseImplement(
       // The resolved settings, not the names they were resolved from. A
       // profile's effort can be edited later; what this iteration ran with
       // cannot.
-      settings: { model, effort: profile.agentEffort, permissionMode },
+      settings: { model, effort: engineerEffort, permissionMode },
     });
 
     appendEvent({
@@ -2415,7 +2425,17 @@ async function phaseImplement(
       },
     });
 
+    if (teamEnabled) teamActivity(run.id, {
+      role: 'engineer', to: 'team', kind: 'started', text: 'Implementing the agreed approach.',
+      provider: agent.id, model, effort: effort.effort,
+    });
+    const teamText = { last: '' };
     const onEvent = (event: AgentStreamEvent) => {
+      if (teamEnabled && event.kind === 'text') teamText.last = event.text;
+      if (teamEnabled && event.kind === 'text') teamActivity(run.id, {
+        role: 'engineer', to: 'team', kind: 'message', text: event.text,
+        provider: agent.id, model, effort: effort.effort,
+      });
       if (event.kind === 'session' && agent.id !== run.agentProvider) return;
       handleAgentEvent(run.id, iteration.id, event);
     };
@@ -2463,6 +2483,16 @@ async function phaseImplement(
     });
 
     addRunCost(run.id, outcome.costUsd);
+    if (teamEnabled) {
+      if (outcome.finalText?.trim() && outcome.finalText.trim() !== teamText.last.trim()) teamActivity(run.id, {
+        role: 'engineer', to: 'team', kind: 'message', text: outcome.finalText,
+      });
+      teamActivity(run.id, {
+        role: 'engineer', to: 'team', kind: outcome.ok ? 'completed' : 'failed',
+        text: outcome.cancelled ? 'Stopped with the run.' : outcome.ok ? 'Handing changes to review and QA.' : outcome.errorMessage ?? 'Implementation failed.',
+        provider: agent.id, model, effort: effort.effort, durationMs: outcome.durationMs ?? undefined, costUsd: outcome.costUsd,
+      });
+    }
 
     const capacityReason =
       outcome.ok || outcome.cancelled ? null : capacityExhaustionReason(outcome.errorMessage);
@@ -2991,6 +3021,9 @@ async function phaseReview(
   signal: AbortSignal,
 ): Promise<RunView> {
   const providers = runProviders(run.id);
+  if (run.team && workMode.id === 'build') {
+    return phaseTeamReview(run, signal);
+  }
 
   // Checked before the provider, so the reason given is the real one: a
   // read-only run has no diff to review whether a reviewer is configured or
@@ -3148,6 +3181,56 @@ async function phaseReview(
     });
   }
 
+  return requireRun(run.id);
+}
+
+async function phaseTeamReview(run: RunView, signal: AbortSignal): Promise<RunView> {
+  signal.throwIfAborted();
+  setStatus(run.id, 'REVIEWING');
+  setPhase(run.id, 'reviewing');
+  const attempt = nextReviewAttempt(run.id);
+  updateRunFields(run.id, { teamReview: null });
+  appendEvent({ runId: run.id, type: 'review.started', message: 'Reviewer and three QA agents are assessing the changes', payload: { provider: 'engineering-team' } });
+  const patch = await readDiffForReview(run);
+  const evidence = {
+    diff: patch.slice(0, 180_000), diffTruncated: patch.length > 180_000,
+    changedFiles: run.changedFiles,
+    validations: latestValidationAttempt(run.id).map((v) => ({
+      label: v.stepLabel || v.stepKey, outcome: v.outcome, exitCode: v.exitCode,
+      command: v.command, output: [v.stdout, v.stderr].filter(Boolean).join('\n').slice(-4_000),
+    })),
+    implementation: latestIteration(run.id)?.finalText?.slice(-24_000) ?? null,
+    limitations: 'Evidence review only. No browser interaction or visual verification has been performed by this team.',
+  };
+  const findings: import('@/reviewers/types').ReviewFinding[] = [];
+  const reports: string[] = [];
+  for (const role of ['reviewer', 'functional-qa', 'regression-qa', 'ux-qa'] as const) {
+    const report = await consultTeammate(run, role, evidence, signal);
+    reports.push(`## ${TEAM_LABELS[role]}\n\n${report.summary}`);
+    findings.push(...report.findings.map((finding) => ({ ...finding, title: `[${TEAM_LABELS[role]}] ${finding.title}` })));
+  }
+  signal.throwIfAborted();
+  // All four reports form one attempt. A clean last QA must not erase another role's findings.
+  const stored = insertFindings(run.id, attempt, 'engineering-team', findings);
+  updateRunFields(run.id, { teamReview: {
+    iterationId: latestIteration(run.id)?.id ?? null,
+    validationAttempt: run.validations.reduce((max, v) => Math.max(max, v.attempt), 0),
+    reviewAttempt: attempt,
+  } });
+  for (const finding of stored) appendEvent({
+    runId: run.id, type: 'review.finding', message: `[${finding.severity}] ${finding.title}`,
+    payload: { findingId: finding.id, severity: finding.severity, title: finding.title, file: finding.file },
+  });
+  await writeTextArtifact({
+    runId: run.id, kind: 'review_report', label: `Engineering team review (attempt ${attempt})`,
+    fileName: path.join('review', `team-attempt-${attempt}.md`), mimeType: 'text/markdown',
+    content: `${reports.join('\n\n')}\n\n${buildReviewReport('Engineering team', null, stored)}`,
+    meta: { provider: 'engineering-team', attempt, findingCount: stored.length },
+  });
+  appendEvent({ runId: run.id, type: 'review.completed', message: `Team review finished: ${stored.length} finding(s)`, payload: {
+    provider: 'engineering-team', findingCount: stored.length,
+    blocking: stored.some((f) => BLOCKING_SEVERITIES.includes(f.severity)),
+  } });
   return requireRun(run.id);
 }
 

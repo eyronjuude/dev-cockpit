@@ -1,3 +1,5 @@
+import type { TeamConfig, TeamReviewStamp } from '@/domain/team';
+
 import { sql } from 'drizzle-orm';
 import { index, integer, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 
@@ -136,6 +138,7 @@ export const projects = sqliteTable(
     aiConfigProvider: text('ai_config_provider'),
 
     /** Agent configuration. */
+    team: text('team', { mode: 'json' }).$type<TeamConfig>(),
     agentModel: text('agent_model'),
     /**
      * The column default is historical and never used: `createProject` always
@@ -437,8 +440,10 @@ export const runs = sqliteTable(
     commitSha: text('commit_sha'),
 
     /* Agent */
+    teamReview: text('team_review', { mode: 'json' }).$type<TeamReviewStamp>(),
     agentProvider: text('agent_provider').notNull().default('claude-code'),
     agentSessionId: text('agent_session_id'),
+    team: text('team', { mode: 'json' }).$type<TeamConfig>(),
     agentModel: text('agent_model'),
 
     /**

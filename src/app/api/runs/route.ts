@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { teamConfigSchema } from '@/domain/team';
 
 import { assertLocalRequest, handle, readJson } from '@/app/api/_lib/handler';
 import {
@@ -43,6 +44,7 @@ const createSchema = z.object({
   model: z.string().trim().max(120).optional(),
   mode: workModeSchema.optional(),
   agentProvider: z.string().trim().max(60).optional(),
+  team: teamConfigSchema.nullable().optional(),
   agentModel: z.string().trim().max(120).nullable().optional(),
   transformer: z.string().max(60).optional(),
   reviewer: z.string().max(60).optional(),
@@ -95,6 +97,7 @@ export function POST(request: Request) {
       model: input.model,
       mode: input.mode ?? DEFAULT_WORK_MODE,
       agentProvider: input.agentProvider,
+      team: input.team,
       agentModel: input.agentModel,
       transformer: input.transformer,
       reviewer: input.reviewer,

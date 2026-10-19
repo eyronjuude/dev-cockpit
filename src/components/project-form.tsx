@@ -1,5 +1,8 @@
 'use client';
 
+import { TeamEditor } from './team-editor';
+import type { TeamConfig } from '@/domain/team';
+
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 
@@ -131,6 +134,7 @@ export function ProjectForm({
   const [artifactRetentionDays, setArtifactRetentionDays] = useState(
     String(existing?.artifactRetentionDays ?? DEFAULT_ARTIFACT_RETENTION_DAYS),
   );
+  const [team, setTeam] = useState<TeamConfig | null>(existing?.team ?? null);
   const [agentModel, setAgentModel] = useState(existing?.agentModel ?? '');
   const [agentPermissionMode, setAgentPermissionMode] = useState<string>(
     existing?.agentPermissionMode ?? DEFAULT_AGENT_PERMISSION_MODE,
@@ -497,6 +501,7 @@ export function ProjectForm({
       aiFormatsCommitMessages,
       worktreeRetentionDays: retentionOr(worktreeRetentionDays, DEFAULT_WORKTREE_RETENTION_DAYS),
       artifactRetentionDays: retentionOr(artifactRetentionDays, DEFAULT_ARTIFACT_RETENTION_DAYS),
+      team,
       agentModel: agentModel || null,
       agentPermissionMode,
       defaultAgentProvider: defaultAgentProvider || null,
@@ -1347,10 +1352,12 @@ export function ProjectForm({
         </div>
       </section>
 
+      <TeamEditor value={team} onChange={setTeam} />
+
       {/* Agent */}
       <section className="panel">
         <div className="panel-head">
-          <h2 className="panel-title">Implementation agent</h2>
+          <h2 className="panel-title">Implementation agent (single-agent defaults)</h2>
         </div>
         <div className="grid gap-3 px-3.5 py-3 sm:grid-cols-2">
           {implementers.length > 0 ? (

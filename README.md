@@ -308,6 +308,57 @@ means nothing to Codex, so that provider runs on its own default. See
 The **What will run** panel on that page states exactly what is about to happen
 before you commit to it, model and effort included.
 
+## Engineering team and team room
+
+Enable **Engineering team** in a project's settings or on **New task**, then select
+**Build** mode. Configure the provider (Claude Code or Codex CLI), model, effort,
+and additional instructions separately for each of six roles:
+
+| Role | Responsibility |
+| --- | --- |
+| Tech lead | Propose the approach and hand work to the engineer |
+| Engineer | Implement changes in the run's isolated worktree |
+| Reviewer | Assess correctness, architecture, security, and maintainability |
+| Functional QA | Assess requirements, acceptance criteria, and edge cases |
+| Regression QA | Assess integrations, test coverage, and recorded check results |
+| UX QA | Assess flows and accessibility from code; identify missing browser checks |
+
+The configuration is copied onto each new run. Later project edits do not change
+existing teams. Engineer settings in the team override the single-agent creation
+settings; subsequent explicit run overrides and capacity fallback are still
+recorded by the ordinary implementation machinery. Blank team models use the
+provider default. Ask and Plan keep the single-agent workflow; the team joins
+when the run enters Build.
+
+The run opens on **Team**, a persistent conversation showing actual public agent
+contributions, handoffs, role status, duration, and provider-reported costs. The
+lead receives a repository index and manifest evidence; the engineer investigates
+the source. Each review role receives the request, specification, bounded diff,
+implementation summary, recorded checks, and recent public conversation. Roles
+work sequentially; only the engineer edits the worktree. This is a shared-context
+handoff workflow, not simultaneous autonomous agents editing the same checkout.
+
+**Add direction** saves a message for the next role handoff or implementation
+pass. It does not interrupt a running CLI or start a new run. Follow-up work can
+be started through the existing run actions. Conversation history is persisted;
+model context includes only recent messages and bounded evidence.
+
+All four review reports form one review attempt. High and critical findings
+block readiness even if optional review blocking is disabled on the project.
+New team runs default to automatically addressing those findings, with at most
+two repair rounds per execution cycle; review automation can still be adjusted
+with the existing run controls. Failed or unavailable teammates stop the run
+visibly and can be retried. A stored review stamp ties completion to the current
+implementation and validation attempt. Final approval and landing remain yours.
+
+Review and QA are evidence assessments, not extra deterministic test runners.
+They do not automate browser interaction or visual verification, and are
+instructed to identify unverified checks. Use configured validation commands for
+actual test execution. Each teammate makes separate model calls using the local
+CLI login. Live provider success for this workflow remains unverified until a
+real team run has been exercised on your machine; automated tests substitute
+model calls while exercising real SQLite, Git worktrees, and orchestration.
+
 ## When a run stops short
 
 A run that failed, was cancelled, or stalled on a landing can be picked back up
@@ -820,8 +871,9 @@ Two honest caveats:
 ## Current limitations
 
 - **Single machine, single user.** No authentication, by design.
-- **One agent per run.** Concurrent runs across different projects are fine;
-  two agents editing one run is not supported. Landing is serialized per
+- **One editing agent per run.** Optional engineering teams add a lead, reviewer,
+  and three QA roles through sequential shared-context handoffs. Only the engineer
+  edits a run; concurrent editing in one worktree is not supported. Landing is serialized per
   repository and target branch.
 - **A server restart kills in-flight runs.** Child processes do not survive the
   server stopping. Such runs are marked `FAILED` with "interrupted by a restart"
@@ -955,6 +1007,11 @@ first request, in a script, or in CI. Both paths run the same `applyMigrations()
 (`src/db/migrate.ts`), so a database migrated standalone gets the same additive-column
 repairs the app would apply on open — never a partial migration left for the app to
 finish later.
+
+For manual server smoke checks, set `DEV_COCKPIT_DATA_DIR` to a fresh temporary
+folder before starting the app. Startup applies migrations, reconciles active
+runs, and immediately schedules retention cleanup; using the normal `data/`
+directory can expire existing artifacts according to their project policies.
 
 The test suite uses real SQLite databases in temporary directories, real Git
 repositories and real child processes. Very little is mocked, because the things

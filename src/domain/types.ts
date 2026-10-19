@@ -90,7 +90,8 @@ const TRANSITIONS: Record<RunStatus, readonly RunStatus[]> = {
   ],
   PAUSED: ['IMPLEMENTING', 'REJECTED', 'CANCELLED', 'DRAFT'],
   VALIDATING: ['REVIEWING', 'NEEDS_CHANGES', 'READY', 'FAILED', 'CANCELLED', 'DRAFT'],
-  REVIEWING: ['NEEDS_CHANGES', 'READY', 'FAILED', 'CANCELLED', 'DRAFT'],
+  // A bounded automatic review cycle hands findings directly back to implementation.
+  REVIEWING: ['IMPLEMENTING', 'NEEDS_CHANGES', 'READY', 'FAILED', 'CANCELLED', 'DRAFT'],
   NEEDS_CHANGES: [
     'IMPLEMENTING',
     'VALIDATING',

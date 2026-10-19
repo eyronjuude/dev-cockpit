@@ -81,6 +81,7 @@ export default async function NewTaskPage({
       </header>
 
       <NewTaskForm
+        key={project.id}
         project={project}
         projects={listProjects().map((p) => ({ id: p.id, name: p.name }))}
         profiles={listProfiles()}

@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { teamConfigSchema, type TeamConfig } from '@/domain/team';
+
 import { asc, desc, eq, isNull } from 'drizzle-orm';
 import path from 'node:path';
 import { z } from 'zod';
@@ -149,6 +151,7 @@ export const createProjectSchema = z.object({
   /** Retention windows, in days. Zero keeps that target forever. */
   artifactRetentionDays: retentionDaysSchema.optional(),
   worktreeRetentionDays: retentionDaysSchema.optional(),
+  team: teamConfigSchema.nullable().optional(),
   agentModel: z.string().trim().max(120).nullable().optional(),
   agentPermissionMode: agentPermissionModeSchema.optional(),
   agentAddDirs: z.array(z.string()).optional(),
@@ -251,6 +254,7 @@ export interface ProjectView {
   /** See `domain/expiry`. Zero on either means that target never expires. */
   artifactRetentionDays: number;
   worktreeRetentionDays: number;
+  team?: TeamConfig | null;
   agentModel: string | null;
   /** What the project stores. May be overridden for a run. */
   agentPermissionMode: string;
@@ -354,6 +358,7 @@ function toProjectView(
     cleanUpWorktreeOnFinish: row.cleanUpWorktreeOnFinish,
     artifactRetentionDays: row.artifactRetentionDays,
     worktreeRetentionDays: row.worktreeRetentionDays,
+    team: row.team,
     agentModel: row.agentModel,
     agentPermissionMode: row.agentPermissionMode,
     effectivePermissionMode: resolvePermissionMode(row.agentPermissionMode),
@@ -553,6 +558,7 @@ export async function createProject(input: CreateProjectInput): Promise<ProjectV
       cleanUpWorktreeOnFinish: parsed.cleanUpWorktreeOnFinish ?? true,
       artifactRetentionDays: parsed.artifactRetentionDays ?? DEFAULT_ARTIFACT_RETENTION_DAYS,
       worktreeRetentionDays: parsed.worktreeRetentionDays ?? DEFAULT_WORKTREE_RETENTION_DAYS,
+      team: parsed.team ?? null,
       agentModel: parsed.agentModel ?? null,
       agentPermissionMode: parsed.agentPermissionMode ?? DEFAULT_AGENT_PERMISSION_MODE,
       agentAddDirs: toLines(parsed.agentAddDirs) ?? null,
@@ -684,6 +690,7 @@ export function updateProject(id: string, input: UpdateProjectInput): ProjectVie
         parsed.cleanUpWorktreeOnFinish ?? existing.cleanUpWorktreeOnFinish,
       artifactRetentionDays: parsed.artifactRetentionDays ?? existing.artifactRetentionDays,
       worktreeRetentionDays: parsed.worktreeRetentionDays ?? existing.worktreeRetentionDays,
+      team: parsed.team === undefined ? existing.team : parsed.team,
       agentModel: parsed.agentModel === undefined ? existing.agentModel : parsed.agentModel,
       agentPermissionMode: parsed.agentPermissionMode ?? existing.agentPermissionMode,
       agentAddDirs: toLines(parsed.agentAddDirs) ?? existing.agentAddDirs.join('\n'),

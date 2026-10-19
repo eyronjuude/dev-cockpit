@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { teamConfigSchema, type TeamConfig, type TeamReviewStamp } from '@/domain/team';
+
 import { and, asc, desc, eq, inArray, isNotNull, lt, max, or } from 'drizzle-orm';
 import { z } from 'zod';
 
@@ -79,6 +81,7 @@ export const createRunSchema = z.object({
    * endpoints use. Null or blank says it outright: send no model and let the
    * provider choose, which the precedence chain has no way to state.
    */
+  team: teamConfigSchema.nullable().optional(),
   agentModel: z.string().trim().max(120).nullable().optional(),
   /** Transformer provider id, or 'none'. */
   transformer: z.string().trim().max(60).optional(),
@@ -204,6 +207,8 @@ export interface RunView {
   commitSha: string | null;
   agentProvider: string;
   agentSessionId: string | null;
+  team?: TeamConfig | null;
+  teamReview?: TeamReviewStamp | null;
   agentModel: string | null;
   transformerProvider: string;
   reviewerProvider: string;
@@ -387,6 +392,8 @@ export function getRun(id: string): RunView | null {
     commitSha: row.commitSha,
     agentProvider: row.agentProvider,
     agentSessionId: row.agentSessionId,
+    team: row.team,
+    teamReview: row.teamReview,
     agentModel: row.agentModel,
     transformerProvider: row.transformerProvider,
     reviewerProvider: row.reviewerProvider,
@@ -561,8 +568,10 @@ export function createRun(input: CreateRunInput): RunView {
   // A caller that names no provider gets the project's own standing default
   // before the hard-coded one — set in the project's settings, same as New
   // Task already prefers it.
+  const team = parsed.team === undefined ? project.team ?? null : parsed.team;
+  const engineer = team?.members.engineer;
   const agentProvider =
-    parsed.agentProvider?.trim() || project.defaultAgentProvider || CLAUDE_CODE_PROVIDER;
+    engineer?.provider || parsed.agentProvider?.trim() || project.defaultAgentProvider || CLAUDE_CODE_PROVIDER;
 
   /**
    * Resolved at creation and written down, rather than derived at each phase.
@@ -576,6 +585,7 @@ export function createRun(input: CreateRunInput): RunView {
    * it means "no model", which is a decision rather than an absence.
    */
   const model: ModelResolution =
+    engineer ? { model: engineer.model, source: 'run' } :
     parsed.agentModel !== undefined && !parsed.agentModel?.trim()
       ? { model: null, source: 'run' }
       : resolveAgentModel({
@@ -599,10 +609,12 @@ export function createRun(input: CreateRunInput): RunView {
       baseBranch: parsed.baseRef?.trim() || project.defaultBranch,
       branch: runBranchName(id),
       agentProvider,
+      team,
       agentModel: model.model,
       transformerProvider: parsed.transformer ?? project.defaultTransformerProvider ?? 'none',
       reviewerProvider: parsed.reviewer ?? project.defaultReviewerProvider ?? 'none',
-      reviewAutoAddressMinSeverity: parsed.reviewAutoAddressMinSeverity ?? null,
+      reviewAutoAddressMinSeverity: parsed.reviewAutoAddressMinSeverity === undefined
+        ? (team ? 'high' : null) : parsed.reviewAutoAddressMinSeverity,
     })
     .run();
 
@@ -758,6 +770,7 @@ export function updateRunFields(
     branch: string;
     /** Cleared to null once the worktree is gone â€” reclaimed, or torn down by a restart. */
     worktreePath: string | null;
+    teamReview: TeamReviewStamp | null;
     agentProvider: string;
     agentSessionId: string | null;
     agentModel: string | null;
@@ -1373,8 +1386,14 @@ function assessBuildReadiness(run: RunView, project: ProjectView): ReadinessAsse
   }
 
   const blockingFindings = countBlockingFindings(run);
+  if (run.team && (!run.teamReview ||
+    run.teamReview.iterationId !== (run.iterations.at(-1)?.id ?? null) ||
+    run.teamReview.validationAttempt !== attempt ||
+    run.teamReview.reviewAttempt !== run.lastReviewAttempt)) {
+    reasons.push('Team review has not completed for the current implementation and checks');
+  }
 
-  if (project.reviewBlocksReady && blockingFindings > 0) {
+  if ((project.reviewBlocksReady || run.team) && blockingFindings > 0) {
     reasons.push(
       `${blockingFindings} blocking review finding${blockingFindings === 1 ? '' : 's'}`,
     );
