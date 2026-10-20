@@ -1,9 +1,10 @@
 'use client';
 
-import { defaultTeam, TEAM_LABELS, TEAM_RESPONSIBILITIES, TEAM_ROLES, type TeamConfig, type TeamMember } from '@/domain/team';
+import { defaultTeam, TEAM_LABELS, TEAM_PROVIDER_LABELS, TEAM_PROVIDERS, TEAM_RESPONSIBILITIES, TEAM_ROLES, type TeamConfig, type TeamMember } from '@/domain/team';
 
-export function TeamEditor({ value, onChange }: {
+export function TeamEditor({ value, onChange, providers = [] }: {
   value: TeamConfig | null; onChange: (value: TeamConfig | null) => void;
+  providers?: { id: string; available: boolean; detail: string }[];
 }) {
   return (
     <section className="panel">
@@ -23,6 +24,7 @@ export function TeamEditor({ value, onChange }: {
         {value ? <>
           <p className="text-[12px] text-ink-muted">
             Each role makes separate model calls using your local CLI login. Blank models use the provider default.
+            Mix Claude Code, Codex CLI and Gemini CLI independently across the six roles; no API key is required.
             The Engineer settings below control implementation. Review and QA assess the diff and recorded checks;
             browser and visual testing are not automated. High and critical findings block readiness.
           </p>
@@ -38,18 +40,23 @@ export function TeamEditor({ value, onChange }: {
                 <div className="grid gap-2 sm:grid-cols-3">
                   <label className="text-[12px]">Provider
                     <select className="select mt-1" value={member.provider} onChange={(e) => update({ provider: e.target.value as TeamMember['provider'], model: null })}>
-                      <option value="claude-code">Claude Code</option><option value="codex-code">Codex CLI</option>
+                      {TEAM_PROVIDERS.map((provider) => <option key={provider} value={provider}>
+                        {TEAM_PROVIDER_LABELS[provider]}{providers.find((p) => p.id === provider)?.available === false ? ' (unavailable)' : ''}
+                      </option>)}
                     </select>
                   </label>
                   <label className="text-[12px]">Model
                     <input className="input mt-1" value={member.model ?? ''} placeholder="Provider default" maxLength={120} onChange={(e) => update({ model: e.target.value.trim() || null })} />
                   </label>
                   <label className="text-[12px]">Effort
-                    <select className="select mt-1" value={member.effort} onChange={(e) => update({ effort: e.target.value as TeamMember['effort'] })}>
+                    <select className="select mt-1" disabled={member.provider === 'gemini-cli'} value={member.provider === 'gemini-cli' ? '' : member.effort} onChange={(e) => update({ effort: e.target.value as TeamMember['effort'] })}>
+                      {member.provider === 'gemini-cli' ? <option value="">CLI default</option> : null}
                       {['low', 'medium', 'high', 'xhigh'].map((effort) => <option key={effort}>{effort}</option>)}
                     </select>
                   </label>
                 </div>
+                {providers.find((p) => p.id === member.provider)?.available === false ? <p className="mt-2 text-[11.5px] text-ink-muted">{providers.find((p) => p.id === member.provider)?.detail}</p> : null}
+                {member.provider === 'gemini-cli' ? <p className="mt-2 text-[11.5px] text-ink-muted">Uses your Gemini CLI Google login. Install and sign in with gemini before running. Reasoning uses the CLI default.</p> : null}
                 <label className="mt-3 block text-[12px]">Additional instructions
                   <textarea className="input mt-1 min-h-20" rows={2} maxLength={8_000} value={member.instructions} placeholder="Project-specific focus for this teammate" onChange={(e) => update({ instructions: e.target.value })} />
                 </label>

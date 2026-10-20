@@ -145,8 +145,8 @@ function toFindings(parsed: z.infer<typeof reviewResponseSchema>): ReviewFinding
  * as the implementer, in a separate process with no shared session, no tools,
  * and no access to the repository beyond the diff it is handed. That catches
  * a different class of problem than the implementer's own self-assessment, but
- * it is not an independent vendor. Configure `anthropic-api` with a different
- * model, or add a provider, when that matters.
+ * it is not an independent vendor. Choose Codex CLI when a different vendor
+ * is wanted.
  */
 export class ClaudeCliReviewer implements ReviewerAgent {
   readonly id = 'claude-cli';
@@ -190,89 +190,6 @@ export class ClaudeCliReviewer implements ReviewerAgent {
       costUsd: result.costUsd,
     };
   }
-}
-
-/* ------------------------------------------------------------------ *
- * anthropic-api
- * ------------------------------------------------------------------ */
-
-export class AnthropicApiReviewer implements ReviewerAgent {
-  readonly id = 'anthropic-api';
-  readonly label = 'Anthropic API';
-  readonly requirement = 'Requires ANTHROPIC_API_KEY in the environment.';
-  readonly readOnly = true;
-
-  constructor(private readonly model: string = 'claude-opus-5') {}
-
-  async checkAvailability(): Promise<ReviewerAvailability> {
-    if (!process.env.ANTHROPIC_API_KEY) {
-      return { available: false, detail: 'ANTHROPIC_API_KEY is not set.' };
-    }
-    return { available: true, detail: `Configured for ${this.model}.` };
-  }
-
-  async review(evidence: ReviewEvidence): Promise<ReviewResult> {
-    if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY is not set');
-    const start = Date.now();
-    const { default: Anthropic } = await import('@anthropic-ai/sdk');
-    const client = new Anthropic();
-
-    // Streaming: a large diff at high effort can outrun the request timeout.
-    const stream = client.messages.stream(
-      {
-        model: this.model,
-        max_tokens: 32_000,
-        system: REVIEW_SYSTEM_PROMPT,
-        thinking: { type: 'adaptive' },
-        output_config: {
-          effort: 'high',
-          format: { type: 'json_schema', schema: REVIEW_JSON_SCHEMA as Record<string, unknown> },
-        },
-        messages: [{ role: 'user', content: buildReviewPrompt(evidence) }],
-      } as never,
-      evidence.signal ? { signal: evidence.signal } : undefined,
-    );
-
-    const message = await stream.finalMessage();
-
-    if ((message as { stop_reason?: string }).stop_reason === 'refusal') {
-      throw new Error('The reviewer model declined to review this change');
-    }
-
-    const text = extractText(message);
-    let json: unknown;
-    try {
-      json = JSON.parse(text);
-    } catch {
-      throw new Error('Reviewer returned output that was not JSON');
-    }
-
-    const parsed = reviewResponseSchema.safeParse(json);
-    if (!parsed.success) {
-      throw new Error('Reviewer response did not match the schema');
-    }
-
-    return {
-      provider: this.id,
-      findings: toFindings(parsed.data),
-      summary: parsed.data.summary.trim() || null,
-      durationMs: Date.now() - start,
-      costUsd: null,
-    };
-  }
-}
-
-function extractText(message: unknown): string {
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) return '';
-  const parts: string[] = [];
-  for (const block of content) {
-    if (block && typeof block === 'object' && (block as { type?: string }).type === 'text') {
-      const text = (block as { text?: string }).text;
-      if (typeof text === 'string') parts.push(text);
-    }
-  }
-  return parts.join('');
 }
 
 /* ------------------------------------------------------------------ *
@@ -332,71 +249,6 @@ export class CodexCliReviewer implements ReviewerAgent {
       findings: toFindings(parsed.data),
       summary: parsed.data.summary.trim() || null,
       durationMs: result.durationMs ?? 0,
-      costUsd: null,
-    };
-  }
-}
-
-/* ------------------------------------------------------------------ *
- * openai-api — cross-vendor review through the Responses API
- * ------------------------------------------------------------------ */
-
-export class OpenAiReviewer implements ReviewerAgent {
-  readonly id = 'openai-api';
-  readonly label = 'OpenAI API (read-only)';
-  readonly requirement = 'Requires OPENAI_API_KEY in the environment. Metered per token.';
-  readonly readOnly = true;
-
-  constructor(private readonly model: string = 'gpt-5.6') {}
-
-  async checkAvailability(): Promise<ReviewerAvailability> {
-    if (!process.env.OPENAI_API_KEY) {
-      return { available: false, detail: 'OPENAI_API_KEY is not set.' };
-    }
-    return { available: true, detail: `Configured for ${this.model}.` };
-  }
-
-  async review(evidence: ReviewEvidence): Promise<ReviewResult> {
-    if (!process.env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY is not set');
-    const start = Date.now();
-    const { default: OpenAI } = await import('openai');
-    const client = new OpenAI();
-
-    const response = await client.responses.create(
-      {
-        model: this.model,
-        instructions: REVIEW_SYSTEM_PROMPT,
-        input: buildReviewPrompt(evidence),
-        reasoning: { effort: 'high' },
-        text: {
-          format: {
-            type: 'json_schema',
-            name: 'review_findings',
-            schema: REVIEW_JSON_SCHEMA as unknown as Record<string, unknown>,
-            strict: true,
-          },
-        },
-      },
-      evidence.signal ? { signal: evidence.signal } : undefined,
-    );
-
-    let json: unknown;
-    try {
-      json = JSON.parse(response.output_text);
-    } catch {
-      throw new Error('OpenAI reviewer returned output that was not JSON');
-    }
-
-    const parsed = reviewResponseSchema.safeParse(json);
-    if (!parsed.success) {
-      throw new Error('OpenAI reviewer response did not match the schema');
-    }
-
-    return {
-      provider: this.id,
-      findings: toFindings(parsed.data),
-      summary: parsed.data.summary.trim() || null,
-      durationMs: Date.now() - start,
       costUsd: null,
     };
   }

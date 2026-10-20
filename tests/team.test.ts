@@ -8,7 +8,11 @@ import type { AgentOutcome, AgentStartInput, ImplementationAgent } from '@/agent
 import type { ClaudeQueryOptions } from '@/agents/claude-query';
 
 const query = vi.hoisted(() => vi.fn());
+const gemini = vi.hoisted(() => vi.fn());
 vi.mock('@/agents/claude-query', () => ({ claudeQuery: query }));
+vi.mock('@/agents/gemini-cli', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/agents/gemini-cli')>(), geminiQuery: gemini,
+}));
 
 let dataDir: string;
 let projects: typeof import('@/services/projects');
@@ -38,7 +42,7 @@ beforeAll(async () => {
   orchestrator = await import('@/orchestrator/orchestrator');
   ({ closeDb } = await import('@/db/client'));
 });
-beforeEach(() => { query.mockReset(); query.mockResolvedValue(report()); });
+beforeEach(() => { query.mockReset(); query.mockResolvedValue(report()); gemini.mockReset(); gemini.mockResolvedValue(report('Gemini handoff: preserve the base line.')); });
 afterAll(() => {
   closeDb?.();
   fs.rmSync(dataDir, { recursive: true, force: true });
@@ -93,6 +97,41 @@ async function executeRun(input: Parameters<typeof runs.createRun>[0], calls: Ag
 }
 
 describe('engineering team', () => {
+  it('persists mixed CLI roles and uses separate models for the lead and QA', async () => {
+    const project = await makeProject();
+    const config = defaultTeam();
+    config.members.lead = { ...config.members.lead, provider: 'gemini-cli', model: 'lead-model' };
+    config.members['ux-qa'] = { ...config.members['ux-qa'], provider: 'gemini-cli', model: 'ux-model' };
+    projects.updateProject(project.id, { team: config });
+    const calls: AgentStartInput[] = [];
+    const result = await executeRun({ projectId: project.id, request: 'Add a marker', mode: 'build' }, calls);
+    expect(result.status).toBe('READY');
+    expect(result.team?.members.lead.provider).toBe('gemini-cli');
+    expect(result.agentProvider).toBe('claude-code');
+    expect(calls[0]!.prompt).toContain('Gemini handoff: preserve the base line.');
+    expect(gemini).toHaveBeenCalledTimes(2);
+    expect(gemini.mock.calls[0]![0]).toMatchObject({ model: 'lead-model', effort: null });
+    expect(gemini.mock.calls[1]![0]).toMatchObject({ model: 'ux-model', effort: null });
+    expect(gemini.mock.calls[1]![0].prompt).toContain('+marker');
+    expect(query).toHaveBeenCalledTimes(3);
+  });
+
+  it('can assign Gemini CLI as the engineer independently of the other roles', async () => {
+    const project = await makeProject();
+    const config = defaultTeam(); config.members.engineer.provider = 'gemini-cli';
+    config.members.engineer.model = 'engineer-model';
+    const run = runs.createRun({ projectId: project.id, request: 'Add a marker', mode: 'build', team: config });
+    const calls: AgentStartInput[] = [];
+    const restore = orchestrator.registerAgent({ ...fakeEngineer(calls), id: 'gemini-cli' });
+    try {
+      orchestrator.startRun(run.id); const result = await idle(run.id);
+      expect(result.status).toBe('READY'); expect(result.agentProvider).toBe('gemini-cli');
+      expect(calls[0]!.model).toBe('engineer-model'); expect(calls[0]!.effort).toBeNull();
+      expect(result.iterations[0]!.settings.effort).toBeNull();
+      expect(query).toHaveBeenCalledTimes(5);
+    } finally { restore(); }
+  });
+
   it('requires six valid role configurations and preserves a run snapshot', async () => {
     const invalid = defaultTeam();
     delete (invalid.members as Partial<typeof invalid.members>)['ux-qa'];

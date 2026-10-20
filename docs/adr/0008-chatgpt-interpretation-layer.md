@@ -2,6 +2,10 @@
 
 **Status:** accepted
 
+**Subsequent update:** Direct model API providers and their SDK dependencies
+were removed in favor of CLI authentication. API-provider details below are
+historical; current providers are listed in the README.
+
 ## Context
 
 Two separate problems, one answer.

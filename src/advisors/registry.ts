@@ -1,11 +1,10 @@
 import 'server-only';
+import { cliProviderId } from '@/domain/cli-providers';
 
 import {
-  AnthropicApiAdvisor,
   ClaudeCliAdvisor,
   CodexCliAdvisor,
   DeterministicAdvisor,
-  OpenAiAdvisor,
 } from './providers';
 import type { SetupAdvisor } from './types';
 
@@ -20,8 +19,6 @@ const ADVISORS: SetupAdvisor[] = [
   new DeterministicAdvisor(),
   new CodexCliAdvisor(),
   new ClaudeCliAdvisor(),
-  new OpenAiAdvisor(),
-  new AnthropicApiAdvisor(),
 ];
 
 export const DEFAULT_ADVISOR_ID = 'none';
@@ -38,7 +35,7 @@ export function listAdvisors(): readonly SetupAdvisor[] {
  */
 export function getAdvisor(id: string | null | undefined): SetupAdvisor {
   if (!id) return ADVISORS[0] as SetupAdvisor;
-  return ADVISORS.find((a) => a.id === id) ?? (ADVISORS[0] as SetupAdvisor);
+  return ADVISORS.find((a) => a.id === cliProviderId(id)) ?? (ADVISORS[0] as SetupAdvisor);
 }
 
 export interface AdvisorStatus {

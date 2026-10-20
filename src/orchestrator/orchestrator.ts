@@ -9,6 +9,7 @@ import path from 'node:path';
 import { capacityExhaustionReason } from '@/agents/capacity';
 import { ClaudeCodeAgent } from '@/agents/claude-code';
 import { CodexCodeAgent } from '@/agents/codex-code';
+import { GeminiCodeAgent } from '@/agents/gemini-cli';
 import { summariseToolInput } from '@/agents/stream-parser';
 import type {
   AgentAvailability,
@@ -471,6 +472,7 @@ function setPhase(runId: string, phase: string): void {
 const AGENTS: Record<string, ImplementationAgent> = {
   'claude-code': new ClaudeCodeAgent(),
   'codex-code': new CodexCodeAgent(),
+  'gemini-cli': new GeminiCodeAgent(),
 };
 
 export function getAgent(id: string): ImplementationAgent {
@@ -2385,7 +2387,7 @@ async function phaseImplement(
     // The model decides the effort it will accept, not the other way round: a
     // profile's level is clamped to what this model takes rather than the model
     // being swapped back to suit the profile.
-    const engineerEffort = teamEnabled ? run.team!.members.engineer.effort : profile.agentEffort;
+    const engineerEffort = agent.id === 'gemini-cli' ? null : teamEnabled ? run.team!.members.engineer.effort : profile.agentEffort;
     const effort = resolveAgentEffort(model, engineerEffort);
     const availability: AgentAvailability = await agent.checkAvailability();
 

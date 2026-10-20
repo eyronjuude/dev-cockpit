@@ -15,8 +15,11 @@ export const TEAM_RESPONSIBILITIES: Record<TeamRole, string> = {
   'ux-qa': 'Assess user flows, accessibility, loading and error states, and responsive behavior from the supplied code. Clearly identify browser and visual checks that have not been performed. For changes without UI, say this role is not applicable.',
 };
 
+export const TEAM_PROVIDERS = ['claude-code', 'codex-code', 'gemini-cli'] as const;
+export const TEAM_PROVIDER_LABELS = { 'claude-code': 'Claude Code', 'codex-code': 'Codex CLI', 'gemini-cli': 'Gemini CLI' };
+
 export const teamMemberSchema = z.object({
-  provider: z.enum(['claude-code', 'codex-code']),
+  provider: z.enum(TEAM_PROVIDERS),
   model: z.string().trim().max(120).nullable(),
   effort: z.enum(['low', 'medium', 'high', 'xhigh']),
   instructions: z.string().trim().max(8_000),

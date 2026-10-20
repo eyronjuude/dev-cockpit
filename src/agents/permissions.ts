@@ -79,3 +79,8 @@ export function codexPermissionArgs(mode: string): string[] {
   if (mode === 'bypassPermissions') return ['--dangerously-bypass-approvals-and-sandbox'];
   return ['--sandbox', 'workspace-write', '--approve-for-me'];
 }
+
+/** Headless Gemini denies calls needing confirmation; only bypass enables YOLO. */
+export function geminiPermissionArgs(mode: string): string[] {
+  return ['--approval-mode', mode === 'bypassPermissions' ? 'yolo' : mode === 'acceptEdits' ? 'auto_edit' : mode === 'plan' ? 'plan' : 'default'];
+}

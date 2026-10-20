@@ -7,9 +7,7 @@ import type { SuggestSetupInput } from '@/advisors/types';
  * The advisor layer's reliability property: it degrades to the deterministic
  * proposal instead of failing.
  *
- * No model is called here. The providers that need credentials are exercised
- * with none, which is the failure path that matters — a machine without a key
- * must still get a usable draft.
+ * No model is called here. CLI failure falls back to the deterministic draft.
  */
 
 let providers: typeof import('@/advisors/providers');
@@ -74,10 +72,16 @@ describe('advisor registry', () => {
     expect(registry.getAdvisor('no-such-provider').id).toBe('none');
   });
 
+  it('offers only deterministic and CLI advisors, resolving saved API selections to CLIs', () => {
+    expect(registry.listAdvisors().map((a) => a.id)).toEqual(['none', 'codex-cli', 'claude-cli']);
+    expect(registry.getAdvisor('openai-api').id).toBe('codex-cli');
+    expect(registry.getAdvisor('anthropic-api').id).toBe('claude-cli');
+  });
+
   it('reports every provider with its requirement', async () => {
     const statuses = await registry.advisorStatuses();
     expect(statuses.map((s) => s.id)).toContain('claude-cli');
-    expect(statuses.map((s) => s.id)).toContain('anthropic-api');
+    expect(statuses.map((s) => s.id)).toContain('codex-cli');
     // The deterministic one is always usable; that is what makes it the default.
     expect(statuses.find((s) => s.id === 'none')?.available).toBe(true);
     for (const status of statuses) expect(status.requirement).toBeTruthy();
@@ -93,33 +97,18 @@ describe('deterministic advisor', () => {
   });
 });
 
-describe('credentialled providers with no credentials', () => {
-  it('falls back to the baseline and says why', async () => {
-    const previous = process.env.ANTHROPIC_API_KEY;
-    delete process.env.ANTHROPIC_API_KEY;
+describe('missing CLI', () => {
+  it('falls back to the baseline and names the unavailable CLI', async () => {
+    const previous = process.env.DEV_COCKPIT_CODEX_BIN;
+    process.env.DEV_COCKPIT_CODEX_BIN = 'codex-does-not-exist-advisor';
     try {
-      const advisor = new providers.AnthropicApiAdvisor();
-      expect((await advisor.checkAvailability()).available).toBe(false);
-
-      const result = await advisor.suggestSetup(input);
+      const result = await new providers.CodexCliAdvisor().suggestSetup(input);
       expect(result.proposal).toEqual(BASELINE);
       expect(result.fellBackTo).toBe('deterministic');
-      expect(result.fallbackReason).toMatch(/ANTHROPIC_API_KEY/);
+      expect(result.fallbackReason).toContain('codex-does-not-exist-advisor');
     } finally {
-      if (previous !== undefined) process.env.ANTHROPIC_API_KEY = previous;
-    }
-  });
-
-  it('does the same for the OpenAI provider', async () => {
-    const previous = process.env.OPENAI_API_KEY;
-    delete process.env.OPENAI_API_KEY;
-    try {
-      const result = await new providers.OpenAiAdvisor().suggestSetup(input);
-      expect(result.proposal).toEqual(BASELINE);
-      expect(result.fellBackTo).toBe('deterministic');
-      expect(result.fallbackReason).toMatch(/OPENAI_API_KEY/);
-    } finally {
-      if (previous !== undefined) process.env.OPENAI_API_KEY = previous;
+      if (previous === undefined) delete process.env.DEV_COCKPIT_CODEX_BIN;
+      else process.env.DEV_COCKPIT_CODEX_BIN = previous;
     }
   });
 });

@@ -1,4 +1,5 @@
 import 'server-only';
+import { cliProviderId } from '@/domain/cli-providers';
 
 import { teamConfigSchema, type TeamConfig, type TeamReviewStamp } from '@/domain/team';
 
@@ -84,9 +85,9 @@ export const createRunSchema = z.object({
   team: teamConfigSchema.nullable().optional(),
   agentModel: z.string().trim().max(120).nullable().optional(),
   /** Transformer provider id, or 'none'. */
-  transformer: z.string().trim().max(60).optional(),
+  transformer: z.string().trim().max(60).transform(cliProviderId).optional(),
   /** Reviewer provider id, or 'none'. */
-  reviewer: z.string().trim().max(60).optional(),
+  reviewer: z.string().trim().max(60).transform(cliProviderId).optional(),
   /**
    * Minimum finding severity that gets sent back to the implementer
    * automatically, without a person clicking "Address review findings"
@@ -395,8 +396,8 @@ export function getRun(id: string): RunView | null {
     team: row.team,
     teamReview: row.teamReview,
     agentModel: row.agentModel,
-    transformerProvider: row.transformerProvider,
-    reviewerProvider: row.reviewerProvider,
+    transformerProvider: cliProviderId(row.transformerProvider),
+    reviewerProvider: cliProviderId(row.reviewerProvider),
     lastReviewAttempt: row.lastReviewAttempt,
     reviewAutoAddressMinSeverity: row.reviewAutoAddressMinSeverity as FindingSeverity | null,
     disposition: row.disposition as Disposition | null,
@@ -698,7 +699,7 @@ export function runProviders(runId: string): RunProviderChoices {
     .from(runs)
     .where(eq(runs.id, runId))
     .get();
-  return { transformer: row?.transformer ?? 'none', reviewer: row?.reviewer ?? 'none' };
+  return { transformer: cliProviderId(row?.transformer ?? 'none'), reviewer: cliProviderId(row?.reviewer ?? 'none') };
 }
 
 export interface StatusChangeOptions {

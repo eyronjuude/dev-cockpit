@@ -1352,7 +1352,7 @@ export function ProjectForm({
         </div>
       </section>
 
-      <TeamEditor value={team} onChange={setTeam} />
+      <TeamEditor value={team} onChange={setTeam} providers={implementers} />
 
       {/* Agent */}
       <section className="panel">

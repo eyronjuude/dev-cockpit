@@ -1,12 +1,11 @@
 import 'server-only';
+import { cliProviderId } from '@/domain/cli-providers';
 
 import type { TransformerProvider } from './types';
 import {
-  AnthropicApiTransformer,
   ClaudeCliTransformer,
   CodexCliTransformer,
   NoopTransformer,
-  OpenAiTransformer,
 } from './providers';
 
 /**
@@ -20,8 +19,6 @@ const PROVIDERS: TransformerProvider[] = [
   new NoopTransformer(),
   new CodexCliTransformer(),
   new ClaudeCliTransformer(),
-  new OpenAiTransformer(),
-  new AnthropicApiTransformer(),
 ];
 
 export const DEFAULT_TRANSFORMER_ID = 'none';
@@ -42,7 +39,7 @@ export function transformerOptions(): TransformerOption[] {
 
 export function getTransformer(id: string | null | undefined): TransformerProvider {
   if (!id) return PROVIDERS[0] as TransformerProvider;
-  return PROVIDERS.find((p) => p.id === id) ?? (PROVIDERS[0] as TransformerProvider);
+  return PROVIDERS.find((p) => p.id === cliProviderId(id)) ?? (PROVIDERS[0] as TransformerProvider);
 }
 
 export interface TransformerStatus {

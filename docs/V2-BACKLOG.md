@@ -14,8 +14,8 @@ a configured E2E command runs, scan the worktree for `playwright-report/`,
 honour the project's `captureScreenshots` policy. This is the largest gap
 between what the UI implies and what the system does.
 
-**Exercise the key-based and live Codex paths** — *gap*
-`codex-code`, `codex-cli`, `openai-api` and `anthropic-api` are implemented
+**Exercise the live CLI paths** — *gap*
+`codex-code`, `codex-cli` and `gemini-cli` are implemented
 against current published interfaces, but their success paths still need real
 runs on a configured machine. The unavailable paths and fallback orchestration
 are tested. `codex-code` and `codex-cli` are the cheapest to prove:
@@ -109,9 +109,10 @@ run interrupted during validation restarts validation from the beginning.
 Structured so they can be added, not built now.
 
 **Reviewer independence** — *addressed, unproven*
-The `codex-cli` and `openai-api` reviewers make a different vendor from the
-implementer possible, which is what ADR 0005 said was missing. Neither has
-executed a success path yet. Once one has, this stops being a limitation.
+The `codex-cli` reviewer makes a different vendor from the implementer
+possible, which is what ADR 0005 said was missing. Its live success path still
+needs to be exercised on a configured machine. Direct API providers were removed
+in favor of CLI authentication.
 
 **Project-level implementation agent preference**
 `claude-code` remains the default and `codex-code` is the built-in fallback, but

@@ -76,18 +76,21 @@ has finished.
   Check with `claude --version`. This is the default implementer.
 - Windows, macOS or Linux. Developed and verified on Windows 11.
 
-No API key is required. The optional transformer and reviewer layers default to
-providers that reuse a local CLI's own authentication.
+All AI providers use local CLIs and their existing authentication. No direct
+model API integrations or API SDK dependencies are included. CLI account
+usage limits still apply. Saved `openai-api` selections resolve to `codex-cli`,
+and `anthropic-api` selections resolve to `claude-cli`, including on retries.
+Original historical provider records are retained; new runs store CLI IDs.
 
-Optional, and each unlocks one more provider:
+Optional CLI providers:
 
 - **Codex CLI** (`npm i -g @openai/codex`, then `codex login`) — provides the
   implementation fallback and runs the transformer and reviewer on your
   **ChatGPT plan**, no API key. This is the recommended reviewer, because a
   reviewer from a different vendor than the implementer catches a different
   class of problem.
-- `ANTHROPIC_API_KEY` — enables the `anthropic-api` providers.
-- `OPENAI_API_KEY` — enables the `openai-api` providers.
+- **Gemini CLI** — provides an optional agent for any Engineering team role,
+  including Engineer. Install it and sign in with Google as described below.
 
 ## Install
 
@@ -311,7 +314,7 @@ before you commit to it, model and effort included.
 ## Engineering team and team room
 
 Enable **Engineering team** in a project's settings or on **New task**, then select
-**Build** mode. Configure the provider (Claude Code or Codex CLI), model, effort,
+**Build** mode. Configure the CLI provider (Claude Code, Codex CLI, or Gemini CLI), model, effort,
 and additional instructions separately for each of six roles:
 
 | Role | Responsibility |
@@ -329,6 +332,19 @@ settings; subsequent explicit run overrides and capacity fallback are still
 recorded by the ordinary implementation machinery. Blank team models use the
 provider default. Ask and Plan keep the single-agent workflow; the team joins
 when the run enters Build.
+
+Mix CLI providers independently across all six roles, including Engineer. Gemini
+CLI is optional: install it with `npm install -g @google/gemini-cli`, then run
+`gemini` once and sign in with Google. Set `DEV_COCKPIT_GEMINI_BIN` only if the
+executable is not on PATH. Gemini uses cached CLI OAuth; the adapter excludes
+inherited API-key and Vertex credentials. Reasoning effort uses Gemini's own
+default, so its effort selector is disabled. Missing CLIs are marked unavailable
+in team setup and on Settings. Gemini review/lead calls run in a temporary
+directory with built-in tools, hooks, extensions, skills, and MCP disabled;
+the Engineer runs in the worktree and can resume its recorded Gemini session.
+Gemini is an explicit choice and does not join the default capacity fallback
+chain automatically. CLI account usage limits still apply. See the official
+[Gemini CLI headless documentation](https://geminicli.com/docs/cli/headless/).
 
 The run opens on **Team**, a persistent conversation showing actual public agent
 contributions, handoffs, role status, duration, and provider-reported costs. The
@@ -840,8 +856,8 @@ picture taken before the request survives next to the one taken after it.
 | Role | Providers | Credential |
 | --- | --- | --- |
 | Implementer | `claude-code` default, `codex-code` fallback, selectable per run or follow-up | CLI login |
-| Transformer — request → specification, and the implementer's closing message → plain language | `none` (default), `codex-cli`, `claude-cli`, `openai-api`, `anthropic-api` | CLI login, or an API key |
-| Reviewer — read-only opinion on the diff | `codex-cli`, `openai-api`, `claude-cli`, `anthropic-api` | CLI login, or an API key |
+| Transformer — request → specification, and the implementer's closing message → plain language | `none` (default), `codex-cli`, `claude-cli` | CLI login |
+| Reviewer — read-only opinion on the diff | `codex-cli`, `claude-cli` | CLI login |
 
 The transformer handles **prose only**. It never sees source code, diffs, test
 results, stack traces, exit codes or screenshots — the interface has nowhere to
@@ -912,9 +928,8 @@ Two honest caveats:
   rows and counts the rest, so a very large run is summarised rather than
   drawn in full.
 - **Only the Claude CLI implementation path has executed live end to end.**
-  `codex-code`, `codex-cli`, `openai-api` and `anthropic-api` are implemented
-  against current published interfaces, but the Codex and API-key success paths
-  were not exercised during development. Their unavailable paths and fallback
+  `codex-code`, `codex-cli` and `gemini-cli` are implemented, but their live
+  success paths were not exercised during this change. Their unavailable paths and fallback
   orchestration are tested; treat live success as unproven until you have run
   one on your machine.
 - **Runs skip permission checks by default.** A run is unattended: there is no

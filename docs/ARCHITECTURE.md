@@ -43,11 +43,11 @@ only the interfaces.
 
 | Boundary | Interface | V1 implementations |
 | --- | --- | --- |
-| Implementation agent | `ImplementationAgent` | `ClaudeCodeAgent`, `CodexCodeAgent` |
-| Transformer | `TransformerProvider` | `NoopTransformer`, `CodexCliTransformer`, `ClaudeCliTransformer`, `OpenAiTransformer`, `AnthropicApiTransformer` |
-| Reviewer | `ReviewerAgent` | `CodexCliReviewer`, `OpenAiReviewer`, `ClaudeCliReviewer`, `AnthropicApiReviewer` |
+| Implementation agent | `ImplementationAgent` | `ClaudeCodeAgent`, `CodexCodeAgent`, `GeminiCodeAgent` |
+| Transformer | `TransformerProvider` | `NoopTransformer`, `CodexCliTransformer`, `ClaudeCliTransformer` |
+| Reviewer | `ReviewerAgent` | `CodexCliReviewer`, `ClaudeCliReviewer` |
 | Validator | `Validator` | `CommandValidator` |
-| Setup advisor | `SetupAdvisor` | `DeterministicAdvisor`, `ClaudeCliAdvisor`, `CodexCliAdvisor`, `OpenAiAdvisor`, `AnthropicApiAdvisor` |
+| Setup advisor | `SetupAdvisor` | `DeterministicAdvisor`, `ClaudeCliAdvisor`, `CodexCliAdvisor` |
 | Artifact storage | `services/artifacts` | local filesystem + SQLite metadata |
 | Attachment storage | `services/attachments` | local filesystem + SQLite metadata |
 
@@ -453,6 +453,20 @@ The in-process bus is only a wake-up mechanism. Persistence is authoritative, so
 a missed notification costs nothing.
 
 ## Implementation agents
+
+All AI integrations use CLI adapters. Direct model API providers and their SDKs
+have been removed. `domain/cli-providers.ts` resolves legacy saved API provider
+IDs to the same vendor's CLI at configuration and execution boundaries; raw
+historical rows and events are not rewritten.
+
+Engineering team roles independently select Claude Code, Codex CLI, or Gemini
+CLI. Gemini's implementation adapter uses headless JSONL, records its native
+session ID, resumes it on follow-ups, and participates in the existing validation
+and approval pipeline. Its read-only role adapter disables tools, hooks,
+extensions, skills, MCP, and context-file loading in an isolated temporary
+directory. Both use the cached Google OAuth login; inherited API-key/Vertex
+credentials are excluded. Gemini uses its CLI's default reasoning effort and is
+not added to the default capacity fallback list.
 
 The run stores one preferred `agentProvider`, defaulting to a project's own
 `defaultAgentProvider` when one is set, or `claude-code` otherwise, unless the

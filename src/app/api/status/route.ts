@@ -1,6 +1,7 @@
 import { handle } from '@/app/api/_lib/handler';
 import { claudeBinary } from '@/agents/claude-code';
 import { codexBinary } from '@/agents/codex-query';
+import { geminiBinary } from '@/agents/gemini-cli';
 import { dataDir, dbPath } from '@/core/paths';
 import { DEFAULT_WORK_MODE, WORK_MODE_LABELS } from '@/domain/modes';
 import { listWorkModes } from '@/orchestrator/modes';
@@ -46,8 +47,8 @@ export function GET() {
         databasePath: dbPath(),
         claudeBinary: claudeBinary(),
         codexBinary: codexBinary(),
+        geminiBinary: geminiBinary(),
         agentFallbacks: process.env.DEV_COCKPIT_AGENT_FALLBACKS?.trim() || 'default',
-        anthropicApiKeyPresent: Boolean(process.env.ANTHROPIC_API_KEY),
       },
       agents,
       transformers,

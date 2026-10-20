@@ -11,38 +11,17 @@ diffs, test results, stack traces, file paths, screenshots or exit codes. That
 constraint is enforced by the shape of `TransformRequestInput`: there is nowhere
 to put factual data.
 
-Four providers already ship, so the fastest route is to copy the closest one:
-`CodexCliTransformer` for a CLI-backed provider, `OpenAiTransformer` for an
-API-backed one. Both are in `src/transformers/providers.ts`.
+The no-op transformer and two CLI providers ship. Copy `CodexCliTransformer`
+or `ClaudeCliTransformer` in `src/transformers/providers.ts` to add another CLI.
+Keep authentication in the CLI; do not add a model API SDK or key requirement.
 
-**1. Implement the interface** in `src/transformers/providers.ts`:
-
-```ts
-export class GeminiTransformer implements TransformerProvider {
-  readonly id = 'gemini-api';
-  readonly label = 'Google Gemini';
-  readonly requirement = 'Requires GEMINI_API_KEY in the environment.';
-
-  async checkAvailability(): Promise<ProviderAvailability> {
-    // Report the reason, not just the verdict — Settings shows this verbatim.
-    if (!process.env.GEMINI_API_KEY) {
-      return { available: false, detail: 'GEMINI_API_KEY is not set.' };
-    }
-    return { available: true, detail: 'Configured for gemini-2.5-pro.' };
-  }
-
-  async transformRequest(input: TransformRequestInput): Promise<TransformRequestResult> {
-    const start = Date.now();
-    // Reuse the shared prompt contract so every provider behaves the same way.
-    const { SPEC_SYSTEM_PROMPT, SPEC_JSON_SCHEMA, specUserPrompt } =
-      await import('./prompts');
-
-    // ... call the API with specUserPrompt(input) and SPEC_JSON_SCHEMA ...
-
-    return { spec, title, provider: this.id, durationMs: Date.now() - start };
-  }
-}
-```
+**1. Implement the interface** in `src/transformers/providers.ts`.
+Reuse `SPEC_SYSTEM_PROMPT`, `SPEC_JSON_SCHEMA`, and `specUserPrompt` from
+`./prompts`, send the request through the CLI's stdin, and validate its
+structured result before returning `{ spec, title, provider, durationMs }`.
+The availability check must name the executable and explain how to install and
+sign in when it is missing. Use `src/agents/gemini-cli.ts` as an example of
+isolating read-only CLI calls from repository tools and configuration.
 
 **2. Register it** in `src/transformers/registry.ts`, in preference order:
 
@@ -51,8 +30,6 @@ const PROVIDERS: TransformerProvider[] = [
   new NoopTransformer(),
   new CodexCliTransformer(),
   new ClaudeCliTransformer(),
-  new OpenAiTransformer(),
-  new AnthropicApiTransformer(),
   new GeminiTransformer(),
 ];
 ```
@@ -88,14 +65,13 @@ Two properties matter more than the model behind it:
   on any failure. There is no error path that leaves the user with nothing.
 
 **1. Implement the interface** in `src/advisors/providers.ts`. Copy
-`ClaudeCliAdvisor` for a CLI-backed provider or `OpenAiAdvisor` for an
-API-backed one:
+`ClaudeCliAdvisor` or `CodexCliAdvisor` for a CLI-backed provider:
 
 ```ts
 export class MyAdvisor implements SetupAdvisor {
   readonly id = 'my-advisor';
   readonly label = 'My advisor';
-  readonly requirement = 'Requires MY_API_KEY in the environment.';
+  readonly requirement = 'Requires an installed CLI and its existing login.';
 
   async checkAvailability(): Promise<ProviderAvailability> { /* ... */ }
 
@@ -186,6 +162,12 @@ Register in the `AGENTS` map in `src/orchestrator/orchestrator.ts`, and set
 `runs.agentProvider` when creating a run. The orchestrator tries the run's
 preferred provider first, then the ids in `DEV_COCKPIT_AGENT_FALLBACKS`, or the
 built-in default order when that variable is unset.
+
+To offer the CLI in Engineering team setup, also add its ID and label to
+`TEAM_PROVIDERS` / `TEAM_PROVIDER_LABELS` in `src/domain/team.ts` and route its
+read-only role calls in `src/services/team.ts`. Keep those calls tool-free and
+separate from implementation; `src/agents/gemini-cli.ts` provides both adapters
+without sharing a write-capable session with the reviewers.
 
 **Contract notes.**
 

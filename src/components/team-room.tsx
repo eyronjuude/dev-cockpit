@@ -51,7 +51,7 @@ export function TeamRoom({ runId, team, events, active, connected, readOnly, can
         const state = readOnly ? 'Not used in this mode' : working ? 'Working' : activity?.kind === 'failed' ? 'Blocked' : activity?.kind === 'completed' ? 'Finished handoff' : activity ? (active ? 'Contributing' : 'Stopped') : 'Waiting';
         return <div key={role} className={`rounded border p-2.5 ${working ? 'border-accent bg-accent-soft' : 'border-line'}`}>
           <div className="flex justify-between gap-2 text-[12px]"><strong>{TEAM_LABELS[role]}</strong><span className="text-ink-muted">{state}</span></div>
-          <p className="mt-1 break-words text-[11px] text-ink-faint">{activity?.provider ?? member.provider} · {(activity?.model === undefined ? member.model : activity.model) ?? 'provider default'} · {activity?.effort === undefined ? member.effort : activity.effort ?? 'no effort setting'}</p>
+          <p className="mt-1 break-words text-[11px] text-ink-faint">{activity?.provider ?? member.provider} · {(activity?.model === undefined ? member.model : activity.model) ?? 'provider default'} · {activity?.effort === undefined ? (member.provider === 'gemini-cli' ? 'CLI default effort' : member.effort) : activity.effort ?? 'CLI default effort'}</p>
           {activity?.kind === 'completed' ? <p className="mt-1 text-[11px] text-ink-muted">
             Last handoff: {activity.durationMs === undefined ? '' : `${(activity.durationMs / 1000).toFixed(1)}s · `}
             {activity.costUsd == null ? 'cost not reported' : `$${activity.costUsd.toFixed(4)}`}

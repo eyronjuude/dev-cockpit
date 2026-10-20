@@ -1,10 +1,9 @@
 import 'server-only';
+import { cliProviderId } from '@/domain/cli-providers';
 
 import {
-  AnthropicApiReviewer,
   ClaudeCliReviewer,
   CodexCliReviewer,
-  OpenAiReviewer,
 } from './providers';
 import type { ReviewerAgent } from './types';
 
@@ -21,9 +20,7 @@ import type { ReviewerAgent } from './types';
  */
 const REVIEWERS: ReviewerAgent[] = [
   new CodexCliReviewer(),
-  new OpenAiReviewer(),
   new ClaudeCliReviewer(),
-  new AnthropicApiReviewer(),
 ];
 
 export const DEFAULT_REVIEWER_ID = 'none';
@@ -34,7 +31,7 @@ export function listReviewers(): readonly ReviewerAgent[] {
 
 export function getReviewer(id: string | null | undefined): ReviewerAgent | null {
   if (!id || id === 'none') return null;
-  return REVIEWERS.find((r) => r.id === id) ?? null;
+  return REVIEWERS.find((r) => r.id === cliProviderId(id)) ?? null;
 }
 
 export interface ReviewerStatus {

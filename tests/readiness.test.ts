@@ -243,12 +243,31 @@ describe('persistence', () => {
       request: 'x',
       profile: 'deep',
       transformer: 'claude-cli',
-      reviewer: 'anthropic-api',
+      reviewer: 'codex-cli',
     });
     expect(runs.runProviders(run.id)).toEqual({
       transformer: 'claude-cli',
-      reviewer: 'anthropic-api',
+      reviewer: 'codex-cli',
     });
+  });
+
+  it('resolves saved API defaults and runs to CLIs without rewriting stored history', async () => {
+    const project = await makeProject('legacy-cli-providers');
+    const run = runs.createRun({ projectId: project.id, request: 'Old saved run' });
+    const { getSqlite } = await import('@/db/client');
+    const sqlite = getSqlite();
+    sqlite.prepare('UPDATE projects SET default_transformer_provider = ?, default_reviewer_provider = ?, ai_config_provider = ? WHERE id = ?')
+      .run('openai-api', 'anthropic-api', 'openai-api', project.id);
+    sqlite.prepare('UPDATE runs SET transformer_provider = ?, reviewer_provider = ? WHERE id = ?')
+      .run('anthropic-api', 'openai-api', run.id);
+    expect(projectsService.requireProject(project.id)).toMatchObject({ defaultTransformerProvider: 'codex-cli', defaultReviewerProvider: 'claude-cli', aiConfigProvider: 'codex-cli' });
+    expect(runs.requireRun(run.id)).toMatchObject({ transformerProvider: 'claude-cli', reviewerProvider: 'codex-cli' });
+    expect(runs.runProviders(run.id)).toEqual({ transformer: 'claude-cli', reviewer: 'codex-cli' });
+    expect(sqlite.prepare('SELECT reviewer_provider FROM runs WHERE id = ?').get(run.id)).toEqual({ reviewer_provider: 'openai-api' });
+    const next = runs.createRun({ projectId: project.id, request: 'New run from old defaults' });
+    expect(runs.runProviders(next.id)).toEqual({ transformer: 'codex-cli', reviewer: 'claude-cli' });
+    const explicit = runs.createRun({ projectId: project.id, request: 'Old client selection', transformer: 'openai-api', reviewer: 'anthropic-api' });
+    expect(runs.runProviders(explicit.id)).toEqual({ transformer: 'codex-cli', reviewer: 'claude-cli' });
   });
 
   it('rejects an illegal status transition at the write path', async () => {

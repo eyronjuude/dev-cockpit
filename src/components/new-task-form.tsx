@@ -177,7 +177,7 @@ export function NewTaskForm({
     projectDefault: projectModel,
     recommended: recommendedModel,
   });
-  const effort = resolveAgentEffort(modelChoice.model, team?.members.engineer.effort ?? selectedProfile.agentEffort);
+  const effort = resolveAgentEffort(modelChoice.model, implementer === 'gemini-cli' ? null : team?.members.engineer.effort ?? selectedProfile.agentEffort);
   // What "Follow the profile" would land on, which is the project's default
   // when one is set — a recommendation is the weakest of the three.
   const inheritedChoice = resolveAgentModel({
@@ -429,7 +429,7 @@ export function NewTaskForm({
         ) : null}
       </div>
 
-      <TeamEditor value={team} onChange={setTeam} />
+      <TeamEditor value={team} onChange={setTeam} providers={implementers} />
 
       {!team ? <div className="panel">
         <div className="panel-head">

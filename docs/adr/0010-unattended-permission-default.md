@@ -2,6 +2,10 @@
 
 **Status:** accepted
 
+**Subsequent update:** Direct model API providers and their SDK dependencies
+were removed in favor of CLI authentication. API-provider details below are
+historical; current providers are listed in the README.
+
 Supersedes the default chosen in
 [ADR 0009](0009-agent-works-blind-by-default.md).
 

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { isUnresolvedBackgroundWait } from '@/transformers/prompts';
 import { getTransformer, listTransformers, transformerStatuses } from '@/transformers/registry';
@@ -18,12 +18,11 @@ describe('transformer registry', () => {
     expect(ids[0]).toBe('none');
   });
 
-  it('registers both ChatGPT-backed providers alongside the Claude ones', () => {
+  it('offers only the no-op and CLI providers', () => {
     const ids = listTransformers().map((t) => t.id);
     expect(ids).toContain('codex-cli');
-    expect(ids).toContain('openai-api');
     expect(ids).toContain('claude-cli');
-    expect(ids).toContain('anthropic-api');
+    expect(ids).toEqual(['none', 'codex-cli', 'claude-cli']);
   });
 
   it('falls back to the no-op provider for an unknown or missing id', () => {
@@ -54,7 +53,7 @@ describe('transformer registry', () => {
     // The no-op provider deliberately cannot; the orchestrator checks for this
     // before calling, and records summarise.skipped when it is absent.
     expect(typeof getTransformer('none').summariseOutcome).toBe('undefined');
-    for (const id of ['codex-cli', 'claude-cli', 'openai-api', 'anthropic-api']) {
+    for (const id of ['codex-cli', 'claude-cli']) {
       expect(typeof getTransformer(id).summariseOutcome, id).toBe('function');
     }
   });
@@ -70,6 +69,9 @@ describe('transformer registry', () => {
 });
 
 describe('reviewer registry', () => {
+  it('offers only CLI reviewers', () => {
+    expect(listReviewers().map((r) => r.id)).toEqual(['codex-cli', 'claude-cli']);
+  });
   it('orders reviewers with the cross-vendor option first', () => {
     // A reviewer from a different vendor than the implementer is the more
     // useful default, so it must be the first candidate offered.
@@ -99,41 +101,11 @@ describe('reviewer registry', () => {
   });
 });
 
-describe('key-based providers report honestly when unconfigured', () => {
-  let savedOpenAi: string | undefined;
-  let savedAnthropic: string | undefined;
-
-  beforeEach(() => {
-    savedOpenAi = process.env.OPENAI_API_KEY;
-    savedAnthropic = process.env.ANTHROPIC_API_KEY;
-    delete process.env.OPENAI_API_KEY;
-    delete process.env.ANTHROPIC_API_KEY;
-  });
-
-  afterEach(() => {
-    if (savedOpenAi === undefined) delete process.env.OPENAI_API_KEY;
-    else process.env.OPENAI_API_KEY = savedOpenAi;
-    if (savedAnthropic === undefined) delete process.env.ANTHROPIC_API_KEY;
-    else process.env.ANTHROPIC_API_KEY = savedAnthropic;
-  });
-
-  it('names the missing variable rather than failing vaguely', async () => {
-    const openai = await getTransformer('openai-api').checkAvailability();
-    expect(openai.available).toBe(false);
-    expect(openai.detail).toContain('OPENAI_API_KEY');
-
-    const anthropic = await getTransformer('anthropic-api').checkAvailability();
-    expect(anthropic.available).toBe(false);
-    expect(anthropic.detail).toContain('ANTHROPIC_API_KEY');
-  });
-
-  it('throws a readable error rather than a network failure when called anyway', async () => {
-    await expect(
-      getTransformer('openai-api').summariseOutcome!({
-        agentText: 'did the thing',
-        request: 'do the thing',
-      }),
-    ).rejects.toThrow(/OPENAI_API_KEY is not set/);
+describe('saved API provider selections', () => {
+  it.each([['openai-api', 'codex-cli'], ['anthropic-api', 'claude-cli']])('resolves %s to %s without skipping review', (previous, current) => {
+    expect(getTransformer(previous).id).toBe(current);
+    expect(getReviewer(previous)?.id).toBe(current);
+    expect(getReviewer(previous)?.readOnly).toBe(true);
   });
 });
 

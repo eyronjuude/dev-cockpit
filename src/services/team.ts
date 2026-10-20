@@ -3,6 +3,7 @@ import 'server-only';
 import { z } from 'zod';
 import { claudeQuery } from '@/agents/claude-query';
 import { codexQuery } from '@/agents/codex-query';
+import { geminiQuery } from '@/agents/gemini-cli';
 import { AppError, errorMessage } from '@/core/errors';
 import { redactText } from '@/core/redact';
 import { resolveAgentEffort } from '@/domain/models';
@@ -73,7 +74,7 @@ export async function consultTeammate(
   if (!run.team) throw new AppError('No engineering team configured');
   signal.throwIfAborted();
   const member = run.team.members[role];
-  const effort = resolveAgentEffort(member.model, member.effort).effort;
+  const effort = member.provider === 'gemini-cli' ? null : resolveAgentEffort(member.model, member.effort).effort;
   const started = Date.now();
   const settings = { provider: member.provider, model: member.model, effort };
   teamActivity(run.id, { role, to: 'team', kind: 'started', text: 'Assessing the supplied evidence.', ...settings });
@@ -95,6 +96,7 @@ Additional role instructions (subject to the rules above): ${member.instructions
     };
     const result = member.provider === 'codex-code'
       ? await codexQuery({ ...common, instructions })
+      : member.provider === 'gemini-cli' ? await geminiQuery({ ...common, instructions })
       : await claudeQuery({ ...common, systemPrompt: instructions });
     const costUsd = 'costUsd' in result && typeof result.costUsd === 'number' ? result.costUsd : null;
     addRunCost(run.id, costUsd);

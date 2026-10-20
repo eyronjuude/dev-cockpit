@@ -1,4 +1,5 @@
 import 'server-only';
+import { cliProviderId } from '@/domain/cli-providers';
 
 import { teamConfigSchema, type TeamConfig } from '@/domain/team';
 
@@ -157,14 +158,14 @@ export const createProjectSchema = z.object({
   agentAddDirs: z.array(z.string()).optional(),
   /** Standing default provider for new runs. Null follows the built-in preference order. */
   defaultAgentProvider: z.string().trim().max(60).nullable().optional(),
-  defaultTransformerProvider: z.string().trim().max(60).nullable().optional(),
-  defaultReviewerProvider: z.string().trim().max(60).nullable().optional(),
+  defaultTransformerProvider: z.string().trim().max(60).transform(cliProviderId).nullable().optional(),
+  defaultReviewerProvider: z.string().trim().max(60).transform(cliProviderId).nullable().optional(),
   conventionalCommits: z.boolean().optional(),
   commitConvention: z.enum(['conventional', 'custom']).optional(),
   customCommitTypes: z.array(z.string()).optional(),
   aiFormatsCommitMessages: z.boolean().optional(),
   aiConfigMode: aiConfigModeSchema.optional(),
-  aiConfigProvider: z.string().trim().max(60).nullable().optional(),
+  aiConfigProvider: z.string().trim().max(60).transform(cliProviderId).nullable().optional(),
   preview: previewConfigInputSchema.optional(),
   validationSteps: z.array(validationStepInputSchema).max(100).optional(),
   /** Legacy shape, converted to steps. See `validationCommandInputSchema`. */
@@ -364,14 +365,14 @@ function toProjectView(
     effectivePermissionMode: resolvePermissionMode(row.agentPermissionMode),
     agentAddDirs: fromLines(row.agentAddDirs),
     defaultAgentProvider: row.defaultAgentProvider,
-    defaultTransformerProvider: row.defaultTransformerProvider,
-    defaultReviewerProvider: row.defaultReviewerProvider,
+    defaultTransformerProvider: row.defaultTransformerProvider === null ? null : cliProviderId(row.defaultTransformerProvider),
+    defaultReviewerProvider: row.defaultReviewerProvider === null ? null : cliProviderId(row.defaultReviewerProvider),
     conventionalCommits: row.conventionalCommits,
     commitConvention: row.commitConvention,
     customCommitTypes: fromLines(row.customCommitTypes),
     aiFormatsCommitMessages: row.aiFormatsCommitMessages,
     aiConfigMode: (row.aiConfigMode as AiConfigMode) ?? 'draft',
-    aiConfigProvider: row.aiConfigProvider,
+    aiConfigProvider: row.aiConfigProvider === null ? null : cliProviderId(row.aiConfigProvider),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     validationSteps: orderSteps(steps.map(toStepView)),

@@ -1,5 +1,6 @@
 import { claudeBinary } from '@/agents/claude-code';
 import { codexBinary } from '@/agents/codex-query';
+import { geminiBinary } from '@/agents/gemini-cli';
 import { dataDir, dbPath } from '@/core/paths';
 import {
   DEFAULT_WORK_MODE,
@@ -55,20 +56,12 @@ export default async function SettingsPage() {
           <Row label="Database" value={dbPath()} mono />
           <Row label="Claude Code binary" value={claudeBinary()} mono />
           <Row label="Codex CLI binary" value={codexBinary()} mono />
+          <Row label="Gemini CLI binary" value={geminiBinary()} mono />
           <Row
             label="Agent fallbacks"
             value={process.env.DEV_COCKPIT_AGENT_FALLBACKS?.trim() || 'default'}
             mono
             hint="Comma-separated implementation-agent ids tried after the run's primary agent. Use none to disable fallbacks."
-          />
-          <Row
-            label="ANTHROPIC_API_KEY"
-            value={process.env.ANTHROPIC_API_KEY ? 'set' : 'not set'}
-            hint={
-              process.env.ANTHROPIC_API_KEY
-                ? 'Enables the anthropic-api transformer and reviewer.'
-                : 'Not required. The claude-cli providers use the Claude Code login instead.'
-            }
           />
           <Row
             label="Network binding"

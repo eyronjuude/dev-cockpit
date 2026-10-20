@@ -49,7 +49,7 @@ export interface AgentStartInput {
   mcpServers?: Record<string, McpServerConfig>;
   /**
    * The project's own `env` field, parsed. Layered over the server's
-   * environment for CLI providers; API providers spawn nothing and ignore it.
+   * environment for CLI providers.
    */
   env?: Record<string, string>;
   model?: string | null;
